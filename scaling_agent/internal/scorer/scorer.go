@@ -67,6 +67,8 @@ const (
 // SessionSignal is one data point consumed from mitre-events or session-profiles.
 // All fields are already normalised to [0, 1] by the caller.
 type SessionSignal struct {
+	EventID           string
+	SignalSource      string
 	SessionID          string
 	ClientIP           string
 	AttackerConfidence float64 // rule_confidence from MitreEvent (already 0-1)

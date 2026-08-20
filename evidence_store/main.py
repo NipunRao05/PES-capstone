@@ -88,6 +88,11 @@ def stable_id(*parts: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
 
 
+def kafka_event_id(payload: dict[str, Any], topic: str, partition: int, offset: int, session_id: str) -> str:
+    upstream = bounded_text(payload.get("event_id"), 256).strip()
+    return upstream or stable_id("kafka", topic, partition, offset, session_id)
+
+
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -217,7 +222,7 @@ class EvidenceRepository:
             payload.get("timestamp") or payload.get("timestamp_closed") or payload.get("created_at"),
             128,
         ) or utc_now()
-        event_id = stable_id("kafka", topic, partition, offset, session_id)
+        event_id = kafka_event_id(payload, topic, partition, offset, session_id)
         self._touch(session_id, payload, timestamp)
 
         if topic in {"mysql-query-events", "pg-query-events"}:

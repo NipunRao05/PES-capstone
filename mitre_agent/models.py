@@ -7,8 +7,41 @@ All fields that come from the session module are documented with their source.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
+import hashlib
 import uuid
 import time
+from datetime import datetime
+
+
+def _timestamp_bucket(value: object) -> str:
+    if isinstance(value, (int, float)):
+        return str(int(float(value)))
+    text = str(value or "").strip()
+    try:
+        return str(int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()))
+    except (TypeError, ValueError):
+        return text
+
+
+def make_mitre_event_id(
+    session_id: str,
+    technique_id: str,
+    rule_id: str,
+    timestamp: object,
+    query_identity: str,
+) -> str:
+    """Build a deterministic identity that remains stable across Kafka replay."""
+    material = "\0".join(
+        str(part or "").strip()
+        for part in (
+            session_id,
+            technique_id,
+            rule_id,
+            _timestamp_bucket(timestamp),
+            query_identity,
+        )
+    )
+    return f"mitre:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
 
 
 # ─── Inbound event (from query-events topics) ─────────────────────────────────
@@ -120,6 +153,7 @@ class MitreEvent:
     tactic_id:           str
     rule_id:             str          # which rule fired, e.g. "R001"
     rule_confidence:     float
+    event_id:            str = ""     # deterministic replay/idempotency identity
     sequence_confidence: float = 0.0  # filled in by HMM at session close
     combined_confidence: float = 0.0  # 0.6 * rule + 0.4 * sequence
     risk_score:          float = 0.0  # accumulated session risk at this point

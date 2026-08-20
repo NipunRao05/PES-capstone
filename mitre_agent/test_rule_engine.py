@@ -40,7 +40,7 @@ class TestRuleEngine(unittest.TestCase):
         ))
         self.assertGreaterEqual(result.new_risk_score, self.engine.thresholds["medium"])
         self.assertEqual(result.risk_level, "medium")
-       def test_single_postgres_information_schema_tables_maps_database_collection(self):
+    def test_single_postgres_information_schema_tables_maps_database_collection(self):
         result = self.engine.evaluate(EvalContext(
             fingerprint="select * from information_schema.tables limit ?;",
             phase="enumeration",
@@ -52,7 +52,7 @@ class TestRuleEngine(unittest.TestCase):
         technique_ids = {m.technique_id for m in result.matched_techniques}
 
         self.assertIn("T1213.006", technique_ids)
-        self.assertIn("schema_enumeration", result.tags)
+        self.assertIn("table_enumeration", result.tags)
         self.assertEqual(result.deception_level, 2)
         self.assertEqual(result.new_risk_score, 7.0)
         self.assertEqual(result.risk_level, "medium")

@@ -164,3 +164,103 @@ func TestScalerPersistsAfterSignal(t *testing.T) {
 		t.Fatal("scaler did not stop")
 	}
 }
+
+func waitForSnapshot(t *testing.T, sc *scaler.Scaler, condition func(scaler.MetricsSnapshot) bool) scaler.MetricsSnapshot {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := sc.Snapshot()
+		if condition(snapshot) {
+			return snapshot
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for scaler snapshot: %#v", sc.Snapshot())
+	return scaler.MetricsSnapshot{}
+}
+
+func TestScalerIgnoresDuplicateEventIDs(t *testing.T) {
+	sc := scaler.New(testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	signals := make(chan scorer.SessionSignal, 6)
+	done := make(chan struct{})
+	go func() {
+		sc.Run(ctx, signals)
+		close(done)
+	}()
+
+	signal := highSignal("duplicate-session", time.Now().UTC())
+	signal.EventID = "mitre:duplicate-event"
+	signal.SignalSource = "mitre-events"
+	for i := 0; i < 6; i++ {
+		signals <- signal
+	}
+
+	snapshot := waitForSnapshot(t, sc, func(snapshot scaler.MetricsSnapshot) bool {
+		return snapshot.DuplicateEvents == 5
+	})
+	if snapshot.TotalSignals != 1 || snapshot.TrapTriggers != 1 || snapshot.ScaleUpEvents != 1 {
+		t.Fatalf("duplicates changed operational counters: %#v", snapshot)
+	}
+	if sc.ProcessedEventCount() != 1 || len(sc.RecentEvents(10)) != 1 {
+		t.Fatalf("duplicate changed durable IDs or event history: ids=%d events=%d", sc.ProcessedEventCount(), len(sc.RecentEvents(10)))
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scaler did not stop")
+	}
+}
+
+func TestRestoredProcessedEventIDRejectsReplay(t *testing.T) {
+	original := scaler.New(testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	signals := make(chan scorer.SessionSignal, 1)
+	done := make(chan struct{})
+	go func() {
+		original.Run(ctx, signals)
+		close(done)
+	}()
+
+	signal := highSignal("restart-replay-session", time.Now().UTC())
+	signal.EventID = "mitre:restart-replay-event"
+	signal.SignalSource = "mitre-events"
+	signals <- signal
+	want := waitForSnapshot(t, original, func(snapshot scaler.MetricsSnapshot) bool {
+		return snapshot.TotalSignals == 1
+	})
+	cancel()
+	<-done
+
+	restored := scaler.New(testLogger())
+	if err := restored.RestoreState(original.ExportState()); err != nil {
+		t.Fatalf("restore state: %v", err)
+	}
+	replayCtx, replayCancel := context.WithCancel(context.Background())
+	replaySignals := make(chan scorer.SessionSignal, 1)
+	replayDone := make(chan struct{})
+	go func() {
+		restored.Run(replayCtx, replaySignals)
+		close(replayDone)
+	}()
+	replaySignals <- signal
+	got := waitForSnapshot(t, restored, func(snapshot scaler.MetricsSnapshot) bool {
+		return snapshot.DuplicateEvents == want.DuplicateEvents+1
+	})
+	if got.TotalSignals != want.TotalSignals || got.TrapTriggers != want.TrapTriggers || got.ScaleUpEvents != want.ScaleUpEvents || got.CurrentReplicas != want.CurrentReplicas {
+		t.Fatalf("replay after restore changed operational state: before=%#v after=%#v", want, got)
+	}
+	if restored.ProcessedEventCount() != 1 || len(restored.RecentEvents(10)) != 1 {
+		t.Fatalf("replay after restore changed event state: ids=%d events=%d", restored.ProcessedEventCount(), len(restored.RecentEvents(10)))
+	}
+
+	replayCancel()
+	select {
+	case <-replayDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restored scaler did not stop")
+	}
+}

@@ -17,6 +17,8 @@ import (
 
 // ScalingEvent is emitted for every meaningful scaling decision.
 type ScalingEvent struct {
+	EventID       string    `json:"event_id,omitempty"`
+	SignalSource  string    `json:"signal_source,omitempty"`
 	SessionID     string    `json:"session_id"`
 	RawScore      float64   `json:"raw_score"`
 	SmoothedScore float64   `json:"smoothed_score"`
@@ -34,11 +36,13 @@ type Metrics struct {
 	ScaleUpEvents     atomic.Int64
 	ScaleDownEvents   atomic.Int64
 	TrapTriggers      atomic.Int64
+	DuplicateEvents   atomic.Int64
 	CurrentReplicas   atomic.Int64
 	ScalePressureBits atomic.Uint64
 }
 
 const PersistentStateVersion = 1
+const maxProcessedEventIDs = 10000
 
 // ControlState reserves durable operator-control fields for the control API.
 // Phase 8 will mutate these values; Phase 5 guarantees they survive restarts.
@@ -80,6 +84,7 @@ type Scaler struct {
 	events            []ScalingEvent // ring buffer of last 1000 events
 	control           ControlState
 	processedEventIDs []string
+	processedEventSet map[string]struct{}
 
 	saverMu       sync.RWMutex
 	saver         StateSaver
@@ -95,6 +100,7 @@ func New(logger *slog.Logger) *Scaler {
 		events:            make([]ScalingEvent, 0, 1000),
 		control:           ControlState{AutoscalingEnabled: true},
 		processedEventIDs: make([]string, 0),
+		processedEventSet: make(map[string]struct{}),
 	}
 	s.metrics.CurrentReplicas.Store(int64(scorer.ReplicaMin))
 	s.metrics.ScalePressureBits.Store(math.Float64bits(0.0))
@@ -152,7 +158,7 @@ func (s *Scaler) RestoreState(state PersistentState) error {
 	if state.Metrics.CurrentReplicas < int64(scorer.ReplicaMin) || state.Metrics.CurrentReplicas > int64(scorer.ReplicaMax) {
 		return fmt.Errorf("persisted replicas out of range: %d", state.Metrics.CurrentReplicas)
 	}
-	if state.Metrics.TotalSignals < 0 || state.Metrics.NoiseSignals < 0 || state.Metrics.ScaleUpEvents < 0 || state.Metrics.ScaleDownEvents < 0 || state.Metrics.TrapTriggers < 0 {
+	if state.Metrics.TotalSignals < 0 || state.Metrics.NoiseSignals < 0 || state.Metrics.ScaleUpEvents < 0 || state.Metrics.ScaleDownEvents < 0 || state.Metrics.TrapTriggers < 0 || state.Metrics.DuplicateEvents < 0 {
 		return fmt.Errorf("persisted counters cannot be negative")
 	}
 	if state.Metrics.ScalePressure < 0 || state.Metrics.ScalePressure > 1 || math.IsNaN(state.Metrics.ScalePressure) || math.IsInf(state.Metrics.ScalePressure, 0) {
@@ -170,8 +176,18 @@ func (s *Scaler) RestoreState(state PersistentState) error {
 	if len(state.RecentEvents) > 1000 {
 		state.RecentEvents = state.RecentEvents[len(state.RecentEvents)-1000:]
 	}
-	if len(state.ProcessedEventIDs) > 10000 {
-		state.ProcessedEventIDs = state.ProcessedEventIDs[len(state.ProcessedEventIDs)-10000:]
+	if len(state.ProcessedEventIDs) > maxProcessedEventIDs {
+		state.ProcessedEventIDs = state.ProcessedEventIDs[len(state.ProcessedEventIDs)-maxProcessedEventIDs:]
+	}
+	processedSet := make(map[string]struct{}, len(state.ProcessedEventIDs))
+	for _, eventID := range state.ProcessedEventIDs {
+		if eventID == "" {
+			return fmt.Errorf("persisted processed event ID cannot be empty")
+		}
+		if _, duplicate := processedSet[eventID]; duplicate {
+			return fmt.Errorf("persisted processed event ID is duplicated: %s", eventID)
+		}
+		processedSet[eventID] = struct{}{}
 	}
 	for _, event := range state.RecentEvents {
 		if event.ReplicaTarget < scorer.ReplicaMin || event.ReplicaTarget > scorer.ReplicaMax {
@@ -187,6 +203,7 @@ func (s *Scaler) RestoreState(state PersistentState) error {
 	s.metrics.ScaleUpEvents.Store(state.Metrics.ScaleUpEvents)
 	s.metrics.ScaleDownEvents.Store(state.Metrics.ScaleDownEvents)
 	s.metrics.TrapTriggers.Store(state.Metrics.TrapTriggers)
+	s.metrics.DuplicateEvents.Store(state.Metrics.DuplicateEvents)
 	s.metrics.CurrentReplicas.Store(state.Metrics.CurrentReplicas)
 	s.metrics.ScalePressureBits.Store(math.Float64bits(state.Metrics.ScalePressure))
 
@@ -198,6 +215,7 @@ func (s *Scaler) RestoreState(state PersistentState) error {
 		s.control.ManualReplicaTarget = &target
 	}
 	s.processedEventIDs = append([]string(nil), state.ProcessedEventIDs...)
+	s.processedEventSet = processedSet
 	s.mu.Unlock()
 	return nil
 }
@@ -254,15 +272,24 @@ func (s *Scaler) Run(ctx context.Context, signals <-chan scorer.SessionSignal) {
 				s.persistState()
 				return
 			}
-			s.process(sig)
-			if sig.IsSessionClosed {
+			if s.process(sig) && sig.IsSessionClosed {
 				s.CleanupSession(sig.SessionID)
 			}
 		}
 	}
 }
 
-func (s *Scaler) process(sig scorer.SessionSignal) {
+func (s *Scaler) process(sig scorer.SessionSignal) bool {
+	if !s.claimEvent(sig.EventID) {
+		s.metrics.DuplicateEvents.Add(1)
+		s.logger.Info("duplicate event ignored",
+			"event_id", sig.EventID,
+			"session_id", shortID(sig.SessionID),
+			"source", sig.SignalSource,
+		)
+		s.persistState()
+		return false
+	}
 	defer s.persistState()
 	s.metrics.TotalSignals.Add(1)
 
@@ -279,7 +306,7 @@ func (s *Scaler) process(sig scorer.SessionSignal) {
 			"session_id", sig.SessionID,
 			"z_score", result.ZScore,
 		)
-		return
+		return true
 	}
 
 	prevReplicas := s.metrics.CurrentReplicas.Load()
@@ -313,6 +340,8 @@ func (s *Scaler) process(sig scorer.SessionSignal) {
 	}
 
 	ev := ScalingEvent{
+		EventID:       sig.EventID,
+		SignalSource:  sig.SignalSource,
 		SessionID:     sig.SessionID,
 		RawScore:      result.RawScore,
 		SmoothedScore: result.SmoothedScore,
@@ -329,6 +358,33 @@ func (s *Scaler) process(sig scorer.SessionSignal) {
 	}
 	s.events = append(s.events, ev)
 	s.mu.Unlock()
+	return true
+}
+
+func (s *Scaler) claimEvent(eventID string) bool {
+	if eventID == "" {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.processedEventSet[eventID]; exists {
+		return false
+	}
+	if len(s.processedEventIDs) >= maxProcessedEventIDs {
+		oldest := s.processedEventIDs[0]
+		delete(s.processedEventSet, oldest)
+		s.processedEventIDs = s.processedEventIDs[1:]
+	}
+	s.processedEventIDs = append(s.processedEventIDs, eventID)
+	s.processedEventSet[eventID] = struct{}{}
+	return true
+}
+
+// ProcessedEventCount returns the bounded durable idempotency-set size.
+func (s *Scaler) ProcessedEventCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.processedEventIDs)
 }
 
 // CurrentReplicas returns the current desired replica count.
@@ -367,6 +423,7 @@ type MetricsSnapshot struct {
 	ScaleUpEvents   int64   `json:"scale_up_events"`
 	ScaleDownEvents int64   `json:"scale_down_events"`
 	TrapTriggers    int64   `json:"trap_triggers"`
+	DuplicateEvents int64   `json:"duplicate_events"`
 	CurrentReplicas int64   `json:"current_replicas"`
 	ScalePressure   float64 `json:"scale_pressure"`
 }
@@ -379,6 +436,7 @@ func (s *Scaler) Snapshot() MetricsSnapshot {
 		ScaleUpEvents:   s.metrics.ScaleUpEvents.Load(),
 		ScaleDownEvents: s.metrics.ScaleDownEvents.Load(),
 		TrapTriggers:    s.metrics.TrapTriggers.Load(),
+		DuplicateEvents: s.metrics.DuplicateEvents.Load(),
 		CurrentReplicas: s.metrics.CurrentReplicas.Load(),
 		ScalePressure:   math.Float64frombits(s.metrics.ScalePressureBits.Load()),
 	}

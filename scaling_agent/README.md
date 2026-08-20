@@ -28,8 +28,9 @@ values prevent the agent from starting with silently reset state.
 - Up to 1,000 recent scaling events.
 - Manual target, safe-mode, and autoscaling-enabled control fields. These are
   durable now and will be activated by the Phase 8 control API.
-- Processed event IDs. The durable field is reserved for the Phase 7
-  idempotency implementation.
+- Up to 10,000 processed event IDs used by the active Phase 7 idempotency
+  guard. The oldest identity is evicted when the bounded set is full.
+- Duplicate/replayed event count.
 
 State is synchronously saved after every processed signal, after session-state
 cleanup, and during graceful shutdown. The local Redis timeout bounds a failed
@@ -41,6 +42,8 @@ write to one second.
 
 ```json
 {
+  "duplicate_events": 5,
+  "processed_event_count": 1,
   "state_persistence": {
     "enabled": true,
     "restored": true,
@@ -51,8 +54,24 @@ write to one second.
 ```
 
 `GET /metrics/raw` also exposes
-`scaling_agent_state_persistence_enabled` and
-`scaling_agent_state_restored` gauges.
+`scaling_agent_state_persistence_enabled`,
+`scaling_agent_state_restored`, `scaling_agent_duplicate_events_total`, and
+`scaling_agent_processed_event_ids`.
+
+## Kafka idempotency
+
+MITRE events carry a producer-generated `event_id`. For legacy records without
+one, the scaling consumer derives a SHA-256 identity from the session, technique,
+rule, normalized timestamp-second bucket, and query fingerprint. Session
+profiles receive a corresponding content-derived identity.
+
+The scaler claims each non-empty identity before changing counters, scorer
+state, replica targets, or event history. Repeated delivery increments only the
+duplicate counter. Processed IDs and all operational counters are saved together
+in the same versioned Redis document, so restart and consumer-group replay use
+the restored duplicate set before processing new signals. Prometheus-only
+pressure samples do not represent Kafka records and therefore intentionally do
+not receive event IDs.
 
 ## Validation
 

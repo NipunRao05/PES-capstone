@@ -174,6 +174,10 @@ def scrape_scaling_agent(pw: PrometheusWriter) -> dict:
                help_text="Deprecated alias for the canonical MITRE trap-trigger counter")
     pw.counter("capstone_mitre_trap_triggers_total", data.get("trap_triggers", 0),
                help_text="Canonical persisted trap-trigger count from scaling-agent")
+    pw.counter(f"{prefix}_duplicate_events_total", data.get("duplicate_events", 0),
+               help_text="Duplicate or replayed Kafka events ignored")
+    pw.gauge(f"{prefix}_processed_event_ids", data.get("processed_event_count", 0),
+             help_text="Durable event IDs retained for duplicate detection")
     pw.gauge(f"{prefix}_scorer_mean",        data.get("scorer_mean", 0),
              help_text="Global mean of EWMA-smoothed scale scores")
     pw.gauge(f"{prefix}_scorer_std_dev",     data.get("scorer_std_dev", 0),

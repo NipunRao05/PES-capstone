@@ -4,6 +4,7 @@ package consumer
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -20,12 +21,14 @@ import (
 
 // MitreEvent mirrors the JSON published to the mitre-events topic.
 type MitreEvent struct {
+	EventID         string   `json:"event_id"`
 	SessionID       string   `json:"session_id"`
 	Timestamp       string   `json:"timestamp"`
 	ClientIP        string   `json:"client_ip"`
 	Fingerprint     string   `json:"fingerprint"`
 	Phase           string   `json:"phase"`
 	TechniqueID     string   `json:"technique_id"`
+	RuleID          string   `json:"rule_id"`
 	RuleConfidence  float64  `json:"rule_confidence"`
 	RiskScore       float64  `json:"risk_score"`
 	RiskLevel       string   `json:"risk_level"`
@@ -37,6 +40,7 @@ type MitreEvent struct {
 // SessionProfile mirrors the ACTUAL JSON published by session_module.
 // Field names verified from live Redpanda session-profiles topic output.
 type SessionProfile struct {
+	EventID            string  `json:"event_id"`
 	SessionID          string  `json:"session_id"`
 	SourceIP           string  `json:"source_ip"` // session_module uses source_ip
 	DBUser             string  `json:"db_user"`   // session_module uses db_user
@@ -49,6 +53,59 @@ type SessionProfile struct {
 	QueriesPerSecond   float64 `json:"queries_per_second"`
 	SuspicionScore     float64 `json:"suspicion_score"`
 	UniqueFingerprints int     `json:"unique_fingerprint_count"`
+	CreatedAt          float64 `json:"created_at"`
+	Fingerprints       string  `json:"fingerprints"`
+	QuerySequence      string  `json:"query_sequence"`
+}
+
+func stableEventID(prefix string, parts ...string) string {
+	hash := sha256.New()
+	for _, part := range parts {
+		hash.Write([]byte(strings.TrimSpace(part)))
+		hash.Write([]byte{0})
+	}
+	return fmt.Sprintf("%s:%x", prefix, hash.Sum(nil))
+}
+
+func normalizedTimestampBucket(value string) string {
+	value = strings.TrimSpace(value)
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return fmt.Sprintf("%d", parsed.UTC().Unix())
+	}
+	return value
+}
+
+// DeriveMitreEventID uses an upstream event_id when present and otherwise
+// derives a stable content identity that survives Kafka offset and group replay.
+func DeriveMitreEventID(ev MitreEvent) string {
+	if eventID := strings.TrimSpace(ev.EventID); eventID != "" {
+		return eventID
+	}
+	return stableEventID(
+		"mitre",
+		ev.SessionID,
+		ev.TechniqueID,
+		ev.RuleID,
+		normalizedTimestampBucket(ev.Timestamp),
+		ev.Fingerprint,
+	)
+}
+
+// DeriveSessionProfileEventID provides the same replay protection for the
+// session-profile topic, whose producer does not yet supply event_id.
+func DeriveSessionProfileEventID(profile SessionProfile) string {
+	if eventID := strings.TrimSpace(profile.EventID); eventID != "" {
+		return eventID
+	}
+	return stableEventID(
+		"profile",
+		profile.SessionID,
+		fmt.Sprintf("%d", int64(profile.CreatedAt)),
+		fmt.Sprintf("%d", profile.QueryCount),
+		fmt.Sprintf("%d", profile.FailedAuth),
+		profile.Fingerprints,
+		profile.QuerySequence,
+	)
 }
 
 // DeadLetterEvent captures malformed or unprocessable Kafka records without
@@ -293,6 +350,8 @@ func (c *Consumer) consumeMitreEvents(ctx context.Context) {
 		// MitreEvent carries rule_confidence as attacker_confidence.
 		// Depth/entropy/auth come from session-profiles when they arrive.
 		sig := scorer.SessionSignal{
+			EventID:            DeriveMitreEventID(ev),
+			SignalSource:       c.cfg.TopicMitreEvents,
 			SessionID:          ev.SessionID,
 			ClientIP:           ev.ClientIP,
 			AttackerConfidence: ev.RuleConfidence,
@@ -375,6 +434,8 @@ func (c *Consumer) consumeSessionProfiles(ctx context.Context) {
 		confidence := deriveConfidence(profile)
 
 		sig := scorer.SessionSignal{
+			EventID:            DeriveSessionProfileEventID(profile),
+			SignalSource:       c.cfg.TopicSessionProfiles,
 			SessionID:          profile.SessionID,
 			ClientIP:           profile.SourceIP,
 			AttackerConfidence: confidence,

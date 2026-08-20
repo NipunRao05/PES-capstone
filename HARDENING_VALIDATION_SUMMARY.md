@@ -18,6 +18,7 @@
 | 12 | Hardening recommendation and verification engine | PASS |
 | 13 | Redis-backed scaling-agent state persistence | PASS |
 | 14 | Prometheus trap-trigger metric consistency | PASS |
+| 15 | Kafka idempotency and replay safety | PASS |
 
 ## Key Hardening Completed
 
@@ -31,6 +32,7 @@
 - Committed weak passwords were replaced with `.env`-driven variables.
 - Generated cache, scratch output, and local secret files are excluded from submission.
 - Trap-trigger evidence is consistent across the scaling agent, Prometheus, Grafana, and AI reports.
+- Duplicate and replayed Kafka records cannot inflate trap or scaling state.
 
 ## Notes
 
@@ -517,3 +519,109 @@ Distribution`, and `Attacker Persona & Proxy Health` dashboards were read back
 through the authenticated Grafana API. Every trap panel uses
 `capstone_mitre_trap_triggers_total`, and Grafana's Prometheus datasource
 returned `2` for the same test.
+
+## Kafka Idempotency and Replay Safety Validation (2026-08-20)
+
+| Check | Result |
+|---|---|
+| Producer-generated deterministic MITRE event ID | PASS |
+| Legacy MITRE event fallback ID | PASS |
+| Session-profile fallback ID | PASS |
+| First synthetic trap record processed | PASS |
+| Five identical records ignored | PASS |
+| Processed ID persisted in Redis | PASS |
+| Scaling-agent restart restores duplicate set | PASS |
+| Consumer group rewound from offset 20 to 14 | PASS |
+| Six old records replayed without operational inflation | PASS |
+| Invalid JSON routed to DLQ | PASS |
+| Missing `session_id` routed to DLQ | PASS |
+| Evidence store deduplicates upstream event IDs | PASS |
+| Duplicate/processed-ID metrics exported to Prometheus | PASS |
+| Go tests and vet | PASS |
+| MITRE agent tests | PASS - 32 tests |
+| Evidence-store tests | PASS - 7 tests |
+| Metrics-bridge tests | PASS - 5 tests |
+
+### Event Identity and Durable Duplicate Store
+
+The MITRE agent now emits `event_id` using a SHA-256 identity derived from the
+session, technique, rule, normalized source timestamp-second bucket, and query
+fingerprint. The scaling consumer honors an upstream identity and derives the
+same content-based form for legacy MITRE records. Session profiles use a
+separate stable identity derived from their session, creation bucket, counters,
+fingerprints, and query sequence.
+
+The scaler claims non-empty Kafka event IDs before changing counters, EWMA
+state, replica targets, session cleanup, or event history. It retains a bounded
+set of 10,000 IDs and persists that set with the operational state in the same
+versioned Redis document. Duplicate deliveries increment only
+`duplicate_events`; they do not increment total/trap signals or produce another
+scaling event. Prometheus-only metric-pressure samples intentionally have no
+Kafka event ID and remain unaffected.
+
+The evidence store preserves upstream `event_id`, so identical MITRE records at
+different Kafka offsets also produce one evidence entry. Legacy evidence
+records without an ID continue to use topic/partition/offset identity.
+
+### Duplicate and Restart Evidence
+
+The Phase 6 persisted baseline contained two trap triggers, two scale-up events,
+zero duplicate events, and no processed event IDs. Six identical synthetic
+records were published to `mitre-events` partition 0 at offsets 14 through 19:
+
+```text
+event_id=mitre:phase7-idempotency-1787217657
+session_id=phase7-idempotency-1787217657
+technique_id=T1213.006
+rule_id=R001_trap_table_access
+is_trap_triggered=true
+```
+
+Only offset 14 changed operational state. Offsets 15 through 19 were ignored:
+
+```text
+trap_triggers=3
+scale_up_events=3
+duplicate_events=5
+processed_event_count=1
+matching_scale_events=1
+matching_evidence_mitre_events=1
+```
+
+Redis contained exactly one processed ID, and `/scale/events` returned that ID
+with `signal_source=mitre-events`. After rebuilding and recreating only the
+scaling agent, trap, scale-up, duplicate, processed-ID, and matching-event counts
+were restored unchanged. The replica gauge subsequently completed its already
+eligible low-pressure scale-down independently of Kafka replay.
+
+### Real Consumer-Group Replay
+
+With the scaling consumer stopped and its group empty, the
+`scaling-agent-mitre` committed offset was rewound from 20 to 14. Restarting the
+consumer replayed all six records and returned the group to offset 20 with zero
+lag. The duplicate counter increased from 5 to 11, proving all six old records
+were observed and rejected, while the following remained unchanged:
+
+```text
+trap_triggers=3
+scale_up_events=3
+processed_event_count=1
+matching_scale_events=1
+```
+
+The duplicate counter is exported as
+`scaling_agent_duplicate_events_total` and
+`capstone_scaling_duplicate_events_total`; Prometheus returned `11`. The durable
+set size is exported as `scaling_agent_processed_event_ids` and returned `1`.
+
+### DLQ Evidence
+
+Two additional synthetic records were published after the replay. Malformed
+JSON at source offset 20 produced DLQ stage `parse_mitre_event` and deterministic
+dead-letter ID `scaling-agent:mitre-events:0:20`. A valid JSON object missing
+`session_id` at source offset 21 produced stage `validate_mitre_event` and ID
+`scaling-agent:mitre-events:0:21`.
+
+Both records appeared in `dead-letter-events`. Trap triggers, scale-up events,
+processed IDs, and duplicate count remained unchanged, confirming invalid input
+does not enter scoring or idempotency state.

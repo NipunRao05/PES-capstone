@@ -47,6 +47,7 @@ from models import (
     QueryEvent,
     SessionProfile,
     TechniqueMatch,
+    make_mitre_event_id,
 )
 from rule_engine import RuleEngine
 from storage import MitreStore
@@ -473,18 +474,27 @@ class MitreAgent:
             # not block live rule evaluation for other sessions.
             if result.matched_techniques:
                 best = result.matched_techniques[0]
+                fingerprint = event.fingerprint or event.query_normalized
+                rule_id = best.rule_id or best.matched_by
                 mitre_event = MitreEvent(
                     session_id=event.session_id,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                     client_ip=event.client_ip,
-                    fingerprint=event.fingerprint or event.query_normalized,
+                    fingerprint=fingerprint,
                     phase=event.phase,
                     technique_id=best.technique_id,
                     technique_name=best.technique_name,
                     tactic=best.tactic,
                     tactic_id=best.tactic_id,
-                    rule_id=best.rule_id or best.matched_by,
+                    rule_id=rule_id,
                     rule_confidence=best.confidence,
+                    event_id=make_mitre_event_id(
+                        event.session_id,
+                        best.technique_id,
+                        rule_id,
+                        event.timestamp,
+                        fingerprint,
+                    ),
                     risk_score=result.new_risk_score,
                     risk_level=result.risk_level,
                     deception_level=result.deception_level,
@@ -697,9 +707,12 @@ class MitreAgent:
         seq_confidence = self.hmm_scorer.score_sequence(phases) if phases else 0.0
         technique_matches = self._profile_only_techniques(raw, phases, actor_failed_auth)
         auth_alert_event = None
+        auth_event_timestamp = self._safe_float(
+            raw.get("created_at", raw.get("timestamp", time.time())), time.time()
+        )
         if actor_failed_auth >= AUTH_FAIL_THRESHOLD and self._should_emit_actor_auth_alert(
             protocol, client_ip, username, database,
-            self._safe_float(raw.get("created_at", raw.get("timestamp", time.time())), time.time()),
+            auth_event_timestamp,
             actor_failed_auth,
         ):
             auth_alert_event = self._build_actor_auth_mitre_event(
@@ -709,6 +722,7 @@ class MitreAgent:
                 protocol=protocol,
                 database=database,
                 actor_failed_auth=actor_failed_auth,
+                source_timestamp=auth_event_timestamp,
             )
 
         mitre_session = MitreSession(
@@ -850,7 +864,8 @@ class MitreAgent:
         return True
 
     def _build_actor_auth_mitre_event(
-        self, session_id: str, client_ip: str, username: str, protocol: str, database: str, actor_failed_auth: int
+        self, session_id: str, client_ip: str, username: str, protocol: str,
+        database: str, actor_failed_auth: int, source_timestamp: float
     ) -> MitreEvent:
         info = self.rule_engine.technique_index.get("T1110.001", {})
         risk_score = max(6.0, min(10.0, float(actor_failed_auth) * 1.5))
@@ -866,6 +881,13 @@ class MitreAgent:
             tactic_id=info.get("tactic_id", "TA0006"),
             rule_id="R009_brute_force",
             rule_confidence=float(info.get("confidence", 0.90)),
+            event_id=make_mitre_event_id(
+                session_id,
+                "T1110.001",
+                "R009_brute_force",
+                source_timestamp,
+                "AUTH_FAIL",
+            ),
             risk_score=risk_score,
             risk_level=self.rule_engine._risk_level(risk_score),
             deception_level=3,

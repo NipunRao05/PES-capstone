@@ -80,13 +80,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		// Scaling counters
-		"total_signals":     snap.TotalSignals,
-		"noise_signals":     snap.NoiseSignals,
-		"scale_up_events":   snap.ScaleUpEvents,
-		"scale_down_events": snap.ScaleDownEvents,
-		"trap_triggers":     snap.TrapTriggers,
-		"current_replicas":  snap.CurrentReplicas,
-		"scale_pressure":    snap.ScalePressure,
+		"total_signals":         snap.TotalSignals,
+		"noise_signals":         snap.NoiseSignals,
+		"scale_up_events":       snap.ScaleUpEvents,
+		"scale_down_events":     snap.ScaleDownEvents,
+		"trap_triggers":         snap.TrapTriggers,
+		"duplicate_events":      snap.DuplicateEvents,
+		"processed_event_count": s.sc.ProcessedEventCount(),
+		"current_replicas":      snap.CurrentReplicas,
+		"scale_pressure":        snap.ScalePressure,
 		// EWMA / Z-score global statistics
 		"scorer_mean":       mean,
 		"scorer_std_dev":    stdDev,
@@ -159,6 +161,14 @@ func (s *Server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 		"# TYPE scaling_agent_trap_triggers counter",
 		fmt.Sprintf("scaling_agent_trap_triggers %d", snap.TrapTriggers),
 
+		"# HELP scaling_agent_duplicate_events_total Duplicate or replayed Kafka events ignored",
+		"# TYPE scaling_agent_duplicate_events_total counter",
+		fmt.Sprintf("scaling_agent_duplicate_events_total %d", snap.DuplicateEvents),
+
+		"# HELP scaling_agent_processed_event_ids Number of durable event IDs retained for deduplication",
+		"# TYPE scaling_agent_processed_event_ids gauge",
+		fmt.Sprintf("scaling_agent_processed_event_ids %d", s.sc.ProcessedEventCount()),
+
 		"# HELP scaling_agent_scorer_mean Global mean of smoothed scores",
 		"# TYPE scaling_agent_scorer_mean gauge",
 		fmt.Sprintf("scaling_agent_scorer_mean %f", mean),
@@ -205,6 +215,8 @@ func (s *Server) handleScaleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	type eventJSON struct {
+		EventID       string    `json:"event_id,omitempty"`
+		SignalSource  string    `json:"signal_source,omitempty"`
 		SessionID     string    `json:"session_id"`
 		RawScore      float64   `json:"raw_score"`
 		SmoothedScore float64   `json:"smoothed_score"`
@@ -218,6 +230,8 @@ func (s *Server) handleScaleEvents(w http.ResponseWriter, r *http.Request) {
 	out := make([]eventJSON, len(events))
 	for i, ev := range events {
 		out[i] = eventJSON{
+			EventID:       ev.EventID,
+			SignalSource:  ev.SignalSource,
 			SessionID:     ev.SessionID,
 			RawScore:      ev.RawScore,
 			SmoothedScore: ev.SmoothedScore,
