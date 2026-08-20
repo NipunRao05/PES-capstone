@@ -12,6 +12,7 @@
 | 6 | Kafka publish failure handling | PASS |
 | 7 | Deterministic fake-data seeding | PASS |
 | 8 | Security cleanup | PASS |
+| 9 | AI Agent v1 incident briefing | PASS |
 
 ## Key Hardening Completed
 
@@ -49,26 +50,6 @@
 - The current deployment demonstrates observable adaptive scaling logic.
 - Physical container scaling is not performed in Docker Compose.
 - In Kubernetes, the exposed KEDA-compatible endpoint can be connected to KEDA/HPA for real autoscaling.
-
-## Metric-Based Scaling Validation
-
-| Test | Expected Result | Actual Result | Status |
-|---|---|---|---|
-| Prometheus query API | Scaling-agent can query Prometheus metrics | Prometheus API reachable on 127.0.0.1:9096 | PASS |
-| Metrics bridge scrape | Proxy and scaling metrics exposed | metrics-bridge exported pgproxy, mysqlproxy, scaling-agent, and MITRE metrics | PASS |
-| Metric collector startup | Scaling-agent starts Prometheus collector | metric-based scaling collector started | PASS |
-| Metric pressure calculation | Connection-rate burst raises pressure | metric pressure reached 1.0 from pgproxy connection rate | PASS |
-| Metric-based scale-up | High metric pressure increases replica target | SCALE UP from 1 to 3, then 3 to 5 | PASS |
-| Metric-based scale-down | Sustained low metric pressure decreases replica target | SCALE DOWN after elapsed_seconds=133 with required_seconds=120 | PASS |
-| Intent separation | Metric test should not require MITRE trap signal | trap_triggers remained 0 | PASS |
-
-### Metric Scaling Notes
-
-- Metric-based scaling uses Prometheus metrics from metrics-bridge.
-- The validated load signal was pgproxy connection-rate pressure.
-- The scaler reused the same safeguards as intent-based scaling: max-step, cooldown, scale-down threshold, and hysteresis.
-- In Docker Compose, this updates the desired replica target exposed through metrics.
-- Kubernetes KEDA/HPA integration is still required for physical pod autoscaling.
 
 ## Metric-Based Scaling Validation
 
@@ -187,16 +168,40 @@ Validated endpoints:
 
 The agent currently provides risk level, scaling interpretation, telemetry evidence, recent scaling events, and recommended response actions.
 
-## AI Agent High-Risk Validation
+## AI Agent v1 Final Validation (2026-08-20)
 
 | Check | Result |
 |---|---|
-| High-risk MITRE event injected | PASS |
-| Scaling-agent scale-up decision | PASS |
-| AI agent saw recent scale event | PASS |
-| Initial AI risk classification | FAILED - classified low because pressure metric stayed 0 |
-| AI classifier patch | ADDED |
+| AI service consolidated into `docker-compose.yml` | PASS |
+| Temporary `docker-compose.ai.yml` removed | PASS |
+| Compose configuration validation | PASS |
+| Baseline health and readiness | PASS |
+| Baseline classification | PASS - LOW |
+| JSON brief endpoint | PASS |
+| Markdown brief endpoint | PASS |
+| Synthetic high-risk MITRE trap event | PASS |
+| Scaling-agent logical scale-up | PASS - 1 to 3 replicas |
+| High-risk classification | PASS - HIGH |
+| Attacker session attribution | PASS |
+| Prometheus-zero/scaling-agent-nonzero trap fallback | PASS |
+| JSON/Markdown risk and attribution consistency | PASS |
 
-### AI Agent Classifier Fix
+### Final Validation Evidence
 
-The AI agent now considers recent high-risk scale events, scaling-agent trap trigger counts, and elevated replica posture in addition to Prometheus pressure. This prevents a stale or zero pressure metric from hiding a recent high-risk scaling event.
+Baseline telemetry produced `risk_level=low` with one desired replica and zero trap
+triggers. A clearly synthetic event was then published to the local `mitre-events`
+topic using session ID `phase1-ai-attribution-1787209194` and MITRE technique
+`T1213.006`.
+
+The scaling-agent consumed the event, incremented `trap_triggers` to `1`, and
+raised its logical replica target from `1` to `3`. The AI agent produced
+`risk_level=high`, included the exact synthetic session ID in its summary and
+latest high-event evidence, and rendered the same risk and attribution in the
+Markdown brief.
+
+During this test, Prometheus still returned `0` for
+`capstone_mitre_trap_triggers_total` while the scaling-agent returned `1`. The AI
+agent selected the higher authoritative observed count, so the stale Prometheus
+value did not suppress the high-risk result. This confirms the AI-side fallback;
+the underlying cross-system metric inconsistency remains scheduled for roadmap
+Phase 6.

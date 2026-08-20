@@ -1,5 +1,4 @@
 import os
-import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -69,7 +68,7 @@ def to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def extract_recent_scale_events(events_payload: Any, limit: int = 5) -> List[Dict[str, Any]]:
+def extract_recent_scale_events(events_payload: Any, limit: int = 50) -> List[Dict[str, Any]]:
     if not isinstance(events_payload, dict):
         return []
 
@@ -80,11 +79,76 @@ def extract_recent_scale_events(events_payload: Any, limit: int = 5) -> List[Dic
     return events[-limit:]
 
 
-def classify_pressure(pressure: float, trap_triggers: float, avg_actor_risk: float) -> Dict[str, str]:
+def parse_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return timestamp
+    except ValueError:
+        return None
+
+
+def analyze_recent_events(
+    events: List[Dict[str, Any]],
+    window: timedelta = timedelta(minutes=10),
+) -> Dict[str, Any]:
+    cutoff = datetime.now(timezone.utc) - window
+    recent_events: List[Dict[str, Any]] = []
+
+    for event in events:
+        timestamp = parse_timestamp(event.get("timestamp"))
+        if timestamp is not None and timestamp >= cutoff:
+            recent_events.append(event)
+
+    high_events = [
+        event
+        for event in recent_events
+        if max(
+            to_float(event.get("raw_score")),
+            to_float(event.get("smoothed_score")),
+        )
+        >= 0.6
+    ]
+    attacker_high_events = [
+        event
+        for event in high_events
+        if event.get("session_id")
+        and not str(event["session_id"]).startswith("metric-pressure-")
+    ]
+
+    return {
+        "window_seconds": int(window.total_seconds()),
+        "recent_event_count": len(recent_events),
+        "recent_high_event_count": len(high_events),
+        "attacker_high_event_count": len(attacker_high_events),
+        "elevated_posture_event_count": len(high_events),
+        "latest_high_event": attacker_high_events[-1] if attacker_high_events else None,
+    }
+
+
+def classify_pressure(
+    pressure: float,
+    trap_triggers: float,
+    avg_actor_risk: float,
+    recent_event_risk: Dict[str, Any],
+) -> Dict[str, str]:
+    latest_high_event = recent_event_risk.get("latest_high_event")
+
     if pressure >= 0.8 or avg_actor_risk >= 80:
         return {
             "risk_level": "critical",
             "summary": "High-confidence hostile or high-load behavior is present. Deception capacity should remain elevated.",
+        }
+
+    if latest_high_event:
+        session_id = latest_high_event.get("session_id", "unknown")
+        return {
+            "risk_level": "high",
+            "summary": f"Recent high-risk attacker activity was attributed to session {session_id}.",
         }
 
     if pressure >= 0.6 or trap_triggers > 0:
@@ -139,17 +203,25 @@ def build_brief() -> Dict[str, Any]:
 
     pressure = to_float(pressure_query.get("value"), to_float(scaling_metrics.get("scale_pressure", 0)))
     current_replicas = to_float(replicas_query.get("value"), to_float(scaling_metrics.get("current_replicas", 1)))
-    trap_triggers = to_float(trap_query.get("value"), to_float(scaling_metrics.get("trap_triggers", 0)))
+    prometheus_trap_triggers = to_float(trap_query.get("value"))
+    scaling_agent_trap_triggers = to_float(scaling_metrics.get("trap_triggers", 0))
+    trap_triggers = max(prometheus_trap_triggers, scaling_agent_trap_triggers)
     avg_actor_risk = to_float(actor_risk_query.get("value"), 0)
 
-    classification = classify_pressure(pressure, trap_triggers, avg_actor_risk)
+    attribution_events = extract_recent_scale_events(scaling_events)
+    recent_event_risk = analyze_recent_events(attribution_events)
+    recent_events = attribution_events[-5:]
+    classification = classify_pressure(
+        pressure,
+        trap_triggers,
+        avg_actor_risk,
+        recent_event_risk,
+    )
     recommendations = build_recommendations(
         classification["risk_level"],
         pressure,
         current_replicas,
     )
-
-    recent_events = extract_recent_scale_events(scaling_events)
 
     return {
         "agent": "capstone-ai-agent",
@@ -160,6 +232,8 @@ def build_brief() -> Dict[str, Any]:
             "scale_pressure": pressure,
             "current_replicas": current_replicas,
             "trap_triggers": trap_triggers,
+            "prometheus_trap_triggers": prometheus_trap_triggers,
+            "scaling_agent_trap_triggers": scaling_agent_trap_triggers,
             "avg_actor_risk": avg_actor_risk,
             "decision": (
                 "scale-up pressure present"
@@ -200,6 +274,8 @@ def brief_to_markdown(brief: Dict[str, Any]) -> str:
         f"- Scale pressure: `{interp['scale_pressure']}`",
         f"- Current replicas: `{interp['current_replicas']}`",
         f"- Trap triggers: `{interp['trap_triggers']}`",
+        f"- Prometheus trap triggers: `{interp['prometheus_trap_triggers']}`",
+        f"- Scaling-agent trap triggers: `{interp['scaling_agent_trap_triggers']}`",
         f"- Average actor risk: `{interp['avg_actor_risk']}`",
         f"- Decision: `{interp['decision']}`",
         "",
@@ -264,5 +340,3 @@ def latest_brief_markdown() -> Response:
         content=brief_to_markdown(build_brief()),
         media_type="text/markdown; charset=utf-8",
     )
-
-
