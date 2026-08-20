@@ -35,7 +35,7 @@
       "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
       "targets": [
         {"expr": "rate(capstone_scaling_total_signals[2m])", "legendFormat": "signals/s"},
-        {"expr": "rate(capstone_scaling_trap_triggers[2m])", "legendFormat": "trap triggers/s"}
+        {"expr": "rate(capstone_mitre_trap_triggers_total[2m])", "legendFormat": "trap triggers/s"}
       ],
       "fieldConfig": {"defaults": {"unit": "reqps"}}
     },

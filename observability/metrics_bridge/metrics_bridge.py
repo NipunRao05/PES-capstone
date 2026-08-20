@@ -152,11 +152,11 @@ def scrape_mysqlproxy(pw: PrometheusWriter):
              help_text="1 if MySQL backend is reachable")
 
 
-def scrape_scaling_agent(pw: PrometheusWriter):
+def scrape_scaling_agent(pw: PrometheusWriter) -> dict:
     data = _get_json(SCALING_URL)
     pw.gauge("capstone_bridge_scrape_success", 1 if data else 0, labels={"service": "scaling-agent"}, help_text="1 if bridge scrape succeeded")
     if not data:
-        return
+        return {}
     prefix = "capstone_scaling"
     pw.gauge(f"{prefix}_current_replicas",   data.get("current_replicas", 0),
              help_text="Current honeypot replica target")
@@ -171,13 +171,16 @@ def scrape_scaling_agent(pw: PrometheusWriter):
     pw.counter(f"{prefix}_scale_down_events", data.get("scale_down_events", 0),
                help_text="Total scale-down decisions")
     pw.counter(f"{prefix}_trap_triggers",    data.get("trap_triggers", 0),
-               help_text="Trap table accesses detected")
+               help_text="Deprecated alias for the canonical MITRE trap-trigger counter")
+    pw.counter("capstone_mitre_trap_triggers_total", data.get("trap_triggers", 0),
+               help_text="Canonical persisted trap-trigger count from scaling-agent")
     pw.gauge(f"{prefix}_scorer_mean",        data.get("scorer_mean", 0),
              help_text="Global mean of EWMA-smoothed scale scores")
     pw.gauge(f"{prefix}_scorer_std_dev",     data.get("scorer_std_dev", 0),
              help_text="Global std dev of scale scores (Z-score base)")
     pw.counter(f"{prefix}_scorer_count",     data.get("scorer_count", 0),
                help_text="Total samples in rolling statistics")
+    return data
 
 
 def scrape_scaling_events(pw: PrometheusWriter):
@@ -276,8 +279,8 @@ def scrape_redis_mitre(pw: PrometheusWriter):
                  help_text="Total sessions accumulated across tracked actors")
         pw.gauge("capstone_mitre_known_attacker_count", known_attackers,
                  help_text="Actors whose cumulative risk crossed the known-attacker threshold")
-        pw.counter("capstone_mitre_trap_triggers_total", trap_triggers,
-                   help_text="Trap triggers accumulated across actor profiles")
+        pw.gauge("capstone_mitre_actor_profile_trap_triggers", trap_triggers,
+                 help_text="Diagnostic trap-trigger sum from current Redis actor profiles")
 
         for persona, count in sorted(persona_counts.items()):
             pw.gauge("capstone_persona_actor_count", count, labels={"persona": persona},

@@ -1,6 +1,6 @@
 import unittest
 
-from main import brief_to_markdown
+from main import brief_to_markdown, metric_values_consistent
 
 
 class HardeningBriefTests(unittest.TestCase):
@@ -16,6 +16,8 @@ class HardeningBriefTests(unittest.TestCase):
                 "trap_triggers": 1,
                 "prometheus_trap_triggers": 1,
                 "scaling_agent_trap_triggers": 1,
+                "trap_metric_consistent": True,
+                "trap_metric_source": "scaling-agent persisted state",
                 "avg_actor_risk": 80,
                 "decision": "scale-up pressure present",
             },
@@ -43,6 +45,12 @@ class HardeningBriefTests(unittest.TestCase):
         self.assertIn("Before: executed `1`, failed `0`", markdown)
         self.assertIn("After: executed `0`, failed `1`", markdown)
         self.assertIn("Status: `verified`", markdown)
+        self.assertIn("Trap metric consistent: `True`", markdown)
+
+    def test_trap_metric_consistency_requires_equal_present_values(self):
+        self.assertTrue(metric_values_consistent("3", 3.0))
+        self.assertFalse(metric_values_consistent("2", 3.0))
+        self.assertFalse(metric_values_consistent(None, 0.0))
 
 
 if __name__ == "__main__":

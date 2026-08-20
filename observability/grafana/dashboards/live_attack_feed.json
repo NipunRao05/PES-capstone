@@ -32,7 +32,7 @@
     {
       "id": 4, "type": "stat", "title": "Trap Triggers",
       "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
-      "targets": [{"expr": "capstone_scaling_trap_triggers", "legendFormat": "Traps"}],
+      "targets": [{"expr": "capstone_mitre_trap_triggers_total", "legendFormat": "Traps"}],
       "options": {"colorMode": "background", "graphMode": "area"},
       "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
         "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "red", "value": 1}]}}}

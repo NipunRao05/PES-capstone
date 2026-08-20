@@ -56,6 +56,27 @@ class TestMetricsBridge(unittest.TestCase):
         self.assertIn("capstone_mitre_actor_parse_errors 1", rendered)
         self.assertIn("capstone_mitre_avg_actor_risk 10.0", rendered)
 
+    def test_scaling_agent_exports_canonical_persisted_trap_counter(self):
+        pw = mb.PrometheusWriter()
+        with patch.object(mb, "_get_json", return_value={"trap_triggers": 7}):
+            data = mb.scrape_scaling_agent(pw)
+        rendered = pw.render()
+        self.assertEqual(data["trap_triggers"], 7)
+        self.assertIn("capstone_mitre_trap_triggers_total 7", rendered)
+        self.assertIn("capstone_scaling_trap_triggers 7", rendered)
+
+    def test_redis_trap_sum_is_diagnostic_not_canonical(self):
+        records = {
+            "actor:1": json.dumps({"trap_triggers": 3}),
+            "actor:2": json.dumps({"trap_triggers": 2}),
+        }
+        pw = mb.PrometheusWriter()
+        with patch.object(mb, "_redis", FakeRedis(records)):
+            mb.scrape_redis_mitre(pw)
+        rendered = pw.render()
+        self.assertIn("capstone_mitre_actor_profile_trap_triggers 5", rendered)
+        self.assertNotIn("capstone_mitre_trap_triggers_total", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

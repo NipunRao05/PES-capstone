@@ -17,6 +17,7 @@
 | 11 | Isolated sandbox replay engine | PASS |
 | 12 | Hardening recommendation and verification engine | PASS |
 | 13 | Redis-backed scaling-agent state persistence | PASS |
+| 14 | Prometheus trap-trigger metric consistency | PASS |
 
 ## Key Hardening Completed
 
@@ -29,6 +30,7 @@
 - Fake data generation is deterministic across deception-engine restarts.
 - Committed weak passwords were replaced with `.env`-driven variables.
 - Generated cache, scratch output, and local secret files are excluded from submission.
+- Trap-trigger evidence is consistent across the scaling agent, Prometheus, Grafana, and AI reports.
 
 ## Notes
 
@@ -187,7 +189,7 @@ The agent currently provides risk level, scaling interpretation, telemetry evide
 | Scaling-agent logical scale-up | PASS - 1 to 3 replicas |
 | High-risk classification | PASS - HIGH |
 | Attacker session attribution | PASS |
-| Prometheus-zero/scaling-agent-nonzero trap fallback | PASS |
+| Historical Prometheus-zero/scaling-agent-nonzero fallback | PASS - superseded by Phase 14 |
 | JSON/Markdown risk and attribution consistency | PASS |
 
 ### Final Validation Evidence
@@ -205,10 +207,10 @@ Markdown brief.
 
 During this test, Prometheus still returned `0` for
 `capstone_mitre_trap_triggers_total` while the scaling-agent returned `1`. The AI
-agent selected the higher authoritative observed count, so the stale Prometheus
-value did not suppress the high-risk result. This confirms the AI-side fallback;
-the underlying cross-system metric inconsistency remains scheduled for roadmap
-Phase 6.
+agent selected the higher observed count, so the stale Prometheus value did not
+suppress the high-risk result. This was the historical AI-side fallback. The
+underlying inconsistency and the masking fallback were removed during the later
+Prometheus metric consistency work documented in Phase 14 below.
 
 ## Attacker Evidence Store Validation (2026-08-20)
 
@@ -451,3 +453,67 @@ startup to fail instead of silently returning to baseline. An intentionally
 incompatible pre-final synthetic test payload was rejected with
 `persisted replicas out of range`; only that synthetic state key was removed,
 then the final versioned-schema acceptance test was rerun successfully.
+
+## Prometheus Trap-Trigger Metric Consistency Validation (2026-08-20)
+
+| Check | Result |
+|---|---|
+| Scaling-agent persisted counter is canonical | PASS |
+| Metrics bridge exposes one canonical sample | PASS |
+| Prometheus value matches scaling-agent value | PASS |
+| Grafana datasource returns the same value | PASS |
+| All four trap panels use the canonical metric | PASS |
+| AI JSON values agree and report consistency | PASS |
+| AI Markdown reports metric consistency | PASS |
+| Redis actor-profile aggregate remains diagnostic only | PASS |
+| Metrics-bridge unit tests | PASS - 5 tests |
+| AI-agent unit tests | PASS - 2 tests |
+| Prometheus configuration and 13 alert rules | PASS |
+| Runtime error scan | PASS |
+
+### Canonical Metric Contract
+
+The persisted scaling-agent `trap_triggers` counter is the authoritative source
+for the canonical Prometheus metric:
+
+```text
+capstone_mitre_trap_triggers_total
+```
+
+The metrics bridge now exports that canonical counter directly from the
+scaling-agent JSON endpoint. The previous Redis actor-profile sum has been
+renamed to `capstone_mitre_actor_profile_trap_triggers` and is retained only as
+a diagnostic gauge because actor-profile retention and scaling-event state have
+different lifecycles. The legacy `capstone_scaling_trap_triggers` series remains
+as a deprecated compatibility alias, but no Grafana panel or alert depends on
+it.
+
+The AI incident brief no longer hides disagreement by selecting the larger of
+the Prometheus and scaling-agent values. It uses persisted scaling-agent state
+for deterministic classification and reports the two observed values alongside
+`trap_metric_consistent` and the authoritative source.
+
+### End-to-End Increment Evidence
+
+Before the test, the restored Phase 5 counter was `1`. The metrics bridge,
+Prometheus, Grafana datasource, and AI brief all returned the same baseline.
+
+Synthetic MITRE session `phase6-metric-consistency-1787216441` then published a
+trap-triggered `T1213.006` event. After the five-second Prometheus scrape cycle,
+all consumers returned:
+
+```text
+scaling-agent trap_triggers=2
+metrics-bridge capstone_mitre_trap_triggers_total=2
+Prometheus capstone_mitre_trap_triggers_total=2
+Grafana datasource capstone_mitre_trap_triggers_total=2
+AI effective/prometheus/scaling-agent trap triggers=2/2/2
+AI trap_metric_consistent=true
+AI latest attacker session=phase6-metric-consistency-1787216441
+```
+
+The provisioned `Live Attack Feed`, `Scaling Timeline`, `MITRE ATT&CK
+Distribution`, and `Attacker Persona & Proxy Health` dashboards were read back
+through the authenticated Grafana API. Every trap panel uses
+`capstone_mitre_trap_triggers_total`, and Grafana's Prometheus datasource
+returned `2` for the same test.

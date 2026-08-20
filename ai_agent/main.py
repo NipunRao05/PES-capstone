@@ -82,6 +82,12 @@ def to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def metric_values_consistent(prometheus_value: Any, authoritative_value: Any) -> bool:
+    if prometheus_value is None:
+        return False
+    return abs(to_float(prometheus_value) - to_float(authoritative_value)) < 1e-9
+
+
 def extract_recent_scale_events(events_payload: Any, limit: int = 50) -> List[Dict[str, Any]]:
     if not isinstance(events_payload, dict):
         return []
@@ -218,9 +224,13 @@ def build_brief() -> Dict[str, Any]:
 
     pressure = to_float(pressure_query.get("value"), to_float(scaling_metrics.get("scale_pressure", 0)))
     current_replicas = to_float(replicas_query.get("value"), to_float(scaling_metrics.get("current_replicas", 1)))
-    prometheus_trap_triggers = to_float(trap_query.get("value"))
     scaling_agent_trap_triggers = to_float(scaling_metrics.get("trap_triggers", 0))
-    trap_triggers = max(prometheus_trap_triggers, scaling_agent_trap_triggers)
+    prometheus_trap_triggers = to_float(trap_query.get("value"))
+    trap_metric_consistent = metric_values_consistent(
+        trap_query.get("value"),
+        scaling_agent_trap_triggers,
+    )
+    trap_triggers = scaling_agent_trap_triggers
     avg_actor_risk = to_float(actor_risk_query.get("value"), 0)
 
     attribution_events = extract_recent_scale_events(scaling_events)
@@ -256,6 +266,8 @@ def build_brief() -> Dict[str, Any]:
             "trap_triggers": trap_triggers,
             "prometheus_trap_triggers": prometheus_trap_triggers,
             "scaling_agent_trap_triggers": scaling_agent_trap_triggers,
+            "trap_metric_consistent": trap_metric_consistent,
+            "trap_metric_source": "scaling-agent persisted state",
             "avg_actor_risk": avg_actor_risk,
             "decision": (
                 "scale-up pressure present"
@@ -321,6 +333,8 @@ def brief_to_markdown(brief: Dict[str, Any]) -> str:
         f"- Trap triggers: `{interp['trap_triggers']}`",
         f"- Prometheus trap triggers: `{interp['prometheus_trap_triggers']}`",
         f"- Scaling-agent trap triggers: `{interp['scaling_agent_trap_triggers']}`",
+        f"- Trap metric consistent: `{interp['trap_metric_consistent']}`",
+        f"- Trap metric source: `{interp['trap_metric_source']}`",
         f"- Average actor risk: `{interp['avg_actor_risk']}`",
         f"- Decision: `{interp['decision']}`",
         "",

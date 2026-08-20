@@ -96,7 +96,7 @@
       "description": "Each spike = attacker accessed a honeytoken table",
       "gridPos": {"x": 12, "y": 11, "w": 12, "h": 8},
       "targets": [
-        {"expr": "capstone_scaling_trap_triggers", "legendFormat": "cumulative trap triggers"}
+        {"expr": "capstone_mitre_trap_triggers_total", "legendFormat": "cumulative trap triggers"}
       ],
       "fieldConfig": {"defaults": {"unit": "short",
         "custom": {"fillOpacity": 30, "lineWidth": 2},
