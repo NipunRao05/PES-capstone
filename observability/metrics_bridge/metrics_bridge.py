@@ -184,6 +184,20 @@ def scrape_scaling_agent(pw: PrometheusWriter) -> dict:
              help_text="Global std dev of scale scores (Z-score base)")
     pw.counter(f"{prefix}_scorer_count",     data.get("scorer_count", 0),
                help_text="Total samples in rolling statistics")
+    control = data.get("control") or {}
+    manual_target = control.get("manual_replica_target")
+    pw.gauge(f"{prefix}_safe_mode", 1 if control.get("safe_mode") else 0,
+             help_text="1 when operator safe mode freezes automatic scaling")
+    pw.gauge(f"{prefix}_autoscaling_enabled", 1 if control.get("autoscaling_enabled", True) else 0,
+             help_text="1 when automatic scaling decisions are enabled")
+    pw.gauge(f"{prefix}_manual_override_active", 1 if manual_target is not None else 0,
+             help_text="1 when an operator manual replica target is active")
+    pw.gauge(f"{prefix}_manual_replica_target", manual_target if manual_target is not None else 0,
+             help_text="Manual target, or zero when no override is active")
+    pw.gauge(f"{prefix}_max_replica_budget", control.get("max_replica_budget", 10),
+             help_text="Operator-defined hard replica ceiling")
+    pw.gauge(f"{prefix}_control_audit_events", data.get("control_audit_count", 0),
+             help_text="Retained operator control audit events")
     return data
 
 

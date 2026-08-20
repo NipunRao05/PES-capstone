@@ -264,3 +264,132 @@ func TestRestoredProcessedEventIDRejectsReplay(t *testing.T) {
 		t.Fatal("restored scaler did not stop")
 	}
 }
+
+func runSignal(t *testing.T, sc *scaler.Scaler, signal scorer.SessionSignal, total int64) scaler.MetricsSnapshot {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	signals := make(chan scorer.SessionSignal, 1)
+	done := make(chan struct{})
+	go func() {
+		sc.Run(ctx, signals)
+		close(done)
+	}()
+	signals <- signal
+	snapshot := waitForSnapshot(t, sc, func(snapshot scaler.MetricsSnapshot) bool {
+		return snapshot.TotalSignals == total
+	})
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scaler did not stop")
+	}
+	return snapshot
+}
+
+func TestSafeModeBlocksAutomaticScaleUp(t *testing.T) {
+	sc := scaler.New(testLogger())
+	if _, err := sc.SetSafeMode(true, "test-operator", "freeze during incident review"); err != nil {
+		t.Fatalf("enable safe mode: %v", err)
+	}
+	signal := highSignal("safe-mode-high", time.Now().UTC())
+	signal.EventID = "safe-mode-event"
+	snapshot := runSignal(t, sc, signal, 1)
+	if snapshot.CurrentReplicas != 1 || snapshot.ScaleUpEvents != 0 || snapshot.TrapTriggers != 1 {
+		t.Fatalf("safe mode did not freeze automatic scaling: %#v", snapshot)
+	}
+	events := sc.RecentEvents(1)
+	if len(events) != 1 || !strings.Contains(events[0].Reason, "safe mode active") {
+		t.Fatalf("safe-mode decision was not observable: %#v", events)
+	}
+}
+
+func TestManualTargetAndRollbackAreImmediate(t *testing.T) {
+	sc := scaler.New(testLogger())
+	status, err := sc.SetManualReplicaTarget(4, "test-operator", "capacity override")
+	if err != nil {
+		t.Fatalf("set manual target: %v", err)
+	}
+	if status.CurrentReplicas != 4 || status.EffectiveMode != "manual" || status.Control.ManualReplicaTarget == nil || *status.Control.ManualReplicaTarget != 4 {
+		t.Fatalf("manual target was not applied: %#v", status)
+	}
+
+	signal := highSignal("manual-high", time.Now().UTC())
+	signal.EventID = "manual-event"
+	snapshot := runSignal(t, sc, signal, 1)
+	if snapshot.CurrentReplicas != 4 {
+		t.Fatalf("scoring decision overrode manual target: %#v", snapshot)
+	}
+
+	status, err = sc.RollbackToBaseline("test-operator", "return to safe baseline")
+	if err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if status.CurrentReplicas != scorer.ReplicaMin || status.EffectiveMode != "safe_mode" || !status.Control.SafeMode || status.Control.ManualReplicaTarget != nil {
+		t.Fatalf("rollback did not establish a safe baseline: %#v", status)
+	}
+	if len(status.AuditEvents) != 2 || status.AuditEvents[1].Action != "rollback_to_baseline" {
+		t.Fatalf("control audit history missing: %#v", status.AuditEvents)
+	}
+}
+
+func TestAutoscalingDisableAndEnable(t *testing.T) {
+	sc := scaler.New(testLogger())
+	if _, err := sc.SetAutoscalingEnabled(false, "test-operator", "maintenance"); err != nil {
+		t.Fatalf("disable autoscaling: %v", err)
+	}
+	first := highSignal("disabled-high", time.Now().UTC())
+	first.EventID = "disabled-event"
+	snapshot := runSignal(t, sc, first, 1)
+	if snapshot.CurrentReplicas != 1 || snapshot.ScaleUpEvents != 0 {
+		t.Fatalf("disabled autoscaling changed replicas: %#v", snapshot)
+	}
+
+	if _, err := sc.SetAutoscalingEnabled(true, "test-operator", "maintenance complete"); err != nil {
+		t.Fatalf("enable autoscaling: %v", err)
+	}
+	second := highSignal("enabled-high", time.Now().UTC().Add(time.Second))
+	second.EventID = "enabled-event"
+	snapshot = runSignal(t, sc, second, 2)
+	if snapshot.CurrentReplicas != 3 || snapshot.ScaleUpEvents != 1 {
+		t.Fatalf("autoscaling did not resume: %#v", snapshot)
+	}
+}
+
+func TestMaxReplicaBudgetCapsAutomaticScaling(t *testing.T) {
+	sc := scaler.New(testLogger())
+	if _, err := sc.SetMaxReplicaBudget(2, "test-operator", "test budget"); err != nil {
+		t.Fatalf("set max budget: %v", err)
+	}
+	signal := highSignal("budget-high", time.Now().UTC())
+	signal.EventID = "budget-event"
+	snapshot := runSignal(t, sc, signal, 1)
+	if snapshot.CurrentReplicas != 2 || snapshot.ScaleUpEvents != 1 {
+		t.Fatalf("max budget was not enforced: %#v", snapshot)
+	}
+	if _, err := sc.SetManualReplicaTarget(3, "test-operator", "invalid override"); err == nil {
+		t.Fatal("manual target above budget should be rejected")
+	}
+}
+
+func TestControlStateAndAuditSurviveRestore(t *testing.T) {
+	original := scaler.New(testLogger())
+	if _, err := original.SetSafeMode(true, "alice", "incident"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := original.SetManualReplicaTarget(3, "alice", "hold capacity"); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := scaler.New(testLogger())
+	if err := restored.RestoreState(original.ExportState()); err != nil {
+		t.Fatalf("restore control state: %v", err)
+	}
+	status := restored.ControlStatus()
+	if status.EffectiveMode != "manual" || status.CurrentReplicas != 3 || len(status.AuditEvents) != 2 {
+		t.Fatalf("control state or audit was not restored: %#v", status)
+	}
+	if status.AuditEvents[0].Actor != "alice" || status.AuditEvents[1].Current.ManualReplicaTarget == nil {
+		t.Fatalf("restored audit content is incomplete: %#v", status.AuditEvents)
+	}
+}

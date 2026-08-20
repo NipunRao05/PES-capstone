@@ -232,6 +232,12 @@ def build_brief() -> Dict[str, Any]:
     )
     trap_triggers = scaling_agent_trap_triggers
     avg_actor_risk = to_float(actor_risk_query.get("value"), 0)
+    control = scaling_metrics.get("control") or {}
+    safe_mode = bool(control.get("safe_mode", False))
+    autoscaling_enabled = bool(control.get("autoscaling_enabled", True))
+    manual_replica_target = control.get("manual_replica_target")
+    max_replica_budget = int(to_float(control.get("max_replica_budget"), 10))
+    control_mode = str(scaling_metrics.get("control_mode") or "automatic")
 
     attribution_events = extract_recent_scale_events(scaling_events)
     recent_event_risk = analyze_recent_events(attribution_events)
@@ -247,6 +253,18 @@ def build_brief() -> Dict[str, Any]:
         pressure,
         current_replicas,
     )
+    if manual_replica_target is not None:
+        recommendations.append(
+            f"A manual replica target of {manual_replica_target} is active; confirm it remains appropriate before returning to automatic scaling."
+        )
+    elif safe_mode:
+        recommendations.append(
+            "Safe mode is active; automatic replica changes are frozen until an operator disables safe mode."
+        )
+    elif not autoscaling_enabled:
+        recommendations.append(
+            "Autoscaling is disabled; review current pressure before re-enabling automatic decisions."
+        )
     if hardening_report.get("available") is True:
         hardening_status = hardening_report.get("status", "unknown")
         recommendations.append(
@@ -269,8 +287,19 @@ def build_brief() -> Dict[str, Any]:
             "trap_metric_consistent": trap_metric_consistent,
             "trap_metric_source": "scaling-agent persisted state",
             "avg_actor_risk": avg_actor_risk,
+            "safe_mode": safe_mode,
+            "autoscaling_enabled": autoscaling_enabled,
+            "manual_replica_target": manual_replica_target,
+            "max_replica_budget": max_replica_budget,
+            "control_mode": control_mode,
             "decision": (
-                "scale-up pressure present"
+                f"manual override active at {manual_replica_target} replicas"
+                if manual_replica_target is not None
+                else "safe mode active; automatic scaling frozen"
+                if safe_mode
+                else "autoscaling disabled; current target held"
+                if not autoscaling_enabled
+                else "scale-up pressure present"
                 if pressure >= 0.6
                 else "hold or baseline pressure"
             ),
@@ -336,6 +365,11 @@ def brief_to_markdown(brief: Dict[str, Any]) -> str:
         f"- Trap metric consistent: `{interp['trap_metric_consistent']}`",
         f"- Trap metric source: `{interp['trap_metric_source']}`",
         f"- Average actor risk: `{interp['avg_actor_risk']}`",
+        f"- Control mode: `{interp.get('control_mode', 'automatic')}`",
+        f"- Safe mode: `{interp.get('safe_mode', False)}`",
+        f"- Autoscaling enabled: `{interp.get('autoscaling_enabled', True)}`",
+        f"- Manual replica target: `{interp.get('manual_replica_target')}`",
+        f"- Max replica budget: `{interp.get('max_replica_budget', 10)}`",
         f"- Decision: `{interp['decision']}`",
         "",
         "## Sandbox Hardening Verification",

@@ -19,6 +19,7 @@
 | 13 | Redis-backed scaling-agent state persistence | PASS |
 | 14 | Prometheus trap-trigger metric consistency | PASS |
 | 15 | Kafka idempotency and replay safety | PASS |
+| 16 | Persisted operator scaling controls | PASS |
 
 ## Key Hardening Completed
 
@@ -33,6 +34,8 @@
 - Generated cache, scratch output, and local secret files are excluded from submission.
 - Trap-trigger evidence is consistent across the scaling agent, Prometheus, Grafana, and AI reports.
 - Duplicate and replayed Kafka records cannot inflate trap or scaling state.
+- Private operator controls provide safe mode, manual targets, rollback,
+  autoscaling toggles, budget limits, and durable audit history.
 
 ## Notes
 
@@ -625,3 +628,76 @@ dead-letter ID `scaling-agent:mitre-events:0:20`. A valid JSON object missing
 Both records appeared in `dead-letter-events`. Trap triggers, scale-up events,
 processed IDs, and duplicate count remained unchanged, confirming invalid input
 does not enter scoring or idempotency state.
+
+## Operator Scaling Controls Validation (2026-08-20)
+
+| Check | Result |
+|---|---|
+| Safe mode persists and becomes effective immediately | PASS |
+| High-risk trap is recorded but cannot scale in safe mode | PASS |
+| Manual target updates scaler and scorer replicas immediately | PASS |
+| Rollback clears manual target and returns to safe baseline | PASS |
+| Disabled autoscaling holds current replicas | PASS |
+| Re-enabled autoscaling processes the next high-risk event | PASS |
+| Maximum replica budget caps automatic target | PASS |
+| Invalid target rejected without a control mutation | PASS |
+| Control audit survives scaling-agent restart | PASS |
+| Control gauges exported through metrics-bridge | PASS |
+| AI JSON and Markdown explain operator posture | PASS |
+| Go tests and vet | PASS |
+| AI-agent tests | PASS - 3 tests |
+| Metrics-bridge tests | PASS - 5 tests |
+
+### Control Contract and Precedence
+
+The private scaling-agent API now exposes status, safe mode, manual target,
+maximum budget, rollback, and autoscaling enable/disable operations. Requests
+use strict bounded JSON and reject unknown fields or invalid targets. Each
+accepted change stores the actor, reason, before/after policy, action, timestamp,
+and audit ID in the existing versioned Redis state.
+
+The effective decision precedence is:
+
+```text
+manual target
+→ safe-mode freeze
+→ autoscaling-disabled freeze
+→ automatic scorer target
+→ maximum replica budget ceiling
+```
+
+Rollback clears the manual target, returns both scaler and scorer to one
+replica, and enables safe mode. This prevents queued signals from immediately
+reversing an operator rollback. Releasing safe mode or re-enabling autoscaling
+resets a cooldown consumed by a suppressed scorer proposal, allowing the next
+valid signal to resume automatic operation.
+
+### Live Control Evidence
+
+The restored Phase 7 baseline contained three trap triggers, three scale-up
+events, and one desired replica. With safe mode enabled, synthetic event
+`phase8-safe-event-1787219297` increased the trap count to four but kept the
+replica and scale-up counters at one and three. Its recorded reason explicitly
+states that safe mode held the scorer's proposed `1 -> 3` scale-up.
+
+A manual target of three updated `current_replicas` and `scorer_replicas` to
+three immediately. The AI JSON and Markdown both reported `control_mode=manual`,
+safe mode, the target, the budget, and `manual override active at 3 replicas`.
+Rollback then cleared that target and returned to one replica in safe mode.
+
+After safe mode was released and autoscaling disabled, synthetic event
+`phase8-disabled-event-1787219400` raised the trap count to five but again held
+one replica with no scale-up counter change. Autoscaling was re-enabled with a
+maximum budget of two. The next unique event,
+`phase8-enabled-event-1787219450`, scaled from one to two; its evidence records
+that the budget capped the scorer's proposed target of three.
+
+The runtime was finally returned to automatic mode at one replica with the
+configured budget of ten. Restarting only scaling-agent restored that complete
+policy and all ten validation audit events. The metrics bridge exposed safe
+mode `0`, autoscaling enabled `1`, manual override `0`, budget `10`, and audit
+count `10`; AI readiness returned true.
+
+These controls govern the logical scaling-agent target in Docker Compose.
+Phase 9 must carry the same effective policy into the physical Kubernetes/KEDA
+deployment and prove pod-level behavior.

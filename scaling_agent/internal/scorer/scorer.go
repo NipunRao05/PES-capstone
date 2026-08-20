@@ -67,8 +67,8 @@ const (
 // SessionSignal is one data point consumed from mitre-events or session-profiles.
 // All fields are already normalised to [0, 1] by the caller.
 type SessionSignal struct {
-	EventID           string
-	SignalSource      string
+	EventID            string
+	SignalSource       string
 	SessionID          string
 	ClientIP           string
 	AttackerConfidence float64 // rule_confidence from MitreEvent (already 0-1)
@@ -124,14 +124,14 @@ type Scorer struct {
 // PersistentState is the complete decision state required to continue
 // cooldown, EWMA, anomaly, and scale-down timing behavior after a restart.
 type PersistentState struct {
-	EWMAState              map[string]float64   `json:"ewma_state"`
-	Count                  int64                `json:"count"`
-	Mean                   float64              `json:"mean"`
-	M2                     float64              `json:"m2"`
-	CurrentReplicas        int                  `json:"current_replicas"`
-	LastScaleUpAt          time.Time            `json:"last_scale_up_at"`
-	BelowScaleDownSince    time.Time            `json:"below_scale_down_since"`
-	BelowThresholdSince    map[string]time.Time `json:"below_threshold_since"`
+	EWMAState           map[string]float64   `json:"ewma_state"`
+	Count               int64                `json:"count"`
+	Mean                float64              `json:"mean"`
+	M2                  float64              `json:"m2"`
+	CurrentReplicas     int                  `json:"current_replicas"`
+	LastScaleUpAt       time.Time            `json:"last_scale_up_at"`
+	BelowScaleDownSince time.Time            `json:"below_scale_down_since"`
+	BelowThresholdSince map[string]time.Time `json:"below_threshold_since"`
 }
 
 // New creates a Scorer with sensible defaults.
@@ -205,6 +205,28 @@ func (s *Scorer) RestoreState(state PersistentState) error {
 	return nil
 }
 
+// SetCurrentReplicas synchronizes the scorer with an operator-selected target.
+// Operator controls own the effective target while this method is in use; the
+// scoring model continues to collect EWMA and anomaly telemetry.
+func (s *Scorer) SetCurrentReplicas(target int) error {
+	if target < ReplicaMin || target > ReplicaMax {
+		return fmt.Errorf("scorer replicas out of range: %d", target)
+	}
+	s.mu.Lock()
+	s.currentReplicas = target
+	s.mu.Unlock()
+	return nil
+}
+
+// ResetScaleUpCooldown lets automatic scaling resume immediately after an
+// operator releases a hold. A scale-up suppressed by safe mode or a disabled
+// autoscaler must not consume the automatic scale-up cooldown.
+func (s *Scorer) ResetScaleUpCooldown() {
+	s.mu.Lock()
+	s.lastScaleUpAt = time.Time{}
+	s.mu.Unlock()
+}
+
 // Score computes the scale_score for one session signal and returns a decision.
 func (s *Scorer) Score(sig SessionSignal) ScoreResult {
 	// ── Step 1: raw score ────────────────────────────────────────────────────
@@ -275,89 +297,88 @@ func (s *Scorer) Score(sig SessionSignal) ScoreResult {
 // It respects scale-down hysteresis: replicas only decrease after the score
 // has been below ScaleDownThreshold for the full ScaleDownWindow.
 func (s *Scorer) replicaTarget(sessionID string, smoothed float64, isNoise bool, now time.Time) (int, string) {
-if now.IsZero() {
-now = time.Now().UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	if isNoise {
+		return s.currentReplicas, "bot flood detected via Z-score - holding current replicas"
+	}
+
+	// High-risk zone: scale up with cooldown and bounded step size.
+	if smoothed >= ScaleUpThreshold {
+		s.belowScaleDownSince = time.Time{}
+		delete(s.belowThresholdSince, sessionID)
+
+		proposed := ReplicaMin + int(math.Round(float64(ReplicaMax-ReplicaMin)*smoothed))
+		proposed = clampInt(proposed, ReplicaMin, ReplicaMax)
+
+		if proposed <= s.currentReplicas {
+			return s.currentReplicas, "score above scale-up threshold - holding current replicas"
+		}
+
+		if !s.lastScaleUpAt.IsZero() {
+			elapsed := now.Sub(s.lastScaleUpAt)
+			if elapsed < ScaleUpCooldown {
+				return s.currentReplicas,
+					"scale-up cooldown active elapsed_seconds=" + itoa(int(elapsed.Seconds())) +
+						" required_seconds=" + itoa(int(ScaleUpCooldown.Seconds())) +
+						" proposed_replicas=" + itoa(proposed)
+			}
+		}
+
+		target := proposed
+		if target-s.currentReplicas > MaxScaleUpStep {
+			target = s.currentReplicas + MaxScaleUpStep
+		}
+		target = clampInt(target, ReplicaMin, ReplicaMax)
+
+		reason := formatReason("scaling UP", s.currentReplicas, target, smoothed)
+		if target < proposed {
+			reason += " proposed_replicas=" + itoa(proposed) + " max_step=" + itoa(MaxScaleUpStep)
+		}
+
+		s.lastScaleUpAt = now
+		s.currentReplicas = target
+		return target, reason
+	}
+
+	// Medium-risk zone: hold. This fixes the previous design gap where any score
+	// below ScaleUpThreshold could start the scale-down timer.
+	if smoothed >= ScaleDownThreshold {
+		s.belowScaleDownSince = time.Time{}
+		delete(s.belowThresholdSince, sessionID)
+		return s.currentReplicas, "score between thresholds - holding current replicas"
+	}
+
+	// Low-risk zone: scale down only after sustained low pressure.
+	if s.belowScaleDownSince.IsZero() {
+		s.belowScaleDownSince = now
+		return s.currentReplicas,
+			"score below scale-down threshold - starting scale-down timer elapsed_seconds=0 required_seconds=" +
+				itoa(int(ScaleDownWindow.Seconds()))
+	}
+
+	elapsed := now.Sub(s.belowScaleDownSince)
+	if elapsed >= ScaleDownWindow {
+		s.belowScaleDownSince = time.Time{}
+		delete(s.belowThresholdSince, sessionID)
+
+		target := clampInt(s.currentReplicas-1, ReplicaMin, ReplicaMax)
+		if target < s.currentReplicas {
+			reason := formatReason("scaling DOWN", s.currentReplicas, target, smoothed) +
+				" elapsed_seconds=" + itoa(int(elapsed.Seconds())) +
+				" required_seconds=" + itoa(int(ScaleDownWindow.Seconds()))
+			s.currentReplicas = target
+			return target, reason
+		}
+	}
+
+	return s.currentReplicas,
+		"score below scale-down threshold - within scale-down window elapsed_seconds=" +
+			itoa(int(elapsed.Seconds())) +
+			" required_seconds=" + itoa(int(ScaleDownWindow.Seconds()))
 }
-
-if isNoise {
-return s.currentReplicas, "bot flood detected via Z-score - holding current replicas"
-}
-
-// High-risk zone: scale up with cooldown and bounded step size.
-if smoothed >= ScaleUpThreshold {
-s.belowScaleDownSince = time.Time{}
-delete(s.belowThresholdSince, sessionID)
-
-proposed := ReplicaMin + int(math.Round(float64(ReplicaMax-ReplicaMin)*smoothed))
-proposed = clampInt(proposed, ReplicaMin, ReplicaMax)
-
-if proposed <= s.currentReplicas {
-return s.currentReplicas, "score above scale-up threshold - holding current replicas"
-}
-
-if !s.lastScaleUpAt.IsZero() {
-elapsed := now.Sub(s.lastScaleUpAt)
-if elapsed < ScaleUpCooldown {
-return s.currentReplicas,
-"scale-up cooldown active elapsed_seconds=" + itoa(int(elapsed.Seconds())) +
-" required_seconds=" + itoa(int(ScaleUpCooldown.Seconds())) +
-" proposed_replicas=" + itoa(proposed)
-}
-}
-
-target := proposed
-if target-s.currentReplicas > MaxScaleUpStep {
-target = s.currentReplicas + MaxScaleUpStep
-}
-target = clampInt(target, ReplicaMin, ReplicaMax)
-
-reason := formatReason("scaling UP", s.currentReplicas, target, smoothed)
-if target < proposed {
-reason += " proposed_replicas=" + itoa(proposed) + " max_step=" + itoa(MaxScaleUpStep)
-}
-
-s.lastScaleUpAt = now
-s.currentReplicas = target
-return target, reason
-}
-
-// Medium-risk zone: hold. This fixes the previous design gap where any score
-// below ScaleUpThreshold could start the scale-down timer.
-if smoothed >= ScaleDownThreshold {
-s.belowScaleDownSince = time.Time{}
-delete(s.belowThresholdSince, sessionID)
-return s.currentReplicas, "score between thresholds - holding current replicas"
-}
-
-// Low-risk zone: scale down only after sustained low pressure.
-if s.belowScaleDownSince.IsZero() {
-s.belowScaleDownSince = now
-return s.currentReplicas,
-"score below scale-down threshold - starting scale-down timer elapsed_seconds=0 required_seconds=" +
-itoa(int(ScaleDownWindow.Seconds()))
-}
-
-elapsed := now.Sub(s.belowScaleDownSince)
-if elapsed >= ScaleDownWindow {
-s.belowScaleDownSince = time.Time{}
-delete(s.belowThresholdSince, sessionID)
-
-target := clampInt(s.currentReplicas-1, ReplicaMin, ReplicaMax)
-if target < s.currentReplicas {
-reason := formatReason("scaling DOWN", s.currentReplicas, target, smoothed) +
-" elapsed_seconds=" + itoa(int(elapsed.Seconds())) +
-" required_seconds=" + itoa(int(ScaleDownWindow.Seconds()))
-s.currentReplicas = target
-return target, reason
-}
-}
-
-return s.currentReplicas,
-"score below scale-down threshold - within scale-down window elapsed_seconds=" +
-itoa(int(elapsed.Seconds())) +
-" required_seconds=" + itoa(int(ScaleDownWindow.Seconds()))
-}
-
 
 // Snapshot returns a read-safe view of current global statistics.
 func (s *Scorer) Snapshot() (mean, stdDev float64, count int64, replicas int) {

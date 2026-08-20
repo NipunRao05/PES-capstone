@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from main import brief_to_markdown, metric_values_consistent
+from main import brief_to_markdown, build_brief, metric_values_consistent
 
 
 class HardeningBriefTests(unittest.TestCase):
@@ -19,6 +20,11 @@ class HardeningBriefTests(unittest.TestCase):
                 "trap_metric_consistent": True,
                 "trap_metric_source": "scaling-agent persisted state",
                 "avg_actor_risk": 80,
+                "control_mode": "manual",
+                "safe_mode": True,
+                "autoscaling_enabled": True,
+                "manual_replica_target": 3,
+                "max_replica_budget": 4,
                 "decision": "scale-up pressure present",
             },
             "evidence": {
@@ -46,11 +52,44 @@ class HardeningBriefTests(unittest.TestCase):
         self.assertIn("After: executed `0`, failed `1`", markdown)
         self.assertIn("Status: `verified`", markdown)
         self.assertIn("Trap metric consistent: `True`", markdown)
+        self.assertIn("Control mode: `manual`", markdown)
+        self.assertIn("Safe mode: `True`", markdown)
+        self.assertIn("Manual replica target: `3`", markdown)
+        self.assertIn("Max replica budget: `4`", markdown)
 
     def test_trap_metric_consistency_requires_equal_present_values(self):
         self.assertTrue(metric_values_consistent("3", 3.0))
         self.assertFalse(metric_values_consistent("2", 3.0))
         self.assertFalse(metric_values_consistent(None, 0.0))
+
+    @patch("main.prometheus_query")
+    @patch("main.get_json")
+    def test_brief_explains_manual_operator_control(self, get_json, prometheus_query):
+        get_json.side_effect = [
+            {
+                "scale_pressure": 0.9,
+                "current_replicas": 3,
+                "trap_triggers": 1,
+                "control_mode": "manual",
+                "control": {
+                    "safe_mode": True,
+                    "autoscaling_enabled": True,
+                    "manual_replica_target": 3,
+                    "max_replica_budget": 4,
+                },
+            },
+            {"events": []},
+            {"available": False},
+        ]
+        prometheus_query.return_value = {"value": None, "status": "success"}
+
+        brief = build_brief()
+
+        interpretation = brief["scaling_interpretation"]
+        self.assertEqual(interpretation["control_mode"], "manual")
+        self.assertEqual(interpretation["manual_replica_target"], 3)
+        self.assertIn("manual override active at 3 replicas", interpretation["decision"])
+        self.assertTrue(any("manual replica target of 3" in item for item in brief["recommended_response"]))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,13 +44,33 @@ type Metrics struct {
 
 const PersistentStateVersion = 1
 const maxProcessedEventIDs = 10000
+const maxControlAuditEvents = 200
 
-// ControlState reserves durable operator-control fields for the control API.
-// Phase 8 will mutate these values; Phase 5 guarantees they survive restarts.
+// ControlState is the durable operator policy applied to scaling decisions.
 type ControlState struct {
 	ManualReplicaTarget *int `json:"manual_replica_target,omitempty"`
 	SafeMode            bool `json:"safe_mode"`
 	AutoscalingEnabled  bool `json:"autoscaling_enabled"`
+	MaxReplicaBudget    int  `json:"max_replica_budget"`
+}
+
+// ControlAuditEvent records every operator mutation for later review.
+type ControlAuditEvent struct {
+	AuditID   string       `json:"audit_id"`
+	Action    string       `json:"action"`
+	Actor     string       `json:"actor"`
+	Reason    string       `json:"reason"`
+	Previous  ControlState `json:"previous"`
+	Current   ControlState `json:"current"`
+	Timestamp time.Time    `json:"timestamp"`
+}
+
+// ControlStatus is the public control-plane view returned by the HTTP API.
+type ControlStatus struct {
+	Control         ControlState        `json:"control"`
+	CurrentReplicas int                 `json:"current_replicas"`
+	EffectiveMode   string              `json:"effective_mode"`
+	AuditEvents     []ControlAuditEvent `json:"audit_events"`
 }
 
 // PersistentState is the versioned Redis payload for all operational state.
@@ -60,6 +81,7 @@ type PersistentState struct {
 	Scorer            scorer.PersistentState `json:"scorer"`
 	RecentEvents      []ScalingEvent         `json:"recent_events"`
 	Control           ControlState           `json:"control"`
+	ControlAudit      []ControlAuditEvent    `json:"control_audit"`
 	ProcessedEventIDs []string               `json:"processed_event_ids"`
 }
 
@@ -83,6 +105,7 @@ type Scaler struct {
 	mu                sync.RWMutex
 	events            []ScalingEvent // ring buffer of last 1000 events
 	control           ControlState
+	controlAudit      []ControlAuditEvent
 	processedEventIDs []string
 	processedEventSet map[string]struct{}
 
@@ -95,10 +118,14 @@ type Scaler struct {
 // New creates a Scaler.
 func New(logger *slog.Logger) *Scaler {
 	s := &Scaler{
-		scorer:            scorer.New(),
-		logger:            logger,
-		events:            make([]ScalingEvent, 0, 1000),
-		control:           ControlState{AutoscalingEnabled: true},
+		scorer: scorer.New(),
+		logger: logger,
+		events: make([]ScalingEvent, 0, 1000),
+		control: ControlState{
+			AutoscalingEnabled: true,
+			MaxReplicaBudget:   scorer.ReplicaMax,
+		},
+		controlAudit:      make([]ControlAuditEvent, 0, maxControlAuditEvents),
 		processedEventIDs: make([]string, 0),
 		processedEventSet: make(map[string]struct{}),
 	}
@@ -132,10 +159,10 @@ func (s *Scaler) ExportState() PersistentState {
 	s.mu.RLock()
 	events := append([]ScalingEvent(nil), s.events...)
 	processed := append([]string(nil), s.processedEventIDs...)
-	control := s.control
-	if s.control.ManualReplicaTarget != nil {
-		target := *s.control.ManualReplicaTarget
-		control.ManualReplicaTarget = &target
+	control := cloneControlState(s.control)
+	audit := make([]ControlAuditEvent, len(s.controlAudit))
+	for i, event := range s.controlAudit {
+		audit[i] = cloneControlAuditEvent(event)
 	}
 	s.mu.RUnlock()
 
@@ -146,6 +173,7 @@ func (s *Scaler) ExportState() PersistentState {
 		Scorer:            s.scorer.ExportState(),
 		RecentEvents:      events,
 		Control:           control,
+		ControlAudit:      audit,
 		ProcessedEventIDs: processed,
 	}
 }
@@ -167,9 +195,20 @@ func (s *Scaler) RestoreState(state PersistentState) error {
 	if state.Scorer.CurrentReplicas != int(state.Metrics.CurrentReplicas) {
 		return fmt.Errorf("scorer replicas %d do not match metrics replicas %d", state.Scorer.CurrentReplicas, state.Metrics.CurrentReplicas)
 	}
+	// State snapshots written before Phase 8 do not contain this additive
+	// field. Migrate those snapshots to the compile-time safety ceiling.
+	if state.Control.MaxReplicaBudget == 0 {
+		state.Control.MaxReplicaBudget = scorer.ReplicaMax
+	}
+	if state.Control.MaxReplicaBudget < scorer.ReplicaMin || state.Control.MaxReplicaBudget > scorer.ReplicaMax {
+		return fmt.Errorf("max replica budget out of range: %d", state.Control.MaxReplicaBudget)
+	}
+	if state.Metrics.CurrentReplicas > int64(state.Control.MaxReplicaBudget) {
+		return fmt.Errorf("persisted replicas %d exceed max replica budget %d", state.Metrics.CurrentReplicas, state.Control.MaxReplicaBudget)
+	}
 	if state.Control.ManualReplicaTarget != nil {
 		target := *state.Control.ManualReplicaTarget
-		if target < scorer.ReplicaMin || target > scorer.ReplicaMax {
+		if target < scorer.ReplicaMin || target > state.Control.MaxReplicaBudget {
 			return fmt.Errorf("manual replica target out of range: %d", target)
 		}
 	}
@@ -178,6 +217,14 @@ func (s *Scaler) RestoreState(state PersistentState) error {
 	}
 	if len(state.ProcessedEventIDs) > maxProcessedEventIDs {
 		state.ProcessedEventIDs = state.ProcessedEventIDs[len(state.ProcessedEventIDs)-maxProcessedEventIDs:]
+	}
+	if len(state.ControlAudit) > maxControlAuditEvents {
+		state.ControlAudit = state.ControlAudit[len(state.ControlAudit)-maxControlAuditEvents:]
+	}
+	for _, event := range state.ControlAudit {
+		if strings.TrimSpace(event.AuditID) == "" || strings.TrimSpace(event.Action) == "" || event.Timestamp.IsZero() {
+			return fmt.Errorf("persisted control audit event is invalid")
+		}
 	}
 	processedSet := make(map[string]struct{}, len(state.ProcessedEventIDs))
 	for _, eventID := range state.ProcessedEventIDs {
@@ -209,15 +256,145 @@ func (s *Scaler) RestoreState(state PersistentState) error {
 
 	s.mu.Lock()
 	s.events = append([]ScalingEvent(nil), state.RecentEvents...)
-	s.control = state.Control
-	if state.Control.ManualReplicaTarget != nil {
-		target := *state.Control.ManualReplicaTarget
-		s.control.ManualReplicaTarget = &target
+	s.control = cloneControlState(state.Control)
+	s.controlAudit = make([]ControlAuditEvent, len(state.ControlAudit))
+	for i, event := range state.ControlAudit {
+		s.controlAudit[i] = cloneControlAuditEvent(event)
 	}
 	s.processedEventIDs = append([]string(nil), state.ProcessedEventIDs...)
 	s.processedEventSet = processedSet
 	s.mu.Unlock()
 	return nil
+}
+
+// ControlStatus returns the current durable policy and recent audit history.
+func (s *Scaler) ControlStatus() ControlStatus {
+	s.mu.RLock()
+	control := cloneControlState(s.control)
+	audit := make([]ControlAuditEvent, len(s.controlAudit))
+	for i, event := range s.controlAudit {
+		audit[i] = cloneControlAuditEvent(event)
+	}
+	s.mu.RUnlock()
+	return ControlStatus{
+		Control:         control,
+		CurrentReplicas: s.CurrentReplicas(),
+		EffectiveMode:   effectiveMode(control),
+		AuditEvents:     audit,
+	}
+}
+
+// SetSafeMode freezes automatic decisions at the current effective target.
+func (s *Scaler) SetSafeMode(enabled bool, actor, reason string) (ControlStatus, error) {
+	return s.mutateControl("set_safe_mode", actor, reason, func(control *ControlState) error {
+		control.SafeMode = enabled
+		if !enabled {
+			s.scorer.ResetScaleUpCooldown()
+		}
+		return nil
+	})
+}
+
+// SetManualReplicaTarget applies an immediate operator-selected replica target.
+func (s *Scaler) SetManualReplicaTarget(target int, actor, reason string) (ControlStatus, error) {
+	return s.mutateControl("set_manual_target", actor, reason, func(control *ControlState) error {
+		if target < scorer.ReplicaMin || target > control.MaxReplicaBudget {
+			return fmt.Errorf("manual target must be between %d and max replica budget %d", scorer.ReplicaMin, control.MaxReplicaBudget)
+		}
+		value := target
+		control.ManualReplicaTarget = &value
+		s.setEffectiveReplicas(target)
+		return nil
+	})
+}
+
+// SetMaxReplicaBudget changes the hard operator ceiling. Lowering the budget
+// immediately clamps both the current and manual targets.
+func (s *Scaler) SetMaxReplicaBudget(maxReplicas int, actor, reason string) (ControlStatus, error) {
+	return s.mutateControl("set_max_replica_budget", actor, reason, func(control *ControlState) error {
+		if maxReplicas < scorer.ReplicaMin || maxReplicas > scorer.ReplicaMax {
+			return fmt.Errorf("max replica budget must be between %d and %d", scorer.ReplicaMin, scorer.ReplicaMax)
+		}
+		control.MaxReplicaBudget = maxReplicas
+		if control.ManualReplicaTarget != nil && *control.ManualReplicaTarget > maxReplicas {
+			value := maxReplicas
+			control.ManualReplicaTarget = &value
+		}
+		if s.CurrentReplicas() > maxReplicas {
+			s.setEffectiveReplicas(maxReplicas)
+		}
+		return nil
+	})
+}
+
+// SetAutoscalingEnabled enables or freezes deterministic scaling decisions.
+func (s *Scaler) SetAutoscalingEnabled(enabled bool, actor, reason string) (ControlStatus, error) {
+	return s.mutateControl("set_autoscaling", actor, reason, func(control *ControlState) error {
+		control.AutoscalingEnabled = enabled
+		if enabled {
+			s.scorer.ResetScaleUpCooldown()
+		}
+		return nil
+	})
+}
+
+// RollbackToBaseline clears the manual target, returns to one replica, and
+// enables safe mode so a queued signal cannot immediately undo the rollback.
+func (s *Scaler) RollbackToBaseline(actor, reason string) (ControlStatus, error) {
+	return s.mutateControl("rollback_to_baseline", actor, reason, func(control *ControlState) error {
+		control.ManualReplicaTarget = nil
+		control.SafeMode = true
+		s.setEffectiveReplicas(scorer.ReplicaMin)
+		return nil
+	})
+}
+
+func (s *Scaler) mutateControl(action, actor, reason string, mutate func(*ControlState) error) (ControlStatus, error) {
+	actor = strings.TrimSpace(actor)
+	reason = strings.TrimSpace(reason)
+	if actor == "" {
+		actor = "operator"
+	}
+	if reason == "" {
+		reason = "operator request"
+	}
+	if len(actor) > 128 || len(reason) > 512 {
+		return s.ControlStatus(), fmt.Errorf("actor or reason exceeds the allowed length")
+	}
+
+	s.mu.Lock()
+	previous := cloneControlState(s.control)
+	if err := mutate(&s.control); err != nil {
+		s.mu.Unlock()
+		return s.ControlStatus(), err
+	}
+	event := ControlAuditEvent{
+		AuditID:   fmt.Sprintf("control-%d", time.Now().UTC().UnixNano()),
+		Action:    action,
+		Actor:     actor,
+		Reason:    reason,
+		Previous:  previous,
+		Current:   cloneControlState(s.control),
+		Timestamp: time.Now().UTC(),
+	}
+	if len(s.controlAudit) >= maxControlAuditEvents {
+		s.controlAudit = s.controlAudit[1:]
+	}
+	s.controlAudit = append(s.controlAudit, event)
+	s.mu.Unlock()
+
+	status := s.ControlStatus()
+	if err := s.SaveNow(); err != nil {
+		return status, fmt.Errorf("control applied but persistence failed: %w", err)
+	}
+	return status, nil
+}
+
+func (s *Scaler) setEffectiveReplicas(target int) {
+	if err := s.scorer.SetCurrentReplicas(target); err != nil {
+		panic(err)
+	}
+	s.metrics.CurrentReplicas.Store(int64(target))
 }
 
 // SaveNow writes the current state synchronously when persistence is enabled.
@@ -308,8 +485,8 @@ func (s *Scaler) process(sig scorer.SessionSignal) bool {
 		)
 		return true
 	}
-
 	prevReplicas := s.metrics.CurrentReplicas.Load()
+	result.ReplicaTarget, result.Reason = s.applyControlDecision(result.ReplicaTarget, result.Reason)
 	s.metrics.CurrentReplicas.Store(int64(result.ReplicaTarget))
 
 	if int64(result.ReplicaTarget) > prevReplicas {
@@ -359,6 +536,35 @@ func (s *Scaler) process(sig scorer.SessionSignal) bool {
 	s.events = append(s.events, ev)
 	s.mu.Unlock()
 	return true
+}
+
+func (s *Scaler) applyControlDecision(proposed int, reason string) (int, string) {
+	s.mu.RLock()
+	control := cloneControlState(s.control)
+	s.mu.RUnlock()
+
+	target := proposed
+	current := s.CurrentReplicas()
+	switch {
+	case control.ManualReplicaTarget != nil:
+		target = *control.ManualReplicaTarget
+		reason = fmt.Sprintf("manual replica target active target=%d; scorer_reason=%s", target, reason)
+	case control.SafeMode:
+		target = current
+		reason = fmt.Sprintf("safe mode active - holding current replicas=%d; scorer_reason=%s", target, reason)
+	case !control.AutoscalingEnabled:
+		target = current
+		reason = fmt.Sprintf("autoscaling disabled - holding current replicas=%d; scorer_reason=%s", target, reason)
+	}
+	if target > control.MaxReplicaBudget {
+		target = control.MaxReplicaBudget
+		reason = fmt.Sprintf("max replica budget enforced target=%d; scorer_reason=%s", target, reason)
+	}
+	if target < scorer.ReplicaMin {
+		target = scorer.ReplicaMin
+	}
+	s.setEffectiveReplicas(target)
+	return target, reason
 }
 
 func (s *Scaler) claimEvent(eventID string) bool {
@@ -447,4 +653,33 @@ func shortID(s string) string {
 		return s
 	}
 	return s[:8]
+}
+
+func cloneControlState(control ControlState) ControlState {
+	clone := control
+	if control.ManualReplicaTarget != nil {
+		target := *control.ManualReplicaTarget
+		clone.ManualReplicaTarget = &target
+	}
+	return clone
+}
+
+func cloneControlAuditEvent(event ControlAuditEvent) ControlAuditEvent {
+	clone := event
+	clone.Previous = cloneControlState(event.Previous)
+	clone.Current = cloneControlState(event.Current)
+	return clone
+}
+
+func effectiveMode(control ControlState) string {
+	switch {
+	case control.ManualReplicaTarget != nil:
+		return "manual"
+	case control.SafeMode:
+		return "safe_mode"
+	case !control.AutoscalingEnabled:
+		return "autoscaling_disabled"
+	default:
+		return "automatic"
+	}
 }

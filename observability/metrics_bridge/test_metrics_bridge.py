@@ -62,6 +62,13 @@ class TestMetricsBridge(unittest.TestCase):
             "trap_triggers": 7,
             "duplicate_events": 5,
             "processed_event_count": 2,
+            "control": {
+                "safe_mode": True,
+                "autoscaling_enabled": False,
+                "manual_replica_target": 3,
+                "max_replica_budget": 4,
+            },
+            "control_audit_count": 6,
         }):
             data = mb.scrape_scaling_agent(pw)
         rendered = pw.render()
@@ -70,6 +77,12 @@ class TestMetricsBridge(unittest.TestCase):
         self.assertIn("capstone_scaling_trap_triggers 7", rendered)
         self.assertIn("capstone_scaling_duplicate_events_total 5", rendered)
         self.assertIn("capstone_scaling_processed_event_ids 2", rendered)
+        self.assertIn("capstone_scaling_safe_mode 1", rendered)
+        self.assertIn("capstone_scaling_autoscaling_enabled 0", rendered)
+        self.assertIn("capstone_scaling_manual_override_active 1", rendered)
+        self.assertIn("capstone_scaling_manual_replica_target 3", rendered)
+        self.assertIn("capstone_scaling_max_replica_budget 4", rendered)
+        self.assertIn("capstone_scaling_control_audit_events 6", rendered)
 
     def test_redis_trap_sum_is_diagnostic_not_canonical(self):
         records = {
