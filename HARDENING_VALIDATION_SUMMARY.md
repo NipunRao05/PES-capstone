@@ -20,6 +20,7 @@
 | 14 | Prometheus trap-trigger metric consistency | PASS |
 | 15 | Kafka idempotency and replay safety | PASS |
 | 16 | Persisted operator scaling controls | PASS |
+| 17 | Kubernetes/KEDA physical autoscaling | PASS |
 
 ## Key Hardening Completed
 
@@ -36,6 +37,8 @@
 - Duplicate and replayed Kafka records cannot inflate trap or scaling state.
 - Private operator controls provide safe mode, manual targets, rollback,
   autoscaling toggles, budget limits, and durable audit history.
+- Kubernetes/KEDA physically scales deception-engine pods from the persisted
+  scaling-agent target while preserving operator controls and stabilization.
 
 ## Notes
 
@@ -701,3 +704,78 @@ count `10`; AI readiness returned true.
 These controls govern the logical scaling-agent target in Docker Compose.
 Phase 9 must carry the same effective policy into the physical Kubernetes/KEDA
 deployment and prove pod-level behavior.
+
+## Kubernetes/KEDA Physical Autoscaling Validation (2026-08-20)
+
+| Check | Result |
+|---|---|
+| Docker Desktop Kubernetes node Ready (v1.34.3) | PASS |
+| KEDA operator and metrics server Ready (v2.19.0) | PASS |
+| Application and dependency images loaded into cluster containerd | PASS |
+| Private Redis and Redpanda services healthy | PASS |
+| Redpanda topic initialization job complete | PASS |
+| Deception-engine, scaling-agent, metrics-bridge, and Prometheus pods Ready | PASS |
+| Prometheus reports metrics-bridge target `up=1` | PASS |
+| Prometheus returns `capstone_scaling_current_replicas` | PASS |
+| KEDA ScaledObject `Ready=True` and `Active=True` | PASS |
+| HPA created and external metric readable | PASS |
+| Unique high-risk event physically scales pods `1 -> 3` | PASS |
+| Safe mode prevents physical scale-up | PASS |
+| Manual target four converges to four physical pods | PASS |
+| Maximum replica budget clamps requested target | PASS |
+| Rollback holds during stabilization, then scales pods `3 -> 1` | PASS |
+| Scaling-agent restart restores Redis-backed state and controls | PASS |
+| Invalid over-budget manual target rejected without audit mutation | PASS |
+
+### Isolated Deployment
+
+The validated stack runs in the `capstone-deception` namespace. Redis,
+Redpanda, deception-engine, scaling-agent, metrics-bridge, and Prometheus use
+private `ClusterIP` services. No Ingress, NodePort, real database, production
+credentials, or real customer data is present. Synthetic documentation and
+test addresses use the reserved `198.51.100.0/24` range.
+
+Application images were built locally and imported into the Docker Desktop
+node's containerd image store. The manifests use `imagePullPolicy: Never` for
+this local proof. Another cluster must use an approved private image registry
+and update the image references accordingly.
+
+### Stable KEDA Replica Contract
+
+The scaling-agent's `capstone_scaling_current_replicas` metric is an absolute
+desired replica total. KEDA exposes it to HPA with `metricType: AverageValue`
+and threshold `1`. If `N` pods are currently running and the desired total is
+`R`, HPA observes average external metric `R/N` and converges to `R`.
+
+An initial test used `metricType: Value`. It correctly moved one pod to three,
+but then treated the absolute desired count as a per-deployment total and began
+positive feedback toward five and seven pods. The test was stopped before a
+second event, the workload was capped, and the contract was corrected to
+`AverageValue`. A temporary ratio adapter and diagnostic RBAC were removed.
+The final manifest and final acceptance test use only the canonical scaling
+metric and require no Kubernetes API access from metrics-bridge.
+
+### Physical Scale-Up and Scale-Down Evidence
+
+From an automatic one-pod baseline, unique synthetic high-risk event
+`phase9-final-high-1787222200` increased the persisted logical target from one
+to three. HPA converged the deception-engine Deployment to three ready pods.
+After 35 seconds the system remained stable at exactly three logical and three
+physical replicas, with the external metric reporting average value `1`.
+
+Rollback at `2026-08-20T10:37:22Z` returned the logical target to one and
+enabled safe mode. HPA reported approximately `334m` while deliberately
+holding three physical pods through the configured 120-second downscale
+stabilization window. At `2026-08-20T10:39:28Z`, it completed the physical
+scale-down to one ready pod.
+
+Separate control tests confirmed that a high-risk event in safe mode increased
+the trap count without increasing logical or physical replicas, manual target
+four converged exactly to four pods, and maximum budget three clamped a target
+of four. Restarting the scaling-agent restored the target, trap count, scale
+history, timers, and operator policy from Redis.
+
+The final review state is automatic mode, safe mode disabled, target one,
+maximum budget ten, one ready deception-engine pod, three trap triggers, two
+scale-up events, and eight Kubernetes control-audit entries. Phase 10 is the
+next unstarted roadmap item.

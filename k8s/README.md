@@ -1,70 +1,146 @@
-﻿# Kubernetes / KEDA Autoscaling Plan
+﻿# Kubernetes / KEDA Physical Autoscaling
 
 ## Purpose
 
-The Docker Compose deployment validates adaptive scaling decisions by updating the scaling-agent desired replica target.
+This deployment proves that the scaling-agent's persisted desired replica target
+can physically scale deception-engine pods through Prometheus, KEDA, and HPA.
+All supporting services remain private `ClusterIP` resources in the isolated
+`capstone-deception` namespace.
 
-The Kubernetes deployment path connects the validated scaling pressure metric to KEDA/HPA so pod replicas can be physically scaled.
+```text
+synthetic MITRE event
+  -> Redpanda
+  -> scaling-agent desired replicas
+  -> metrics-bridge
+  -> Prometheus
+  -> KEDA external metric
+  -> HPA
+  -> deception-engine pod replicas
+```
 
-## Validated in Docker Compose
+The manifests use only synthetic validation events and disposable local state.
+They do not connect to a real database, expose an Ingress, or publish a control
+API outside the cluster.
 
-- Intent-based scaling from MITRE/trap signals.
-- Metric-based scaling from Prometheus metrics.
-- Scale-up threshold: 0.6.
-- Scale-down threshold: 0.3.
-- Scale-down hysteresis window: 120 seconds.
-- Scale-up cooldown: 30 seconds.
-- Maximum scale-up step: +2 replicas.
-- Maximum replicas: 10.
+## Replica Metric Contract
 
-## Kubernetes Physical Scaling Design
+The authoritative KEDA metric is:
 
-Prometheus scrapes metrics-bridge.
+```text
+capstone_scaling_current_replicas
+```
 
-metrics-bridge exposes:
+It represents the desired total number of deception-engine replicas. The
+ScaledObject therefore uses `metricType: AverageValue` with a threshold of `1`.
+For `N` running pods and desired total `R`, the external metric becomes `R/N`;
+the HPA calculation converges to exactly `R`.
 
-- capstone_scaling_scale_pressure
-- capstone_scaling_current_replicas
-- capstone_pgproxy_total_connections
-- capstone_mysqlproxy_total_connections
-- capstone_mitre_trap_triggers_total
+Do not change this trigger to `metricType: Value`. A total desired-replica
+metric with `Value` creates positive feedback because HPA multiplies the value
+by the current replica count.
 
-KEDA Prometheus scaler queries:
+The scaling-agent continues to own decision safeguards:
 
-    capstone_scaling_scale_pressure
+- scale-up threshold `0.6`
+- scale-down threshold `0.3`
+- scale-up cooldown `30s`
+- maximum scale-up step `+2`
+- scale-down stabilization `120s`
+- safe mode, manual target, rollback, autoscaling toggle, and replica budget
 
-KEDA then creates/manages an HPA for the deception-engine Deployment.
+## Resources
 
-## Expected Kubernetes Behavior
+| Manifest | Purpose |
+|---|---|
+| `namespace.yaml` | Isolated `capstone-deception` namespace |
+| `redis.yaml` | Private state stores for deception and scaling state |
+| `redpanda.yaml` | Private event broker and topic initialization job |
+| `deception-engine-deployment.yaml` | Physically scaled workload |
+| `deception-engine-service.yaml` | Internal deception-engine service |
+| `scaling-agent-deployment.yaml` | Deterministic replica decision service |
+| `scaling-agent-service.yaml` | Internal metrics and control service |
+| `metrics-bridge-deployment.yaml` | Converts scaling metrics to Prometheus format |
+| `prometheus.yaml` | Private Prometheus server and scrape configuration |
+| `keda-scaledobject-prometheus.yaml` | KEDA/HPA desired-replica bridge |
 
-| Condition | Metric | Expected Behavior |
-|---|---:|---|
-| Low pressure | < 0.3 | Scale down after cooldown/hysteresis |
-| Medium pressure | 0.3 to 0.6 | Hold |
-| High pressure | >= 0.6 | Scale up |
-| Repeated high pressure | >= 0.6 | Scale up gradually, max +2 pods per 30s |
-| Sustained low pressure | < 0.3 for 120s | Scale down gradually, -1 pod per 120s |
+`keda-scaledobject-proxy.yaml` is a legacy pressure-metric alternative and is
+not part of this validated deployment path.
+
+## Local Image Preparation
+
+The validated Docker Desktop cluster uses locally built images with
+`imagePullPolicy: Never`:
+
+```powershell
+docker compose -f docker-compose.yml build deception-engine scaling-agent metrics-bridge
+
+$images = @(
+  "capstone-main-deception-engine:latest",
+  "capstone-main-scaling-agent:latest",
+  "capstone-main-metrics-bridge:latest",
+  "redis:7-alpine",
+  "redpandadata/redpanda:v24.1.9",
+  "prom/prometheus:v2.48.0"
+)
+
+foreach ($image in $images) {
+  docker save $image | docker exec -i desktop-control-plane ctr -n k8s.io images import -
+}
+```
+
+For another cluster, tag and push these images to an approved private registry,
+then update the manifest image references and pull policy.
 
 ## Apply Order
 
-    kubectl apply -f k8s/namespace.yaml
-    kubectl apply -f k8s/deception-engine-deployment.yaml
-    kubectl apply -f k8s/deception-engine-service.yaml
-    kubectl apply -f k8s/scaling-agent-deployment.yaml
-    kubectl apply -f k8s/scaling-agent-service.yaml
-    kubectl apply -f k8s/keda-scaledobject-prometheus.yaml
+Install KEDA first, then apply the project resources:
 
-## Validation Commands
+```powershell
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/redis.yaml
+kubectl apply -f k8s/redpanda.yaml
+kubectl wait --for=condition=complete job/redpanda-init -n capstone-deception --timeout=180s
+kubectl apply -f k8s/deception-engine-deployment.yaml
+kubectl apply -f k8s/deception-engine-service.yaml
+kubectl apply -f k8s/scaling-agent-deployment.yaml
+kubectl apply -f k8s/scaling-agent-service.yaml
+kubectl apply -f k8s/metrics-bridge-deployment.yaml
+kubectl apply -f k8s/prometheus.yaml
+kubectl apply -f k8s/keda-scaledobject-prometheus.yaml
+```
 
-    kubectl get pods -n capstone-deception
-    kubectl get deploy -n capstone-deception
-    kubectl get scaledobject -n capstone-deception
-    kubectl get hpa -n capstone-deception
-    kubectl describe scaledobject deception-engine-prometheus-scaler -n capstone-deception
-    kubectl describe hpa -n capstone-deception
+## Validation
 
-## Review Note
+```powershell
+kubectl get pods,deployments,services -n capstone-deception
+kubectl get scaledobject,hpa -n capstone-deception
+kubectl describe scaledobject deception-engine-prometheus-scaler -n capstone-deception
+kubectl describe hpa keda-hpa-deception-engine-prometheus-scaler -n capstone-deception
 
-These manifests define the physical autoscaling path. A Kubernetes cluster with KEDA installed and Prometheus reachable as http://prometheus:9090 is required to execute physical pod autoscaling.
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/capstone-deception/s0-prometheus?labelSelector=scaledobject.keda.sh%2Fname%3Ddeception-engine-prometheus-scaler"
+```
 
-Docker Compose validates the scaler decision logic; Kubernetes/KEDA performs real pod replica changes.
+Acceptance requires all application pods to be ready, Prometheus to report the
+metrics bridge as `up=1`, the ScaledObject to be `Ready=True`, the external
+metric to be readable, and a unique high-risk event to change physical pods
+from `1` to `3`. Returning the scaler to one replica must keep three physical
+pods during the 120-second stabilization window and then reduce them to one.
+
+## Validated Local Result
+
+On 2026-08-20, Docker Desktop Kubernetes v1.34.3 with KEDA v2.19.0 passed the
+complete physical test:
+
+```text
+automatic baseline: 1 pod
+unique high-risk event: logical target 1 -> 3
+HPA/deployment: 1 -> 3 ready pods
+stable target: 3 pods remained stable
+rollback target: 3 -> 1
+stabilization: held 3 pods for 120 seconds
+physical scale-down: 3 -> 1 ready pod
+```
+
+Safe mode held physical replicas despite a high-risk event, a manual target of
+four converged to four pods, a maximum budget of three clamped the target, and
+a scaling-agent restart restored the persisted control and replica state.

@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-bridge
+  namespace: capstone-deception
+  labels:
+    app: metrics-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics-bridge
+  template:
+    metadata:
+      labels:
+        app: metrics-bridge
+    spec:
+      containers:
+        - name: metrics-bridge
+          image: capstone-main-metrics-bridge:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 9100
+          env:
+            - name: SCALING_METRICS_URL
+              value: http://scaling-agent:8080/metrics
+            - name: SCALING_RAW_URL
+              value: http://scaling-agent:8080/metrics/raw
+            - name: SCALING_EVENTS_URL
+              value: http://scaling-agent:8080/scale/events
+            - name: PGPROXY_METRICS_URL
+              value: http://127.0.0.1:1/metrics
+            - name: MYSQLPROXY_METRICS_URL
+              value: http://127.0.0.1:1/metrics
+            - name: REDIS_HOST
+              value: redis-mitre
+            - name: REDIS_PORT
+              value: "6379"
+            - name: SCRAPE_TIMEOUT
+              value: "0.5"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9100
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-bridge
+  namespace: capstone-deception
+spec:
+  selector:
+    app: metrics-bridge
+  ports:
+    - name: http
+      port: 9100
+      targetPort: 9100

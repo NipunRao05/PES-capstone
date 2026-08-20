@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import redis
 import requests
@@ -366,7 +366,7 @@ if __name__ == "__main__":
     log.info("scraping: pgproxy=%s mysqlproxy=%s scaling=%s",
              PGPROXY_URL, MYSQLPROXY_URL, SCALING_URL)
 
-    server = HTTPServer(("0.0.0.0", HTTP_PORT), MetricsHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), MetricsHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

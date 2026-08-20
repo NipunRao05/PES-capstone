@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redpanda
+  namespace: capstone-deception
+  labels:
+    app: redpanda
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redpanda
+  template:
+    metadata:
+      labels:
+        app: redpanda
+    spec:
+      containers:
+        - name: redpanda
+          image: redpandadata/redpanda:v24.1.9
+          imagePullPolicy: Never
+          args:
+            - redpanda
+            - start
+            - --overprovisioned
+            - --smp=1
+            - --memory=384M
+            - --reserve-memory=0M
+            - --node-id=0
+            - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+            - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+            - --rpc-addr=0.0.0.0:33145
+            - --advertise-rpc-addr=redpanda:33145
+          ports:
+            - name: kafka
+              containerPort: 9092
+            - name: admin
+              containerPort: 9644
+          resources:
+            requests:
+              cpu: 100m
+              memory: 448Mi
+            limits:
+              cpu: 750m
+              memory: 768Mi
+          readinessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: capstone-deception
+spec:
+  selector:
+    app: redpanda
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: 9092
+    - name: admin
+      port: 9644
+      targetPort: 9644
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redpanda-init
+  namespace: capstone-deception
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app: redpanda-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: redpanda-init
+          image: redpandadata/redpanda:v24.1.9
+          imagePullPolicy: Never
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until rpk cluster info --brokers redpanda:9092 >/dev/null 2>&1; do sleep 2; done
+              rpk topic create mitre-events --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+              rpk topic create session-profiles --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+              rpk topic create dead-letter-events --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+              rpk topic list --brokers redpanda:9092

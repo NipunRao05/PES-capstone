@@ -17,19 +17,31 @@ spec:
     spec:
       containers:
         - name: deception-engine
-          image: capstone-deception-engine:latest
-          imagePullPolicy: IfNotPresent
+          image: capstone-main-deception-engine:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 8001
+          env:
+            - name: REDIS_HOST
+              value: redis-deception
+            - name: REDIS_PORT
+              value: "6379"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /readyz
+              port: 8001
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
               port: 8001
             initialDelaySeconds: 10
             periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8001
-            initialDelaySeconds: 15
-            periodSeconds: 20

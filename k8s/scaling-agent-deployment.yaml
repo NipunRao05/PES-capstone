@@ -17,8 +17,8 @@ spec:
     spec:
       containers:
         - name: scaling-agent
-          image: capstone-scaling-agent:latest
-          imagePullPolicy: IfNotPresent
+          image: capstone-main-scaling-agent:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 8080
           env:
@@ -27,6 +27,16 @@ spec:
             - name: PROMETHEUS_URL
               value: http://prometheus:9090
             - name: METRIC_SCALING_ENABLED
+              value: "false"
+            - name: CONSUMER_GROUP
+              value: scaling-agent-k8s
+            - name: CONSUMER_START_OFFSET
+              value: latest
+            - name: STATE_REDIS_ADDR
+              value: redis-mitre:6379
+            - name: STATE_REDIS_KEY
+              value: capstone:scaling-agent:k8s:state:v1
+            - name: STATE_PERSISTENCE_REQUIRED
               value: "true"
             - name: METRIC_POLL_INTERVAL
               value: 15s
@@ -36,7 +46,20 @@ spec:
               value: "0.2"
             - name: METRIC_BACKEND_UNHEALTHY_PRESSURE
               value: "0.7"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
           readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
             httpGet:
               path: /healthz
               port: 8080

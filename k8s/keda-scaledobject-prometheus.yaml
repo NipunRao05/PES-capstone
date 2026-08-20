@@ -7,7 +7,7 @@ spec:
   scaleTargetRef:
     name: deception-engine
 
-  pollingInterval: 15
+  pollingInterval: 5
   cooldownPeriod: 120
   minReplicaCount: 1
   maxReplicaCount: 10
@@ -16,7 +16,7 @@ spec:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleUp:
-          stabilizationWindowSeconds: 30
+          stabilizationWindowSeconds: 0
           policies:
             - type: Pods
               value: 2
@@ -24,15 +24,16 @@ spec:
         scaleDown:
           stabilizationWindowSeconds: 120
           policies:
-            - type: Pods
-              value: 1
-              periodSeconds: 120
+            - type: Percent
+              value: 100
+              periodSeconds: 60
 
   triggers:
     - type: prometheus
+      metricType: AverageValue
       metadata:
-        serverAddress: http://prometheus:9090
-        metricName: capstone_scaling_scale_pressure
-        query: capstone_scaling_scale_pressure
-        threshold: "0.6"
-        activationThreshold: "0.3"
+        serverAddress: http://prometheus.capstone-deception.svc.cluster.local:9090
+        metricName: capstone_scaling_current_replicas
+        query: capstone_scaling_current_replicas
+        threshold: "1"
+        activationThreshold: "0"
