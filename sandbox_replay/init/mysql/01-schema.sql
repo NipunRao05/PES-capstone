@@ -31,6 +31,7 @@ INSERT INTO api_keys_backup VALUES
     (1, 'synthetic-service', 'FAKE-HONEYTOKEN-NOT-VALID', 'synthetic replay data');
 
 REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'replay_user'@'%';
-GRANT SELECT ON sandboxdb.* TO 'replay_user'@'%';
+GRANT SELECT ON sandboxdb.customers TO 'replay_user'@'%';
+GRANT SELECT ON sandboxdb.orders TO 'replay_user'@'%';
+GRANT SELECT ON sandboxdb.api_keys_backup TO 'replay_user'@'%';
 FLUSH PRIVILEGES;
-

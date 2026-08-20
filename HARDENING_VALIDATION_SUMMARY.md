@@ -15,6 +15,7 @@
 | 9 | AI Agent v1 incident briefing | PASS |
 | 10 | Attacker evidence store | PASS |
 | 11 | Isolated sandbox replay engine | PASS |
+| 12 | Hardening recommendation and verification engine | PASS |
 
 ## Key Hardening Completed
 
@@ -305,3 +306,76 @@ During integration testing, Redpanda records produced by the local `rpk` client
 used Snappy compression. Explicit `python-snappy` dependencies were added to the
 evidence-store, session-module, and MITRE-agent Python consumers so compressed
 records are consumed consistently instead of raising `UnsupportedCodecError`.
+
+## Hardening Recommendation Engine Validation (2026-08-20)
+
+| Check | Result |
+|---|---|
+| Deterministic recommendation generation | PASS |
+| Required recommendation fields | PASS |
+| Sensitive-table exposure detection | PASS |
+| Metadata enumeration recommendation | PASS |
+| Timeout-control recommendation | PASS |
+| Destructive-policy recommendation | PASS |
+| Sandbox-only identifier validation | PASS |
+| PostgreSQL replay/admin credential separation | PASS |
+| Caller-supplied hardening SQL rejected | PASS - HTTP 422 |
+| PostgreSQL allowlisted fix application | PASS |
+| MySQL allowlisted fix application | PASS |
+| Same captured query replayed after fix | PASS |
+| PostgreSQL before/after verification | PASS |
+| MySQL before/after verification | PASS |
+| Unrelated synthetic-table access preserved | PASS |
+| Empty recommendation result handling | PASS - `no_recommendations` |
+| Redis report persistence across worker restart | PASS |
+| AI JSON brief includes before/after result | PASS |
+| AI Markdown brief includes before/after result | PASS |
+| Replay and hardening unit tests | PASS - 15 tests |
+| AI Markdown hardening test | PASS - 1 test |
+
+### Verified PostgreSQL Hardening Loop
+
+Captured PostgreSQL session `b8a1796d-5ea7-4eaa-b467-38a4f197ca80` could read
+the synthetic `api_keys_backup` table before hardening. Deterministic report
+`07902b2b-456a-422d-83b4-b94187f0e275` identified the exposure and recommended
+revoking direct `SELECT` access from the sandbox replay role.
+
+The allowlisted fix was applied only to the disposable PostgreSQL sandbox. The
+same captured session was replayed again and changed from:
+
+```text
+before: executed_count=1, failed_count=0
+after:  executed_count=0, failed_count=1
+status: verified
+```
+
+### Verified MySQL Hardening Loop
+
+Synthetic captured-evidence session `phase4-mysql-hardening-1787213356` queried
+the synthetic `api_keys_backup` table through the MySQL sandbox. Hardening
+report `daba947a-27fc-46a2-a6cf-6e7f03efa09e` generated the same least-privilege
+recommendation and applied a table-specific `SELECT` revocation.
+
+The same query changed from one successful execution to one access-denied
+failure. The report recorded `status=verified`, `applied_fix_count=1`, and
+`verified_count=1`. The report survived a replay-worker restart and remained
+available through `/hardening/latest`.
+
+Direct role checks confirmed that the hardened PostgreSQL and MySQL replay
+roles were denied access to `api_keys_backup` while `SELECT` access to the
+unrelated synthetic `customers` table continued to work. The automated fix is
+therefore object-specific rather than a broad role shutdown.
+
+### Hardening Safety and AI Integration
+
+The hardening API accepts only empty, extra-forbidden request objects; callers
+cannot submit SQL or arbitrary remediation actions. Automated mutation is
+limited to the built-in `revoke_select` action, validated identifiers, the
+synthetic `sandboxdb` database, and the PostgreSQL `public` sandbox schema.
+Administrative credentials have no route to any protected database, and both
+sandbox databases remain unpublished on the host.
+
+The deterministic AI JSON evidence block and Markdown incident brief include
+the latest hardening report ID, status, session, recommendation count, before
+and after replay counts, and verified-control count. The AI agent explains this
+evidence but does not generate or apply the database fix.

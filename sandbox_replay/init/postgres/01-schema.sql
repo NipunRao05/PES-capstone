@@ -30,7 +30,7 @@ INSERT INTO orders VALUES
 INSERT INTO api_keys_backup VALUES
     (1, 'synthetic-service', 'FAKE-HONEYTOKEN-NOT-VALID', 'synthetic replay data');
 
-\getenv replay_password POSTGRES_PASSWORD
+\getenv replay_password SANDBOX_REPLAY_PASSWORD
 CREATE ROLE replay_user LOGIN PASSWORD :'replay_password';
 REVOKE ALL ON DATABASE sandboxdb FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
@@ -40,4 +40,3 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO replay_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO replay_user;
 ALTER ROLE replay_user SET default_transaction_read_only = on;
 ALTER ROLE replay_user SET statement_timeout = '750ms';
-

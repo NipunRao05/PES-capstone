@@ -12,6 +12,7 @@ SCALING_AGENT_URL = os.getenv("SCALING_AGENT_URL", "http://scaling-agent:8080")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 METRICS_BRIDGE_URL = os.getenv("METRICS_BRIDGE_URL", "http://metrics-bridge:9100")
 EVIDENCE_STORE_URL = os.getenv("EVIDENCE_STORE_URL", "http://evidence-store:8011")
+SANDBOX_REPLAY_URL = os.getenv("SANDBOX_REPLAY_URL", "http://sandbox-replay-engine:8012")
 POLL_TIMEOUT_SECONDS = float(os.getenv("POLL_TIMEOUT_SECONDS", "2"))
 
 
@@ -25,6 +26,7 @@ class AgentStatus(BaseModel):
     prometheus_url: str
     metrics_bridge_url: str
     evidence_store_url: str
+    sandbox_replay_url: str
 
 
 def now_iso() -> str:
@@ -207,6 +209,7 @@ def build_recommendations(risk_level: str, pressure: float, current_replicas: fl
 def build_brief() -> Dict[str, Any]:
     scaling_metrics = get_json(f"{SCALING_AGENT_URL}/metrics", {})
     scaling_events = get_json(f"{SCALING_AGENT_URL}/scale/events", {"events": []})
+    hardening_report = get_json(f"{SANDBOX_REPLAY_URL}/hardening/latest", {"available": False})
 
     pressure_query = prometheus_query("capstone_scaling_scale_pressure")
     replicas_query = prometheus_query("capstone_scaling_current_replicas")
@@ -234,6 +237,11 @@ def build_brief() -> Dict[str, Any]:
         pressure,
         current_replicas,
     )
+    if hardening_report.get("available") is True:
+        hardening_status = hardening_report.get("status", "unknown")
+        recommendations.append(
+            f"Review sandbox hardening report {hardening_report.get('hardening_report_id', 'unknown')} with verification status {hardening_status}."
+        )
 
     report_id = str(uuid.uuid4())
     brief = {
@@ -265,6 +273,7 @@ def build_brief() -> Dict[str, Any]:
             "scaling_agent_metrics": scaling_metrics,
             "recent_scale_events": recent_events,
             "recent_event_risk": recent_event_risk,
+            "sandbox_hardening": hardening_report,
         },
         "recommended_response": recommendations,
     }
@@ -315,9 +324,34 @@ def brief_to_markdown(brief: Dict[str, Any]) -> str:
         f"- Average actor risk: `{interp['avg_actor_risk']}`",
         f"- Decision: `{interp['decision']}`",
         "",
-        "## Recommended Response",
+        "## Sandbox Hardening Verification",
         "",
     ]
+
+    hardening = brief.get("evidence", {}).get("sandbox_hardening", {})
+    if hardening.get("available") is not True:
+        lines.append("- No sandbox hardening report is available.")
+    else:
+        verification = hardening.get("verification") or {}
+        before = verification.get("before") or hardening.get("before") or {}
+        after = verification.get("after") or {}
+        lines.extend(
+            [
+                f"- Report ID: `{hardening.get('hardening_report_id', 'unknown')}`",
+                f"- Status: `{hardening.get('status', 'unknown')}`",
+                f"- Session ID: `{hardening.get('session_id', 'unknown')}`",
+                f"- Recommendations: `{hardening.get('recommendation_count', 0)}`",
+                f"- Before: executed `{before.get('executed_count', 0)}`, failed `{before.get('failed_count', 0)}`",
+                f"- After: executed `{after.get('executed_count', 0)}`, failed `{after.get('failed_count', 0)}`",
+                f"- Verified controls: `{verification.get('verified_count', 0)}`",
+            ]
+        )
+
+    lines.extend([
+        "",
+        "## Recommended Response",
+        "",
+    ])
 
     for item in brief["recommended_response"]:
         lines.append(f"- {item}")
@@ -346,6 +380,7 @@ def healthz() -> AgentStatus:
         prometheus_url=PROMETHEUS_URL,
         metrics_bridge_url=METRICS_BRIDGE_URL,
         evidence_store_url=EVIDENCE_STORE_URL,
+        sandbox_replay_url=SANDBOX_REPLAY_URL,
     )
 
 
@@ -354,9 +389,11 @@ def readyz() -> Dict[str, Any]:
     scaling = get_json(f"{SCALING_AGENT_URL}/metrics", {})
     prometheus = prometheus_query("up")
     evidence_store = get_json(f"{EVIDENCE_STORE_URL}/readyz", {})
+    sandbox_replay = get_json(f"{SANDBOX_REPLAY_URL}/readyz", {})
 
     evidence_ready = "error" not in evidence_store and evidence_store.get("ready") is True
-    ready = "error" not in scaling and "error" not in prometheus and evidence_ready
+    sandbox_ready = "error" not in sandbox_replay and sandbox_replay.get("ready") is True
+    ready = "error" not in scaling and "error" not in prometheus and evidence_ready and sandbox_ready
 
     return {
         "ready": ready,
@@ -365,6 +402,7 @@ def readyz() -> Dict[str, Any]:
             "scaling_agent": "ok" if "error" not in scaling else scaling,
             "prometheus": "ok" if "error" not in prometheus else prometheus,
             "evidence_store": "ok" if evidence_ready else evidence_store,
+            "sandbox_replay": "ok" if sandbox_ready else sandbox_replay,
         },
     }
 
