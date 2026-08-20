@@ -1,0 +1,62 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redpanda:
+    image: redpandadata/redpanda:v24.1.9
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports:
+      - "127.0.0.1:9092:9092"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mitre-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # All Kafka traffic goes to Redpanda inside Docker
+      MYSQL_KAFKA_BROKERS: "redpanda:9092"
+      PG_KAFKA_BROKERS: "redpanda:9092"
+      MITRE_KAFKA_BROKERS: "redpanda:9092"
+
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+
+      TOPIC_MYSQL_QUERIES: "mysql-query-events"
+      TOPIC_PG_QUERIES: "pg-query-events"
+      TOPIC_MYSQL_SESSION: "mysql-session-events"
+      TOPIC_PG_SESSION: "pg-session-events"
+      TOPIC_SESSION_PROFILES: "session-profiles"
+      TOPIC_MITRE_EVENTS: "mitre-events"
+      TOPIC_MITRE_SESSIONS: "mitre-sessions"
+
+      PYTHONUNBUFFERED: "1"
+
+    depends_on:
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+    restart: unless-stopped

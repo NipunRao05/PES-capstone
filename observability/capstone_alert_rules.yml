@@ -1,0 +1,144 @@
+groups:
+  - name: capstone-platform-health
+    interval: 15s
+    rules:
+      - alert: CapstonePrometheusTargetDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+          component: platform
+        annotations:
+          summary: "Prometheus target is down: {{ $labels.job }}"
+          description: "Prometheus target {{ $labels.job }} / {{ $labels.instance }} has been down for more than 30 seconds."
+
+      - alert: CapstoneMetricsBridgeScrapeFailed
+        expr: capstone_bridge_scrape_success != 1
+        for: 30s
+        labels:
+          severity: warning
+          component: metrics-bridge
+        annotations:
+          summary: "Metrics bridge scrape failed for {{ $labels.service }}"
+          description: "The metrics bridge failed to scrape {{ $labels.service }}. Dashboards may be incomplete."
+
+      - alert: CapstoneMySQLBackendDown
+        expr: capstone_mysqlproxy_backend_healthy == 0
+        for: 30s
+        labels:
+          severity: critical
+          component: mysqlproxy
+        annotations:
+          summary: "MySQL backend is unreachable through mysqlproxy"
+          description: "mysqlproxy reports backend_healthy=0 for more than 30 seconds."
+
+      - alert: CapstonePostgresBackendDown
+        expr: capstone_pgproxy_backend_healthy == 0
+        for: 30s
+        labels:
+          severity: critical
+          component: pgproxy
+        annotations:
+          summary: "PostgreSQL backend is unreachable through pgproxy"
+          description: "pgproxy reports backend_healthy=0 for more than 30 seconds."
+
+  - name: capstone-threat-detection
+    interval: 15s
+    rules:
+      - alert: CapstoneTrapTableTriggered
+        expr: increase(capstone_mitre_trap_triggers_total[5m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+          component: mitre-agent
+          tactic: collection
+          technique: T1213.006
+        annotations:
+          summary: "Trap table accessed"
+          description: "A trap-table access was observed in the last 5 minutes. This maps to MITRE T1213.006 / database collection behavior."
+
+      - alert: CapstoneKnownAttackerDetected
+        expr: capstone_mitre_known_attacker_count > 0
+        for: 30s
+        labels:
+          severity: warning
+          component: mitre-agent
+        annotations:
+          summary: "Known attacker profile detected"
+          description: "At least one actor has crossed the known-attacker threshold. Current count: {{ $value }}."
+
+      - alert: CapstoneHighActorRisk
+        expr: capstone_mitre_avg_actor_risk >= 25
+        for: 30s
+        labels:
+          severity: warning
+          component: mitre-agent
+        annotations:
+          summary: "Average actor risk is elevated"
+          description: "Average cumulative actor risk is {{ $value }}, which is above the configured threshold."
+
+      - alert: CapstoneTrapPhaseObserved
+        expr: capstone_attack_phase_observations{phase="trap_triggered"} > 0
+        for: 30s
+        labels:
+          severity: warning
+          component: mitre-agent
+        annotations:
+          summary: "Trap-triggered attack phase observed"
+          description: "Actor profile data contains trap_triggered phase observations. Current value: {{ $value }}."
+
+  - name: capstone-scaling
+    interval: 15s
+    rules:
+      - alert: CapstoneScaleUpDecision
+        expr: increase(capstone_scaling_scale_up_events[5m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+          component: scaling-agent
+        annotations:
+          summary: "Scaling agent issued a scale-up decision"
+          description: "The scaling agent produced at least one scale-up event in the last 5 minutes."
+
+      - alert: CapstoneHighReplicaTarget
+        expr: capstone_scaling_current_replicas >= 7
+        for: 1m
+        labels:
+          severity: warning
+          component: scaling-agent
+        annotations:
+          summary: "Honeypot replica target is high"
+          description: "Current honeypot replica target is {{ $value }} for more than 1 minute."
+
+      - alert: CapstoneHighScalePressure
+        expr: capstone_scaling_scale_pressure >= 0.75
+        for: 1m
+        labels:
+          severity: warning
+          component: scaling-agent
+        annotations:
+          summary: "Scaling pressure is high"
+          description: "Scaling pressure is {{ $value }} for more than 1 minute."
+
+  - name: capstone-proxy-traffic
+    interval: 15s
+    rules:
+      - alert: CapstoneMySQLConnectionSpike
+        expr: rate(capstone_mysqlproxy_total_connections[1m]) > 1
+        for: 1m
+        labels:
+          severity: warning
+          component: mysqlproxy
+        annotations:
+          summary: "MySQL proxy connection spike"
+          description: "mysqlproxy connection rate exceeded 1 connection/sec for more than 1 minute."
+
+      - alert: CapstonePostgresConnectionSpike
+        expr: rate(capstone_pgproxy_total_connections[1m]) > 1
+        for: 1m
+        labels:
+          severity: warning
+          component: pgproxy
+        annotations:
+          summary: "PostgreSQL proxy connection spike"
+          description: "pgproxy connection rate exceeded 1 connection/sec for more than 1 minute."

@@ -1,0 +1,33 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Your project-specific files
+__reference/
+.codex/
+AGENTS.md
+graphify-out/
+.env.*
+!.env.example
+phase*_before_*.json
+phase*_after_*.json
+phase*_before_*.txt
+phase*_after_*.txt
+
+# Final local secret ignores — Phase 8/9
+.env
+.env.*
+!.env.example

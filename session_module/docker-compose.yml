@@ -1,0 +1,108 @@
+services:
+
+  # ──────────────────────────────────────────────
+  # Your own Redpanda instance
+  # Hosts output topics: session-closed-events, session-profiles
+  # Uses hostname 'redpanda-session' to avoid DNS clash with
+  # teammates' Redpandas on shared networks
+  # ──────────────────────────────────────────────
+  redpanda:
+    image: redpandadata/redpanda:v24.1.9
+    hostname: redpanda-session
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda-session:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=redpanda-session:8082
+    ports:
+      - "127.0.0.1:9094:9092"   # host:9094 → your Redpanda
+      - "127.0.0.1:8084:8082"   # Pandaproxy REST
+      - "127.0.0.1:9646:9644"   # Admin API
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info --brokers localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 15s
+      retries: 20
+      start_period: 90s
+    volumes:
+      - redpandadata:/var/lib/redpanda/data
+
+  # Creates your output topics on startup
+  redpanda-init:
+    image: redpandadata/redpanda:v24.1.9
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until rpk --brokers redpanda-session:9092 cluster info >/dev/null 2>&1; do
+          echo "waiting for redpanda-session..."
+          sleep 2
+        done
+        rpk --brokers redpanda-session:9092 topic create session-closed-events --partitions 4 --replicas 1 || true
+        rpk --brokers redpanda-session:9092 topic create session-profiles       --partitions 4 --replicas 1 || true
+        echo "Session module topics created."
+
+  # ──────────────────────────────────────────────
+  # Session module — your service
+  # ──────────────────────────────────────────────
+  session-module:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"   # Prometheus metrics
+    environment:
+      # Your own Redpanda
+      OWN_REDPANDA_BOOTSTRAP: "redpanda-session:9092"
+      TOPIC_SESSION_CLOSED: "session-closed-events"
+      TOPIC_SESSION_PROFILES: "session-profiles"
+
+      # MySQL proxy Redpanda. Override when running separate Compose projects.
+      MYSQL_REDPANDA_BOOTSTRAP: "mysql-redpanda:9092"
+      TOPIC_MYSQL_INPUT: "mysql-query-events"
+      TOPIC_MYSQL_SESSION: "mysql-session-events"
+
+      # PostgreSQL proxy Redpanda. Override when running separate Compose projects.
+      PG_REDPANDA_BOOTSTRAP: "pg-redpanda:9092"
+      TOPIC_PG_INPUT: "pg-query-events"
+      TOPIC_PG_SESSION: "pg-session-events"
+
+      CONSUMER_GROUP: "session-module-group"
+
+      SESSION_TIMEOUT: "30"
+      MAX_ACTIVE_SESSIONS: "1000"
+      CLUSTER_INTERVAL_SECONDS: "20"
+      CLUSTER_BATCH_SIZE: "100"
+      DBSCAN_EPS: "1.2"
+      DBSCAN_MIN_SAMPLES: "3"
+      METRICS_PORT: "8000"
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - default
+      - mysqlproxy_default
+      - pgproxy_default
+
+volumes:
+  redpandadata:
+
+networks:
+  default:
+    driver: bridge
+
+  mysqlproxy_default:
+    external: true
+
+  pgproxy_default:
+    external: true

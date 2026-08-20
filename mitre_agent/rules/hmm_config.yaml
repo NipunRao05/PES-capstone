@@ -1,0 +1,138 @@
+version: "1.0"
+
+# ─── HMM Configuration ────────────────────────────────────────────────────────
+# Hidden Markov Model for attack sequence scoring.
+# States = the 6 MITRE attack phases.
+# Transition probabilities are initial priors — will be refined after
+# Week 11 red-team dataset is collected.
+
+states:
+  - recon
+  - enumeration
+  - privilege_discovery
+  - data_discovery
+  - exploitation
+  - exfiltration
+
+# Initial state probabilities (probability of starting in each state)
+initial_probabilities:
+  recon:               0.70
+  enumeration:         0.20
+  privilege_discovery: 0.05
+  data_discovery:      0.03
+  exploitation:        0.01
+  exfiltration:        0.01
+
+# Transition matrix: P(next_state | current_state)
+# Rows = current state, Columns = next state
+# Each row must sum to 1.0
+transitions:
+  recon:
+    recon:               0.40
+    enumeration:         0.45
+    privilege_discovery: 0.05
+    data_discovery:      0.05
+    exploitation:        0.03
+    exfiltration:        0.02
+
+  enumeration:
+    recon:               0.05
+    enumeration:         0.35
+    privilege_discovery: 0.25
+    data_discovery:      0.25
+    exploitation:        0.05
+    exfiltration:        0.05
+
+  privilege_discovery:
+    recon:               0.02
+    enumeration:         0.10
+    privilege_discovery: 0.30
+    data_discovery:      0.30
+    exploitation:        0.20
+    exfiltration:        0.08
+
+  data_discovery:
+    recon:               0.02
+    enumeration:         0.05
+    privilege_discovery: 0.08
+    data_discovery:      0.40
+    exploitation:        0.15
+    exfiltration:        0.30
+
+  exploitation:
+    recon:               0.01
+    enumeration:         0.02
+    privilege_discovery: 0.05
+    data_discovery:      0.10
+    exploitation:        0.50
+    exfiltration:        0.32
+
+  exfiltration:
+    recon:               0.01
+    enumeration:         0.01
+    privilege_discovery: 0.02
+    data_discovery:      0.06
+    exploitation:        0.10
+    exfiltration:        0.80
+
+# Emission probabilities: P(observed_phase | hidden_state)
+# Captures measurement noise — the observed phase tag may differ from
+# the true underlying state.
+emissions:
+  recon:
+    recon:               0.85
+    enumeration:         0.10
+    privilege_discovery: 0.02
+    data_discovery:      0.02
+    exploitation:        0.005
+    exfiltration:        0.005
+
+  enumeration:
+    recon:               0.10
+    enumeration:         0.75
+    privilege_discovery: 0.08
+    data_discovery:      0.05
+    exploitation:        0.01
+    exfiltration:        0.01
+
+  privilege_discovery:
+    recon:               0.05
+    enumeration:         0.10
+    privilege_discovery: 0.70
+    data_discovery:      0.10
+    exploitation:        0.04
+    exfiltration:        0.01
+
+  data_discovery:
+    recon:               0.02
+    enumeration:         0.05
+    privilege_discovery: 0.08
+    data_discovery:      0.75
+    exploitation:        0.05
+    exfiltration:        0.05
+
+  exploitation:
+    recon:               0.01
+    enumeration:         0.02
+    privilege_discovery: 0.05
+    data_discovery:      0.07
+    exploitation:        0.80
+    exfiltration:        0.05
+
+  exfiltration:
+    recon:               0.01
+    enumeration:         0.01
+    privilege_discovery: 0.02
+    data_discovery:      0.06
+    exploitation:        0.10
+    exfiltration:        0.80
+
+# Scoring config
+scoring:
+  # Minimum sequence length before HMM is applied
+  min_sequence_length: 3
+  # Below this length, sequence_confidence defaults to 0.5
+  default_confidence_short_sequence: 0.50
+  # Weight in combined_confidence = rule_confidence * w_rule + hmm * w_hmm
+  weight_rule: 0.60
+  weight_hmm:  0.40

@@ -1,0 +1,359 @@
+# version: "3.9"
+
+services:
+
+  redpanda:
+    image: redpandadata/redpanda:v24.1.9
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=redpanda:8082
+    ports:
+      - "127.0.0.1:9092:9092"
+      - "127.0.0.1:9644:9644"
+    expose:
+      - "9644"
+    volumes:
+      - redpandadata:/var/lib/redpanda/data
+
+  redpanda-init:
+    image: redpandadata/redpanda:v24.1.9
+    depends_on:
+      redpanda:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      echo "Waiting for Redpanda..."
+      until rpk cluster info --brokers redpanda:9092 >/dev/null 2>&1; do
+        echo "waiting for redpanda..."
+        sleep 2
+      done
+
+      echo "Creating topics..."
+
+      rpk topic create pg-query-events       --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create pg-query-dedup        --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create pg-session-events     --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create mysql-query-events    --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create mysql-query-dedup     --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create mysql-session-events  --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create session-closed-events --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create session-profiles      --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create mitre-events          --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create mitre-sessions        --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create agent-decisions       --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+      rpk topic create dead-letter-events    --partitions 4 --replicas 1 --brokers redpanda:9092 || true
+
+      echo "Topics after init:"
+      rpk topic list --brokers redpanda:9092 || true
+
+      echo "All 12 topics created."
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_USER: postgres
+      POSTGRES_DB: testdb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}"
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: proxyuser
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}"
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysqldata:/var/lib/mysql
+
+  redis-deception:
+    image: redis:7-alpine
+    volumes:
+      - redisdeception:/data
+
+  redis-mitre:
+    image: redis:7-alpine
+    volumes:
+      - redismitre:/data
+
+  pgproxy:
+    build:
+      context: ./pgproxy
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${PGPROXY_HOST_PORT:-5432}:5432"
+      - "127.0.0.1:9090:9090"
+    environment:
+      PROXY_LISTEN_ADDR: "0.0.0.0:5432"
+      PG_BACKEND_ADDR: "postgres:5432"
+      HTTP_ADDR: "0.0.0.0:9090"
+      LOG_LEVEL: "info"
+      SHUTDOWN_TIMEOUT: "30s"
+      BACKEND_PING_INTERVAL: "15s"
+      MAX_CONNECTIONS: "10000"
+      KAFKA_BROKERS: "redpanda:9092"
+      KAFKA_TOPIC: "pg-query-events"
+      KAFKA_DEDUP_TOPIC: "pg-query-dedup"
+      KAFKA_SESSION_TOPIC: "pg-session-events"
+      DECEPTION_ENGINE_URL: "http://deception-engine:8001/decide"
+    depends_on:
+      postgres:
+        condition: service_started
+      redpanda-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  mysqlproxy:
+    build:
+      context: ./mysqlproxy
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${MYSQLPROXY_HOST_PORT:-3306}:3306"
+      - "127.0.0.1:9091:9091"
+    environment:
+      PROXY_LISTEN_ADDR: "0.0.0.0:3306"
+      MYSQL_BACKEND_ADDR: "mysql:3306"
+      HTTP_ADDR: "0.0.0.0:9091"
+      LOG_LEVEL: "info"
+      SHUTDOWN_TIMEOUT: "30s"
+      BACKEND_PING_INTERVAL: "15s"
+      MAX_CONNECTIONS: "10000"
+      KAFKA_BROKERS: "redpanda:9092"
+      KAFKA_TOPIC: "mysql-query-events"
+      KAFKA_DEDUP_TOPIC: "mysql-query-dedup"
+      KAFKA_SESSION_TOPIC: "mysql-session-events"
+      DECEPTION_ENGINE_URL: "http://deception-engine:8001/decide"
+    depends_on:
+      mysql:
+        condition: service_started
+      redpanda-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  session-module:
+    build:
+      context: ./session_module
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      OWN_REDPANDA_BOOTSTRAP: "redpanda:9092"
+      MYSQL_REDPANDA_BOOTSTRAP: "redpanda:9092"
+      PG_REDPANDA_BOOTSTRAP: "redpanda:9092"
+      TOPIC_MYSQL_INPUT: "mysql-query-events"
+      TOPIC_PG_INPUT: "pg-query-events"
+      TOPIC_MYSQL_SESSION: "mysql-session-events"
+      TOPIC_PG_SESSION: "pg-session-events"
+      TOPIC_SESSION_CLOSED: "session-closed-events"
+      TOPIC_SESSION_PROFILES: "session-profiles"
+      CONSUMER_GROUP: "session-module-group"
+      CONSUMER_AUTO_OFFSET_RESET: "${CONSUMER_AUTO_OFFSET_RESET:-latest}"
+      METRICS_PORT: "8000"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  deception-engine:
+    build:
+      context: ./deception_engine
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      REDIS_HOST: "redis-deception"
+      REDIS_PORT: "6379"
+      KAFKA_BROKERS: "redpanda:9092"
+      PORT: "8001"
+      DECEPTION_HOSTNAME: "db-prod-02"
+      DECEPTION_DATADIR: "/var/lib/mysql"
+      DECEPTION_VERSION_COMMENT: "MySQL Community Server - GPL"
+      DECEPTION_VERSION: "8.0.34-log"
+      DECEPTION_PORT: "3306"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      redis-deception:
+        condition: service_started
+      redpanda-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  mitre-agent:
+    build:
+      context: ./mitre_agent
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8002:8002"
+    environment:
+      MYSQL_KAFKA_BROKERS: "redpanda:9092"
+      PG_KAFKA_BROKERS: "redpanda:9092"
+      MITRE_KAFKA_BROKERS: "redpanda:9092"
+      SESSION_KAFKA_BROKERS: "redpanda:9092"
+      REDIS_HOST: "redis-mitre"
+      REDIS_PORT: "6379"
+      TOPIC_MYSQL_QUERIES: "mysql-query-events"
+      TOPIC_PG_QUERIES: "pg-query-events"
+      TOPIC_MYSQL_SESSION: "mysql-session-events"
+      TOPIC_PG_SESSION: "pg-session-events"
+      TOPIC_SESSION_PROFILES: "session-profiles"
+      TOPIC_MITRE_EVENTS: "mitre-events"
+      TOPIC_MITRE_SESSIONS: "mitre-sessions"
+      PYTHONUNBUFFERED: "1"
+      CONSUMER_AUTO_OFFSET_RESET: "${CONSUMER_AUTO_OFFSET_RESET:-latest}"
+      HEALTH_ADDR: "0.0.0.0:8002"
+    depends_on:
+      redis-mitre:
+        condition: service_started
+      redpanda-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  scaling-agent:
+    build:
+      context: ./scaling_agent
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:9095:8080"
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      TOPIC_MITRE_EVENTS: "mitre-events"
+      TOPIC_SESSION_PROFILES: "session-profiles"
+      CONSUMER_GROUP: "scaling-agent"
+      HTTP_ADDR: "0.0.0.0:8080"
+      LOG_LEVEL: "info"
+      DIAL_TIMEOUT: "10s"
+      CONSUMER_START_OFFSET: "${CONSUMER_START_OFFSET:-latest}"
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  metrics-bridge:
+    build:
+      context: ./observability/metrics_bridge
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:9100:9100"
+    environment:
+      PGPROXY_METRICS_URL: "http://pgproxy:9090/metrics"
+      MYSQLPROXY_METRICS_URL: "http://mysqlproxy:9091/metrics"
+      DECEPTION_ENGINE_METRICS_URL: "http://deception-engine:8001/metrics"
+      MITRE_AGENT_METRICS_URL: "http://mitre-agent:8002/metrics"
+      SESSION_MODULE_METRICS_URL: "http://session-module:8000/metrics"
+      REDPANDA_METRICS_URL: "http://redpanda:9644/metrics"
+      SCALING_METRICS_URL: "http://scaling-agent:8080/metrics"
+      SCALING_RAW_URL: "http://scaling-agent:8080/metrics/raw"
+      SCALING_EVENTS_URL: "http://scaling-agent:8080/scale/events"
+      SCRAPE_TIMEOUT: "1.0"
+      REDIS_HOST: "redis-mitre"
+      REDIS_PORT: "6379"
+      PORT: "9100"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      pgproxy:
+        condition: service_started
+      mysqlproxy:
+        condition: service_started
+      deception-engine:
+        condition: service_started
+      mitre-agent:
+        condition: service_started
+      session-module:
+        condition: service_started
+      scaling-agent:
+        condition: service_started
+      redpanda:
+        condition: service_started
+      redis-mitre:
+        condition: service_started
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    ports:
+      - "127.0.0.1:9096:9090"
+    volumes:
+      - ./observability:/etc/prometheus/config:ro
+      - prometheusdata:/prometheus
+    command:
+      - --config.file=/etc/prometheus/config/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    depends_on:
+      - metrics-bridge
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.0
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./observability/loki:/etc/loki
+      - lokidata:/loki
+    command: -config.file=/etc/loki/loki-config.yaml
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./observability/promtail.yaml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      loki:
+        condition: service_started
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_SERVER_ROOT_URL: "http://localhost:3000"
+      GF_SERVER_DOMAIN: "localhost"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_SECURITY_COOKIE_SAMESITE: "disabled"
+      GF_SECURITY_CSRF_TRUSTED_ORIGINS: "localhost:3000,127.0.0.1:3000"
+      GF_SECURITY_CSRF_ALWAYS_CHECK: "false"
+      GF_PATHS_PROVISIONING: "/etc/grafana/provisioning"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/live_attack_feed.json"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  mysqldata:
+  redpandadata:
+  redisdeception:
+  redismitre:
+  prometheusdata:
+  lokidata:
+  grafanadata:

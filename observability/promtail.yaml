@@ -1,0 +1,71 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker-containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: status
+            values: ["running"]
+
+    relabel_configs:
+      # Use container name as the service label
+      - source_labels: [__meta_docker_container_name]
+        regex: /(.*)
+        target_label: service
+
+      # Use compose service name if available
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: compose_service
+
+      # Use compose project name
+      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
+        target_label: compose_project
+
+      # Keep container ID for correlation
+      - source_labels: [__meta_docker_container_id]
+        target_label: container_id
+
+      # Read Docker JSON log file for each discovered container.
+      - source_labels: [__meta_docker_container_id]
+        target_label: __path__
+        replacement: /var/lib/docker/containers/$1/$1-json.log
+
+    # Parse JSON logs from Go services (pgproxy, mysqlproxy, scaling-agent)
+    pipeline_stages:
+      - docker: {}
+
+      # Try to parse JSON log lines (Go services emit JSON via slog)
+      - json:
+          expressions:
+            level: level
+            msg: msg
+            session_id: session_id
+            technique_id: technique_id
+            risk_score: risk_score
+            replica_target: replica_target
+            reason: reason
+            client_ip: client_ip
+            username: username
+            database: database
+          source: output
+
+      # Promote level to a Loki label for fast filtering
+      - labels:
+          level:
+          technique_id:
+
+      # Drop debug logs from proxies in normal operation (too noisy)
+      - drop:
+          source: level
+          expression: "debug"
+          drop_counter_reason: debug_log_dropped

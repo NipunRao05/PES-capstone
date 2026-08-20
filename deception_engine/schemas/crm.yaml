@@ -1,0 +1,123 @@
+schema: crm
+description: "Customer Relationship Management — enterprise production replica"
+
+settings:
+  database_name: "crm_production"
+  charset: "utf8mb4"
+
+tables:
+
+  # ── Depth 1 ───────────────────────────────────────────────────────────────
+
+  contacts:
+    exposure_depth: 1
+    row_count: 23847
+    description: "Sales contacts"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: first_name,      type: first_name}
+      - {name: last_name,       type: last_name}
+      - {name: email,           type: email}
+      - {name: phone,           type: phone}
+      - {name: company,         type: company}
+      - {name: job_title,       type: job_title}
+      - {name: lead_source,     type: choice,    choices: [web, referral, event, cold_outreach, inbound]}
+      - {name: created_at,      type: past_datetime, days_back: 1000}
+
+  companies:
+    exposure_depth: 1
+    row_count: 4123
+    description: "Company / account records"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: name,            type: company}
+      - {name: industry,        type: choice,    choices: [Technology, Healthcare, Finance, Retail, Manufacturing, Education]}
+      - {name: employee_count,  type: int_range, min: 10, max: 100000}
+      - {name: annual_revenue,  type: int_range, min: 100000, max: 500000000}
+      - {name: website,         type: url}
+      - {name: country,         type: country}
+
+  deals:
+    exposure_depth: 1
+    row_count: 8934
+    description: "Sales pipeline deals"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: title,           type: sentence}
+      - {name: contact_id,      type: fk,        ref: contacts.id}
+      - {name: company_id,      type: fk,        ref: companies.id}
+      - {name: value_usd,       type: int_range, min: 5000, max: 2000000}
+      - {name: stage,           type: choice,    choices: [prospecting, qualification, proposal, negotiation, closed_won, closed_lost]}
+      - {name: probability,     type: int_range, min: 0, max: 100}
+      - {name: close_date,      type: future_date, days_ahead: 180}
+      - {name: owner_id,        type: pk_int}
+
+  # ── Depth 2 ───────────────────────────────────────────────────────────────
+
+  email_campaigns:
+    exposure_depth: 2
+    row_count: 312
+    description: "Marketing email campaigns"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: name,            type: sentence}
+      - {name: subject,         type: sentence}
+      - {name: sent_count,      type: int_range, min: 100, max: 50000}
+      - {name: open_rate,       type: float_range, min: 0.05, max: 0.45, decimals: 3}
+      - {name: click_rate,      type: float_range, min: 0.01, max: 0.15, decimals: 3}
+      - {name: sent_at,         type: past_datetime, days_back: 365}
+
+  integrations:
+    exposure_depth: 2
+    row_count: 14
+    description: "Third-party integrations config"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: provider,        type: choice,    choices: [salesforce, hubspot, mailchimp, zapier, slack, twilio]}
+      - {name: config_json,     type: json_blob}
+      - {name: is_active,       type: bool,       true_ratio: 0.85}
+      - {name: last_sync,       type: past_datetime, days_back: 7}
+
+  # ── Depth 3 (trap tables) ─────────────────────────────────────────────────
+
+  aws_credentials:
+    exposure_depth: 3
+    row_count: 6
+    is_trap: true
+    description: "TRAP — AWS IAM credentials for CRM infrastructure"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: environment,     type: choice,    choices: [production, staging, dev]}
+      - {name: access_key_id,   type: aws_access_key}
+      - {name: secret_key,      type: api_key}
+      - {name: region,          type: choice,    choices: [us-east-1, us-west-2, eu-west-1]}
+      - {name: permissions,     type: choice,    choices: [AdministratorAccess, PowerUserAccess, ReadOnlyAccess]}
+      - {name: created_at,      type: past_datetime, days_back: 400}
+
+  admin_tokens:
+    exposure_depth: 3
+    row_count: 9
+    is_trap: true
+    description: "TRAP — CRM admin access tokens"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: token,           type: api_key}
+      - {name: user_email,      type: email}
+      - {name: role,            type: choice,    choices: [super_admin, system_admin, data_admin]}
+      - {name: created_at,      type: past_datetime, days_back: 200}
+      - {name: last_used,       type: past_datetime, days_back: 14}
+      - {name: expires_at,      type: future_date, days_ahead: 90}
+
+  backup_passwords:
+    exposure_depth: 3
+    row_count: 22
+    is_trap: true
+    description: "TRAP — Emergency break-glass credentials"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: system,          type: choice,    choices: [prod-crm-db, admin-panel, vpn, ssh-bastion, k8s-cluster]}
+      - {name: username,        type: choice,    choices: [root, admin, emergency, breakglass]}
+      - {name: password,        type: password}
+      - {name: sealed,          type: bool,       true_ratio: 0.70}
+      - {name: last_rotated,    type: past_date, years_back: 1}
+      - {name: notes,           type: choice,    choices: ["use only in emergency", "break glass", "DO NOT USE — archive only"]}

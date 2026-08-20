@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scaling-agent
+  namespace: capstone-deception
+  labels:
+    app: scaling-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scaling-agent
+  template:
+    metadata:
+      labels:
+        app: scaling-agent
+    spec:
+      containers:
+        - name: scaling-agent
+          image: capstone-scaling-agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: KAFKA_BROKERS
+              value: redpanda:9092
+            - name: PROMETHEUS_URL
+              value: http://prometheus:9090
+            - name: METRIC_SCALING_ENABLED
+              value: "true"
+            - name: METRIC_POLL_INTERVAL
+              value: 15s
+            - name: METRIC_ACTIVE_CONNECTION_CAPACITY
+              value: "20"
+            - name: METRIC_CONNECTION_RATE_CAPACITY
+              value: "0.2"
+            - name: METRIC_BACKEND_UNHEALTHY_PRESSURE
+              value: "0.7"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10

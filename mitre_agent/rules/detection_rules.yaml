@@ -1,0 +1,341 @@
+version: "1.0"
+
+# ─── Global thresholds ────────────────────────────────────────────────────────
+globals:
+  risk_thresholds:
+    low:      2
+    medium:   5
+    high:     8
+    critical: 12
+
+  # deception_level mapping
+  # 1 = minimal (passthrough with banner hardening only)
+  # 2 = fake system info responses
+  # 3 = full fake schema + seeded data
+  # 4 = full fake schema + trap tables + mutations active
+  deception_levels:
+    low:      1
+    medium:   2
+    high:     3
+    critical: 4
+
+# ─── Detection Rules ──────────────────────────────────────────────────────────
+# Rules are evaluated in priority order (lower number = checked first).
+# First matching rule wins for response mode. All matching rules contribute
+# to risk_score cumulatively.
+
+rules:
+
+  # ── Trap table access — highest priority ─────────────────────────────────
+  - id: R001_trap_table_access
+    priority: 1
+    description: "Attacker accessed a honeytoken/trap table — critical signal"
+    match:
+      any:
+        - event.table in ["api_keys_backup", "salary_executives", "prod_credentials",
+                          "admin_tokens", "backup_passwords", "payment_tokens",
+                          "credit_cards_archive", "internal_api_keys", "aws_credentials"]
+    conditions: {}           # no conditions — trap access is always critical
+    scoring:
+      base: 10
+      modifiers: []
+    mitre_technique: "T1213.006"
+    actions:
+      - type: tag
+        value: trap_triggered
+      - type: escalate_risk
+        level: critical
+    response:
+      deception_level: 4
+      profile: high_value_target
+
+  # ── Automated recon probe ────────────────────────────────────────────────
+  - id: R002_automated_recon_probe
+    priority: 2
+    description: "Fast automated recon — low timing variance + system queries"
+    match:
+      any:
+        - event.phase == "recon"
+        - event.event_type == "recon_probe"
+    conditions:
+      all:
+        - session.query_count > 3
+        - session.timing_variance_ms < 200
+    scoring:
+      base: 2
+      modifiers:
+        - if: session.qps > 10
+          then_add: 2
+        - if: session.suspicion_score > 2
+          then_add: 1
+        - if: session.fingerprint_reuse > 3
+          then_add: 1
+    mitre_technique: "T1082"
+    actions:
+      - type: tag
+        value: automated_recon
+    response:
+      deception_level: 2
+      profile: fake_system_info
+
+  # ── Schema/database enumeration ───────────────────────────────────────────
+  - id: R003a_schema_enumeration
+    priority: 3
+    description: "Schema/database catalog enumeration"
+    match:
+      all:
+        - event.phase == "enumeration"
+      any:
+        # MySQL information_schema / native database enumeration
+        - event.fingerprint contains "information_schema.schemata"
+        - event.fingerprint contains "show databases"
+
+        # PostgreSQL native schema/database enumeration
+        - event.fingerprint contains "pg_catalog.pg_database"
+        - event.fingerprint contains "pg_database"
+        - event.fingerprint contains "pg_catalog.pg_namespace"
+        - event.fingerprint contains "pg_namespace"
+    conditions: {}
+    scoring:
+      base: 6
+      modifiers: []
+    mitre_technique: "T1213.006"
+    actions:
+      - type: tag
+        value: schema_enumeration
+    response:
+      deception_level: 2
+      profile: fake_schema
+
+  # ── Table enumeration ────────────────────────────────────────────────────
+  - id: R003b_table_enumeration
+    priority: 4
+    description: "Table catalog enumeration"
+    match:
+      all:
+        - event.phase == "enumeration"
+      any:
+        # MySQL information_schema / native table enumeration
+        - event.fingerprint contains "information_schema.tables"
+        - event.fingerprint contains "show tables"
+
+        # PostgreSQL native table enumeration
+        - event.fingerprint contains "pg_catalog.pg_tables"
+        - event.fingerprint contains "pg_tables"
+        - event.fingerprint contains "pg_catalog.pg_class"
+        - event.fingerprint contains "pg_class"
+    conditions: {}
+    scoring:
+      base: 7
+      modifiers: []
+    mitre_technique: "T1213.006"
+    actions:
+      - type: tag
+        value: table_enumeration
+    response:
+      deception_level: 2
+      profile: fake_schema
+
+  # ── Column enumeration ───────────────────────────────────────────────────
+  - id: R003c_column_enumeration
+    priority: 5
+    description: "Column catalog enumeration"
+    match:
+      all:
+        - event.phase == "enumeration"
+      any:
+        # MySQL information_schema / native column enumeration
+        - event.fingerprint contains "information_schema.columns"
+        - event.fingerprint contains "show columns"
+        - event.fingerprint contains "show fields"
+
+        # PostgreSQL native column enumeration
+        - event.fingerprint contains "pg_catalog.pg_attribute"
+        - event.fingerprint contains "pg_attribute"
+
+        # Constraint/index/metadata variants that usually reveal columns
+        - event.fingerprint contains "information_schema.key_column_usage"
+        - event.fingerprint contains "information_schema.statistics"
+        - event.fingerprint contains "information_schema.table_constraints"
+    conditions: {}
+    scoring:
+      base: 7
+      modifiers: []
+    mitre_technique: "T1213.006"
+    actions:
+      - type: tag
+        value: column_enumeration
+    response:
+      deception_level: 2
+      profile: fake_schema
+  # ── Privilege discovery ───────────────────────────────────────────────────
+  - id: R004_privilege_discovery
+    priority: 4
+    description: "Attacker inspecting user permissions and grants"
+    match:
+      any:
+        - event.phase == "privilege_discovery"
+    conditions: {}
+    scoring:
+      base: 4
+      modifiers:
+        - if: session.risk_score > 5
+          then_add: 2
+    mitre_technique: "T1087.002"
+    actions:
+      - type: tag
+        value: privilege_discovery
+    response:
+      deception_level: 3
+      profile: fake_limited_grants
+
+  # ── Data discovery ────────────────────────────────────────────────────────
+  - id: R005_data_discovery
+    priority: 5
+    description: "Attacker reading application table data"
+    match:
+      any:
+        - event.phase == "data_discovery"
+    conditions:
+      all:
+        - session.query_count > 2
+    scoring:
+      base: 3
+      modifiers:
+        - if: session.depth_score > 3
+          then_add: 1
+        - if: session.risk_score > 5
+          then_add: 2
+    mitre_technique: "T1213.006"
+    actions:
+      - type: tag
+        value: data_discovery
+    response:
+      deception_level: 3
+      profile: fake_table_data
+
+  # ── Exploitation attempt ──────────────────────────────────────────────────
+  - id: R006_exploitation_attempt
+    priority: 6
+    description: "Active exploitation — file reads, timing attacks, injection"
+    match:
+      any:
+        - event.phase == "exploitation"
+    conditions: {}
+    scoring:
+      base: 6
+      modifiers:
+        - if: session.suspicion_score > 3
+          then_add: 2
+        - if: session.risk_score > 8
+          then_add: 3
+    mitre_technique: "T1190"
+    actions:
+      - type: tag
+        value: exploitation_attempt
+      - type: escalate_risk
+        level: high
+    response:
+      deception_level: 4
+      profile: fake_exploit_response
+
+  # ── Data exfiltration ────────────────────────────────────────────────────
+  - id: R007_data_exfiltration
+    priority: 7
+    description: "Bulk data dump or file write-out detected"
+    match:
+      any:
+        - event.phase == "exfiltration"
+    conditions: {}
+    scoring:
+      base: 8
+      modifiers:
+        - if: session.query_count > 10
+          then_add: 3
+    mitre_technique: "T1048"
+    actions:
+      - type: tag
+        value: exfiltration
+      - type: escalate_risk
+        level: critical
+    response:
+      deception_level: 4
+      profile: fake_exfil_data
+
+  # ── Slow human attacker ───────────────────────────────────────────────────
+  - id: R008_human_attacker_deep
+    priority: 8
+    description: "Slow methodical exploration — likely human attacker"
+    match:
+      any:
+        - event.phase in ["data_discovery", "privilege_discovery", "enumeration"]
+    conditions:
+      all:
+        - session.timing_variance_ms > 2000
+        - session.depth_score > 3
+        - session.qps < 0.5
+    scoring:
+      base: 3
+      modifiers:
+        - if: session.depth_score > 5
+          then_add: 2
+    mitre_technique: "T1213.006"
+    actions:
+      - type: tag
+        value: human_attacker
+    response:
+      deception_level: 3
+      profile: fake_table_data
+
+  # ── Brute force credential stuffing ──────────────────────────────────────
+  - id: R009_brute_force
+    priority: 9
+    description: "Repeated authentication failures — credential stuffing"
+    match:
+      any:
+        - event.event_type == "auth_fail"
+    conditions:
+      all:
+        - session.failed_auth > 2
+    scoring:
+      base: 3
+      modifiers:
+        - if: session.failed_auth > 10
+          then_add: 3
+        - if: session.failed_auth > 50
+          then_add: 5
+    mitre_technique: "T1110.001"
+    actions:
+      - type: tag
+        value: brute_force
+    response:
+      deception_level: 1
+      profile: slow_auth_response
+
+  # ── High suspicion score ──────────────────────────────────────────────────
+  - id: R010_honeypot_detection_probe
+    priority: 10
+    description: "Attacker probing for honeypot inconsistencies"
+    match:
+      any:
+        - event.fingerprint contains "@@hostname"
+        - event.fingerprint contains "@@version_comment"
+        - event.fingerprint contains "sleep(?)"
+        - event.fingerprint contains "benchmark(?)"
+    conditions:
+      all:
+        - session.suspicion_score > 1
+    scoring:
+      base: 1
+      modifiers:
+        - if: session.suspicion_score > 3
+          then_add: 2
+        - if: session.suspicion_score > 5
+          then_add: 3
+    mitre_technique: "T1082"
+    actions:
+      - type: tag
+        value: honeypot_probe
+    response:
+      deception_level: 4
+      profile: fake_system_info

@@ -1,0 +1,123 @@
+schema: finance
+description: "Financial services database — enterprise production replica"
+
+settings:
+  database_name: "finance_production"
+  charset: "utf8mb4"
+
+tables:
+
+  # ── Depth 1 ───────────────────────────────────────────────────────────────
+
+  accounts:
+    exposure_depth: 1
+    row_count: 12847
+    description: "Customer bank accounts"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: account_number,  type: iban}
+      - {name: account_type,    type: choice,    choices: [checking, savings, investment, credit]}
+      - {name: customer_id,     type: fk,        ref: customers.id}
+      - {name: balance_usd,     type: float_range, min: 0.0, max: 250000.0, decimals: 2}
+      - {name: opened_at,       type: past_date, years_back: 15}
+      - {name: is_active,       type: bool,       true_ratio: 0.94}
+      - {name: routing_number,  type: routing}
+
+  customers:
+    exposure_depth: 1
+    row_count: 8432
+    description: "Customer records"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: full_name,       type: name}
+      - {name: email,           type: email}
+      - {name: phone,           type: phone}
+      - {name: ssn,             type: ssn}         # honeytoken
+      - {name: date_of_birth,   type: past_date,   years_back: 70}
+      - {name: address,         type: address}
+      - {name: credit_score,    type: int_range,   min: 300, max: 850}
+      - {name: kyc_verified,    type: bool,         true_ratio: 0.88}
+
+  transactions:
+    exposure_depth: 1
+    row_count: 94312
+    description: "Transaction ledger"
+    columns:
+      - {name: id,              type: uuid}
+      - {name: from_account,    type: fk,        ref: accounts.id}
+      - {name: to_account,      type: fk,        ref: accounts.id, nullable: true}
+      - {name: amount_usd,      type: float_range, min: 0.01, max: 50000.0, decimals: 2}
+      - {name: transaction_type, type: choice,   choices: [debit, credit, transfer, wire, ach]}
+      - {name: status,          type: choice,    choices: [completed, pending, failed, reversed]}
+      - {name: created_at,      type: past_datetime, days_back: 365}
+      - {name: description,     type: sentence}
+
+  # ── Depth 2 ───────────────────────────────────────────────────────────────
+
+  audit_log:
+    exposure_depth: 2
+    row_count: 45123
+    description: "System audit trail"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: event_type,      type: choice,    choices: [login, logout, transfer, view_account, password_change, admin_action]}
+      - {name: user_id,         type: fk,        ref: customers.id}
+      - {name: ip_address,      type: ipv4}
+      - {name: timestamp,       type: past_datetime, days_back: 180}
+      - {name: details,         type: sentence}
+      - {name: success,         type: bool,       true_ratio: 0.97}
+
+  compliance_flags:
+    exposure_depth: 2
+    row_count: 234
+    description: "AML / fraud flags"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: account_id,      type: fk,        ref: accounts.id}
+      - {name: flag_type,       type: choice,    choices: [suspicious_activity, large_transaction, foreign_transfer, velocity_breach]}
+      - {name: severity,        type: choice,    choices: [low, medium, high, critical]}
+      - {name: flagged_at,      type: past_datetime, days_back: 90}
+      - {name: resolved,        type: bool,       true_ratio: 0.60}
+      - {name: notes,           type: sentence}
+
+  # ── Depth 3 (trap tables) ─────────────────────────────────────────────────
+
+  payment_tokens:
+    exposure_depth: 3
+    row_count: 18
+    is_trap: true
+    description: "TRAP — Payment processor API tokens"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: processor,       type: choice,    choices: [stripe, adyen, braintree, paypal, square]}
+      - {name: token,           type: api_key}
+      - {name: secret_key,      type: api_key}
+      - {name: environment,     type: choice,    choices: [production, sandbox]}
+      - {name: created_at,      type: past_datetime, days_back: 730}
+
+  credit_cards_archive:
+    exposure_depth: 3
+    row_count: 342
+    is_trap: true
+    description: "TRAP — Archived card data (pre-tokenisation)"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: customer_id,     type: fk,        ref: customers.id}
+      - {name: card_number,     type: credit_card_number}
+      - {name: expiry,          type: credit_card_expire}
+      - {name: cvv,             type: int_range, min: 100, max: 999}
+      - {name: card_type,       type: choice,    choices: [visa, mastercard, amex, discover]}
+      - {name: archived_at,     type: past_date, years_back: 3}
+
+  internal_api_keys:
+    exposure_depth: 3
+    row_count: 11
+    is_trap: true
+    description: "TRAP — Internal service-to-service API keys"
+    columns:
+      - {name: id,              type: pk_int}
+      - {name: service_name,    type: choice,    choices: [reporting-svc, fraud-engine, kyc-api, notification-svc, audit-svc]}
+      - {name: api_key,         type: api_key}
+      - {name: permissions,     type: choice,    choices: [read-only, read-write, admin, full-access]}
+      - {name: created_by,      type: name}
+      - {name: expires_at,      type: future_date, days_ahead: 365}

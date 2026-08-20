@@ -1,0 +1,8 @@
+kafka-python==2.0.2
+redis==5.0.1
+pyyaml==6.0.1
+networkx==3.2.1
+numpy==1.26.4
+hmmlearn==0.3.2
+stix2==3.0.1
+pytest==7.4.4

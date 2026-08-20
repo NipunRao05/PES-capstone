@@ -1,0 +1,17 @@
+services:
+  ai-agent:
+    build:
+      context: ./ai_agent
+    container_name: capstone-ai-agent
+    environment:
+      SCALING_AGENT_URL: http://scaling-agent:8080
+      PROMETHEUS_URL: http://prometheus:9090
+      METRICS_BRIDGE_URL: http://metrics-bridge:9100
+      POLL_TIMEOUT_SECONDS: "2"
+    ports:
+      - "127.0.0.1:8010:8010"
+    depends_on:
+      - scaling-agent
+      - prometheus
+      - metrics-bridge
+    restart: unless-stopped

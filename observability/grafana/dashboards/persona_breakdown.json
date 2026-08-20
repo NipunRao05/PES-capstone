@@ -1,0 +1,115 @@
+{
+  "title": "Attacker Persona & Proxy Health",
+  "uid": "capstone-persona",
+  "tags": ["capstone", "persona", "health"],
+  "refresh": "15s",
+  "time": {"from": "now-6h", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "PG Backend",
+      "gridPos": {"x": 0, "y": 0, "w": 3, "h": 3},
+      "targets": [{"expr": "capstone_pgproxy_backend_healthy"}],
+      "fieldConfig": {"defaults": {"mappings": [
+        {"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}
+      ]}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "MySQL Backend",
+      "gridPos": {"x": 3, "y": 0, "w": 3, "h": 3},
+      "targets": [{"expr": "capstone_mysqlproxy_backend_healthy"}],
+      "fieldConfig": {"defaults": {"mappings": [
+        {"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}
+      ]}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "PG Total Connections",
+      "gridPos": {"x": 6, "y": 0, "w": 3, "h": 3},
+      "targets": [{"expr": "capstone_pgproxy_total_connections"}]
+    },
+    {
+      "id": 4, "type": "stat", "title": "MySQL Total Connections",
+      "gridPos": {"x": 9, "y": 0, "w": 3, "h": 3},
+      "targets": [{"expr": "capstone_mysqlproxy_total_connections"}]
+    },
+    {
+      "id": 5, "type": "stat", "title": "PG Rejected",
+      "gridPos": {"x": 12, "y": 0, "w": 3, "h": 3},
+      "targets": [{"expr": "capstone_pgproxy_rejected_connections"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color": "green","value": 0},{"color": "red","value": 1}]}}}
+    },
+    {
+      "id": 6, "type": "stat", "title": "MySQL Kill Requests",
+      "gridPos": {"x": 15, "y": 0, "w": 3, "h": 3},
+      "targets": [{"expr": "capstone_mysqlproxy_kill_requests"}]
+    },
+    {
+      "id": 7, "type": "stat", "title": "PG Dial Errors",
+      "gridPos": {"x": 18, "y": 0, "w": 3, "h": 3},
+      "targets": [{"expr": "capstone_pgproxy_backend_dial_errors"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color":"green","value":0},{"color":"red","value":1}]}}}
+    },
+    {
+      "id": 8, "type": "stat", "title": "MySQL Dial Errors",
+      "gridPos": {"x": 21, "y": 0, "w": 3, "h": 3},
+      "targets": [{"expr": "capstone_mysqlproxy_backend_dial_errors"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color":"green","value":0},{"color":"red","value":1}]}}}
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Connection Rate — Both Proxies",
+      "gridPos": {"x": 0, "y": 3, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "rate(capstone_pgproxy_total_connections[1m])", "legendFormat": "PostgreSQL/s"},
+        {"expr": "rate(capstone_mysqlproxy_total_connections[1m])", "legendFormat": "MySQL/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Active Sessions Over Time",
+      "gridPos": {"x": 12, "y": 3, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "capstone_pgproxy_active_connections", "legendFormat": "PG active"},
+        {"expr": "capstone_mysqlproxy_active_connections", "legendFormat": "MySQL active"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}}
+    },
+    {
+      "id": 11, "type": "gauge", "title": "Session Score Distribution",
+      "description": "Higher score = more attacker-like behaviour",
+      "gridPos": {"x": 0, "y": 11, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "capstone_session_smoothed_score", "legendFormat": "{{session_id}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1,
+        "color": {"mode": "thresholds"},
+        "thresholds": {"steps": [
+          {"color": "green",  "value": 0},
+          {"color": "yellow", "value": 0.3},
+          {"color": "orange", "value": 0.6},
+          {"color": "red",    "value": 0.8}
+        ]}}}
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Trap Table Encounters",
+      "description": "Each spike = attacker accessed a honeytoken table",
+      "gridPos": {"x": 12, "y": 11, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "capstone_scaling_trap_triggers", "legendFormat": "cumulative trap triggers"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short",
+        "custom": {"fillOpacity": 30, "lineWidth": 2},
+        "color": {"fixedColor": "red", "mode": "fixed"}}}
+    },
+    {
+      "id": 13, "type": "text", "title": "Scale Formula Reference",
+      "gridPos": {"x": 0, "y": 19, "w": 24, "h": 4},
+      "options": {
+        "mode": "markdown",
+        "content": "## Scaling Formula\n\n```\nscale_score = 0.4 × attacker_confidence\n            + 0.3 × session_depth\n            + 0.2 × query_entropy\n            + 0.1 × failed_auth_ratio\n```\n\n**EWMA α = 0.3** · prevents sudden spike-driven scaling &nbsp;&nbsp; | &nbsp;&nbsp; **Z-score threshold = 2.5** · bot-flood suppression &nbsp;&nbsp; | &nbsp;&nbsp; **Scale-up threshold = 0.6** · **Scale-down threshold = 0.3** (hysteresis = 2 min)"
+      }
+    }
+  ],
+  "schemaVersion": 36
+}

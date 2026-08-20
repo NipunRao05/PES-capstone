@@ -1,0 +1,125 @@
+{
+  "title": "Scaling Timeline",
+  "uid": "capstone-scaling",
+  "tags": ["capstone", "scaling", "keda"],
+  "refresh": "5s",
+  "time": {"from": "now-1h", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Current Replicas",
+      "gridPos": {"x": 0, "y": 0, "w": 3, "h": 4},
+      "targets": [{"expr": "capstone_scaling_current_replicas"}],
+      "options": {"colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color": "green","value": 1},{"color": "yellow","value": 4},{"color": "red","value": 8}]}}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Scale-Up Events",
+      "gridPos": {"x": 3, "y": 0, "w": 3, "h": 4},
+      "targets": [{"expr": "capstone_scaling_scale_up_events"}],
+      "fieldConfig": {"defaults": {"color": {"fixedColor": "red", "mode": "fixed"}}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Scale-Down Events",
+      "gridPos": {"x": 6, "y": 0, "w": 3, "h": 4},
+      "targets": [{"expr": "capstone_scaling_scale_down_events"}],
+      "fieldConfig": {"defaults": {"color": {"fixedColor": "blue", "mode": "fixed"}}}
+    },
+    {
+      "id": 4, "type": "stat", "title": "Noise Suppressed",
+      "gridPos": {"x": 9, "y": 0, "w": 3, "h": 4},
+      "targets": [{"expr": "capstone_scaling_noise_signals"}],
+      "fieldConfig": {"defaults": {"color": {"fixedColor": "gray", "mode": "fixed"}}}
+    },
+    {
+      "id": 5, "type": "stat", "title": "Global Mean Score",
+      "gridPos": {"x": 12, "y": 0, "w": 3, "h": 4},
+      "targets": [{"expr": "capstone_scaling_scorer_mean"}],
+      "fieldConfig": {"defaults": {"decimals": 3, "color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color":"green","value":0},{"color":"yellow","value":0.3},{"color":"red","value":0.6}]}}}
+    },
+    {
+      "id": 6, "type": "stat", "title": "Global Std Dev",
+      "gridPos": {"x": 15, "y": 0, "w": 3, "h": 4},
+      "targets": [{"expr": "capstone_scaling_scorer_std_dev"}],
+      "fieldConfig": {"defaults": {"decimals": 3}}
+    },
+    {
+      "id": 7, "type": "stat", "title": "Total Samples",
+      "gridPos": {"x": 18, "y": 0, "w": 3, "h": 4},
+      "targets": [{"expr": "scaling_agent_scorer_sample_count"}]
+    },
+    {
+      "id": 8, "type": "stat", "title": "Trap Triggers",
+      "gridPos": {"x": 21, "y": 0, "w": 3, "h": 4},
+      "targets": [{"expr": "capstone_scaling_trap_triggers"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color":"green","value":0},{"color":"red","value":1}]}}}
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Replica Count Timeline",
+      "description": "Intent-driven scaling — not CPU-based",
+      "gridPos": {"x": 0, "y": 4, "w": 24, "h": 8},
+      "targets": [
+        {"expr": "capstone_scaling_current_replicas", "legendFormat": "replica target"},
+        {"expr": "capstone_scaling_scorer_mean + 2*capstone_scaling_scorer_std_dev",
+         "legendFormat": "Z-score threshold (mean+2σ)"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "short", "min": 0, "max": 12,
+          "custom": {"lineWidth": 3, "fillOpacity": 15}},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "replica target"},
+           "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                          {"id": "custom.lineWidth", "value": 3}]},
+          {"matcher": {"id": "byName", "options": "Z-score threshold (mean+2σ)"},
+           "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash"}},
+                          {"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]}
+        ]
+      }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "EWMA Score — All Sessions",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "capstone_session_smoothed_score", "legendFormat": "smoothed ({{session_id}})"},
+        {"expr": "capstone_session_raw_score", "legendFormat": "raw ({{session_id}})"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1},
+        "overrides": [
+          {"matcher": {"id": "byNamePattern", "options": "raw.*"},
+           "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash"}},
+                          {"id": "custom.lineWidth", "value": 1}]}
+        ]
+      }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Signal Rate vs Noise Rate",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "rate(capstone_scaling_total_signals[1m])", "legendFormat": "all signals/s"},
+        {"expr": "rate(capstone_scaling_noise_signals[1m])", "legendFormat": "noise/s (bots)"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps"},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "noise/s (bots)"},
+           "properties": [{"id": "color", "value": {"fixedColor": "gray", "mode": "fixed"}}]}
+        ]
+      }
+    },
+    {
+      "id": 12, "type": "table", "title": "Active Session Scores",
+      "gridPos": {"x": 0, "y": 20, "w": 24, "h": 8},
+      "targets": [
+        {"expr": "capstone_session_smoothed_score", "legendFormat": "{{session_id}}", "instant": true},
+        {"expr": "capstone_session_raw_score", "legendFormat": "{{session_id}}", "instant": true},
+        {"expr": "capstone_session_replica_target", "legendFormat": "{{session_id}}", "instant": true},
+        {"expr": "capstone_session_z_score", "legendFormat": "{{session_id}}", "instant": true},
+        {"expr": "capstone_session_is_noise", "legendFormat": "{{session_id}}", "instant": true}
+      ],
+      "options": {"sortBy": [{"displayName": "Value #A", "desc": true}]},
+      "transformations": [{"id": "merge", "options": {}}]
+    }
+  ],
+  "schemaVersion": 36
+}

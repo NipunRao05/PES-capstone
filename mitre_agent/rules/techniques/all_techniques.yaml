@@ -1,0 +1,245 @@
+version: "1.0"
+
+# ─── Discovery (TA0007) ───────────────────────────────────────────────────────
+tactic: Discovery
+tactic_id: TA0007
+
+techniques:
+
+  - id: T1082
+    name: System Information Discovery
+    phases: [recon]
+    fingerprint_patterns:
+      - "select @@version"
+      - "select @@hostname"
+      - "select @@datadir"
+      - "select @@version_comment"
+      - "select version()"
+      - "show variables"
+      - "show status"
+    confidence: 0.95
+
+  - id: T1083
+    name: File and Directory Discovery
+    phases: [enumeration]
+    fingerprint_patterns:
+      - "show tables"
+      - "show databases"
+      - "show schemas"
+      - "information_schema.tables"
+      - "information_schema.schemata"
+      - "pg_tables"
+    confidence: 0.88
+
+  - id: T1087.002
+    name: Account Discovery — Domain Account
+    phases: [privilege_discovery]
+    fingerprint_patterns:
+      - "select * from mysql.user"
+      - "select * from pg_roles"
+      - "select * from pg_user"
+      - "select * from pg_shadow"
+      - "show grants"
+      - "select current_user"
+      - "select user()"
+    confidence: 0.92
+
+  - id: T1213
+    name: Data from Information Repositories
+    phases: [data_discovery, enumeration]
+    fingerprint_patterns:
+      - "information_schema.columns"
+      - "information_schema.statistics"
+      - "information_schema.key_column_usage"
+      - "information_schema.table_constraints"
+    confidence: 0.82
+
+  - id: T1049
+    name: System Network Connections Discovery
+    phases: [recon]
+    fingerprint_patterns:
+      - "show processlist"
+      - "show full processlist"
+      - "select * from information_schema.processlist"
+    confidence: 0.78
+
+# ─── Collection (TA0009) ──────────────────────────────────────────────────────
+---
+tactic: Collection
+tactic_id: TA0009
+
+techniques:
+
+  - id: T1213.006
+    name: "Data from Information Repositories: Databases"
+    phases: [enumeration, data_discovery]
+    fingerprint_patterns:
+      - "show databases"
+      - "show tables"
+      - "information_schema.tables"
+      - "information_schema.schemata"
+      - "information_schema.columns"
+      - "pg_tables"
+      - "pg_database"
+    confidence: 0.88
+
+  - id: T1213.002
+    name: Data from Cloud Storage
+    phases: [data_discovery]
+    fingerprint_patterns:
+      - "select * from users"
+      - "select * from orders"
+      - "select * from payments"
+      - "select * from customers"
+    paginated_access: true            # also fires when LIMIT/OFFSET loop detected
+    confidence: 0.75
+
+  - id: T1530
+    name: Data from Cloud Storage Object
+    phases: [data_discovery]
+    trap_tables:
+      - api_keys_backup
+      - admin_tokens
+      - aws_credentials
+      - internal_api_keys
+    confidence: 0.99                  # trap table access = very high confidence
+
+  - id: T1005
+    name: Data from Local System
+    phases: [exploitation]
+    fingerprint_patterns:
+      - "select load_file(?)"
+      - "select pg_read_file(?)"
+    confidence: 0.93
+
+# ─── Privilege Escalation (TA0004) ────────────────────────────────────────────
+---
+tactic: Privilege Escalation
+tactic_id: TA0004
+
+techniques:
+
+  - id: T1548
+    name: Abuse Elevation Control Mechanism
+    phases: [privilege_discovery, exploitation]
+    fingerprint_patterns:
+      - "grant all"
+      - "grant all privileges"
+      - "grant all on *.*"
+      - "create user"
+      - "alter user"
+      - "drop user"
+    confidence: 0.95
+
+  - id: T1134
+    name: Access Token Manipulation
+    phases: [privilege_discovery]
+    fingerprint_patterns:
+      - "select * from mysql.db"
+      - "select * from mysql.tables_priv"
+      - "information_schema.user_privileges"
+      - "information_schema.role_table_grants"
+    confidence: 0.80
+
+# ─── Exfiltration (TA0010) ────────────────────────────────────────────────────
+---
+tactic: Exfiltration
+tactic_id: TA0010
+
+techniques:
+
+  - id: T1048
+    name: Exfiltration Over Alternative Protocol
+    phases: [exfiltration]
+    fingerprint_patterns:
+      - "into outfile"
+      - "into dumpfile"
+      - "copy ? to"
+      - '\copy'
+    confidence: 0.97
+
+  - id: T1041
+    name: Exfiltration Over C2 Channel
+    phases: [exfiltration, data_discovery]
+    query_count_threshold: 5          # fires when 5+ paginated SELECTs detected
+    limit_offset_pattern: true
+    confidence: 0.72
+
+# ─── Impact (TA0040) ─────────────────────────────────────────────────────────
+---
+tactic: Impact
+tactic_id: TA0040
+
+techniques:
+
+  - id: T1485
+    name: Data Destruction
+    phases: [exploitation]
+    fingerprint_patterns:
+      - "drop database"
+      - "drop table"
+      - "delete from ? where ?"
+      - "truncate table"
+    confidence: 0.98
+
+  - id: T1486
+    name: Data Encrypted for Impact
+    phases: [exploitation]
+    fingerprint_patterns:
+      - "update ? set ? = aes_encrypt"
+      - "select aes_encrypt"
+    confidence: 0.85
+
+# ─── Credential Access (TA0006) ───────────────────────────────────────────────
+---
+tactic: Credential Access
+tactic_id: TA0006
+
+techniques:
+
+  - id: T1110.001
+    name: Brute Force — Password Guessing
+    phases: []                        # triggered by failed_auth count, not phase
+    auth_fail_threshold: 3
+    confidence: 0.90
+
+  - id: T1555
+    name: Credentials from Password Stores
+    phases: [data_discovery, privilege_discovery]
+    trap_tables:
+      - prod_credentials
+      - backup_passwords
+      - salary_executives
+    fingerprint_patterns:
+      - "select * from mysql.user"
+      - "select authentication_string from mysql.user"
+      - "select password from mysql.user"
+    confidence: 0.95
+
+# ─── Defense Evasion (TA0005) ─────────────────────────────────────────────────
+---
+tactic: Defense Evasion
+tactic_id: TA0005
+
+techniques:
+
+  - id: T1070.002
+    name: Indicator Removal — Clear Linux or Mac System Logs
+    phases: [exploitation]
+    fingerprint_patterns:
+      - "truncate mysql.general_log"
+      - "set global general_log = ?"
+      - "truncate mysql.slow_log"
+      - "delete from mysql.general_log"
+    confidence: 0.96
+
+  - id: T1190
+    name: Exploit Public-Facing Application
+    phases: [exploitation]
+    fingerprint_patterns:
+      - "sleep(?)"
+      - "benchmark(?)"
+      - "or ? = ?"
+      - "and ? = ?"
+      - "union select null"
+    confidence: 0.82

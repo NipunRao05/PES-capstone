@@ -1,0 +1,94 @@
+{
+  "title": "Live Attack Feed",
+  "uid": "capstone-live-feed",
+  "tags": ["capstone", "attacks"],
+  "refresh": "5s",
+  "time": {"from": "now-30m", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Active Connections (PG)",
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "capstone_pgproxy_active_connections", "legendFormat": "PG"}],
+      "options": {"colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Active Connections (MySQL)",
+      "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "capstone_mysqlproxy_active_connections", "legendFormat": "MySQL"}],
+      "options": {"colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Current Honeypot Replicas",
+      "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "capstone_scaling_current_replicas", "legendFormat": "Replicas"}],
+      "options": {"colorMode": "background", "graphMode": "none"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color": "green", "value": 1}, {"color": "yellow", "value": 4}, {"color": "red", "value": 7}]}}}
+    },
+    {
+      "id": 4, "type": "stat", "title": "Trap Triggers",
+      "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "capstone_scaling_trap_triggers", "legendFormat": "Traps"}],
+      "options": {"colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"},
+        "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "red", "value": 1}]}}}
+    },
+    {
+      "id": 5, "type": "stat", "title": "Unique Actors (Redis)",
+      "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "capstone_mitre_actor_count", "legendFormat": "Actors"}],
+      "options": {"colorMode": "background"}
+    },
+    {
+      "id": 6, "type": "stat", "title": "Backend Health",
+      "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "capstone_pgproxy_backend_healthy", "legendFormat": "PG"},
+        {"expr": "capstone_mysqlproxy_backend_healthy", "legendFormat": "MySQL"}
+      ],
+      "options": {"colorMode": "background"},
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Connection Rate — PG + MySQL",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "rate(capstone_pgproxy_total_connections[1m])", "legendFormat": "PG connections/s"},
+        {"expr": "rate(capstone_mysqlproxy_total_connections[1m])", "legendFormat": "MySQL connections/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Scale Score Over Time",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "capstone_session_smoothed_score", "legendFormat": "smoothed ({{session_id}})"},
+        {"expr": "capstone_session_raw_score", "legendFormat": "raw ({{session_id}})"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1},
+        "overrides": [{"matcher": {"id": "byNamePattern", "options": "smoothed.*"},
+          "properties": [{"id": "custom.lineWidth", "value": 2}]}]}
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Honeypot Replica Count",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 6},
+      "targets": [{"expr": "capstone_scaling_current_replicas", "legendFormat": "replicas"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "max": 10,
+        "custom": {"fillOpacity": 20, "lineWidth": 2}}}
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Noise Suppression (Bot Flood Detection)",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 6},
+      "targets": [
+        {"expr": "rate(capstone_scaling_total_signals[1m])", "legendFormat": "total signals/s"},
+        {"expr": "rate(capstone_scaling_noise_signals[1m])", "legendFormat": "noise suppressed/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    }
+  ],
+  "schemaVersion": 36
+}

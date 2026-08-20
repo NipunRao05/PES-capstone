@@ -1,0 +1,117 @@
+schema: hr
+description: "Human Resources database — enterprise production replica"
+
+# Global settings for this schema
+settings:
+  database_name: "hr_production"
+  charset: "utf8mb4"
+
+tables:
+
+  # ── Depth 1: immediately visible ──────────────────────────────────────────
+
+  employees:
+    exposure_depth: 1
+    row_count: 847
+    description: "Core employee records"
+    columns:
+      - {name: id,             type: pk_int}
+      - {name: full_name,      type: name}
+      - {name: email,          type: email,        domain: "@company.internal"}
+      - {name: department,     type: choice,        choices: [Engineering, Finance, HR, Sales, Legal, Operations]}
+      - {name: job_title,      type: job_title}
+      - {name: hire_date,      type: past_date,     years_back: 10}
+      - {name: salary,         type: int_range,     min: 45000, max: 180000}
+      - {name: manager_id,     type: fk,            ref: employees.id, nullable: true}
+      - {name: is_active,      type: bool,           true_ratio: 0.92}
+      - {name: password_hash,  type: bcrypt}         # honeytoken
+
+  departments:
+    exposure_depth: 1
+    row_count: 8
+    columns:
+      - {name: id,             type: pk_int}
+      - {name: name,           type: choice,        choices: [Engineering, Finance, HR, Sales, Legal, Operations, IT, Executive]}
+      - {name: head_count,     type: int_range,     min: 5, max: 200}
+      - {name: budget_usd,     type: int_range,     min: 100000, max: 5000000}
+      - {name: manager_id,     type: fk,            ref: employees.id}
+
+  sessions:
+    exposure_depth: 1
+    row_count: 2341
+    description: "Application login sessions"
+    columns:
+      - {name: id,             type: uuid}
+      - {name: employee_id,    type: fk,            ref: employees.id}
+      - {name: ip_address,     type: ipv4}
+      - {name: login_at,       type: past_datetime, days_back: 90}
+      - {name: logout_at,      type: past_datetime, days_back: 89}
+      - {name: user_agent,     type: user_agent}
+
+  # ── Depth 2: revealed after exploring depth-1 tables ─────────────────────
+
+  payroll:
+    exposure_depth: 2
+    row_count: 847
+    description: "Payroll banking details — sensitive"
+    columns:
+      - {name: employee_id,    type: fk,            ref: employees.id}
+      - {name: bank_name,      type: bank}
+      - {name: account_number, type: iban}
+      - {name: routing_number, type: routing}
+      - {name: last_pay_date,  type: past_date,     years_back: 1}
+      - {name: annual_bonus,   type: int_range,     min: 0, max: 50000}
+
+  api_keys:
+    exposure_depth: 2
+    row_count: 23
+    description: "Service API tokens"
+    columns:
+      - {name: id,             type: pk_int}
+      - {name: service,        type: choice,        choices: [slack, github, aws, datadog, stripe, pagerduty, jira]}
+      - {name: token,          type: api_key}        # honeytoken
+      - {name: created_by,     type: fk,            ref: employees.id}
+      - {name: created_at,     type: past_datetime, days_back: 365}
+      - {name: last_used,      type: past_datetime, days_back: 30}
+      - {name: is_active,      type: bool,           true_ratio: 0.85}
+
+  # ── Depth 3 (trap tables): only visible after deep exploration ────────────
+
+  api_keys_backup:
+    exposure_depth: 3
+    row_count: 15
+    is_trap: true
+    description: "TRAP — Legacy backup of API credentials"
+    columns:
+      - {name: id,             type: pk_int}
+      - {name: service,        type: choice,        choices: [aws, stripe, github, slack]}
+      - {name: token,          type: api_key}        # fake honeytoken
+      - {name: notes,          type: choice,        choices: ["old prod key", "backup", "do not delete", "legacy"]}
+      - {name: created_at,     type: past_datetime, days_back: 730}
+
+  salary_executives:
+    exposure_depth: 3
+    row_count: 12
+    is_trap: true
+    description: "TRAP — Executive compensation details"
+    columns:
+      - {name: id,             type: pk_int}
+      - {name: full_name,      type: name}
+      - {name: title,          type: choice,        choices: [CEO, CTO, CFO, COO, CISO, VP Engineering, VP Sales]}
+      - {name: base_salary,    type: int_range,     min: 250000, max: 2000000}
+      - {name: equity_shares,  type: int_range,     min: 10000, max: 500000}
+      - {name: ssn,            type: ssn}
+      - {name: home_address,   type: address}
+
+  prod_credentials:
+    exposure_depth: 3
+    row_count: 8
+    is_trap: true
+    description: "TRAP — Production system credentials"
+    columns:
+      - {name: id,             type: pk_int}
+      - {name: system,         type: choice,        choices: [prod-db-01, k8s-cluster, vpn-gateway, bastion-host]}
+      - {name: username,       type: choice,        choices: [admin, root, deploy, svc-account]}
+      - {name: password,       type: password}      # fake password honeytoken
+      - {name: last_rotated,   type: past_date,     years_back: 2}
+      - {name: notes,          type: choice,        choices: ["rotate quarterly", "shared with ops team", "legacy - do not delete"]}

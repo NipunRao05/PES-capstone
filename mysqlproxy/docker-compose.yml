@@ -1,0 +1,106 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}"
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: proxyuser
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}"
+    # ports: intentionally not exposed — only reachable via proxy on 3306
+    command: >
+      --port=3306
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-P", "3306", "-uroot", "-ppassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    volumes:
+      - mysqldata:/var/lib/mysql
+
+  redpanda:
+    image: redpandadata/redpanda:v24.1.9
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=redpanda:8082
+    ports:
+      - "127.0.0.1:9093:9092"   # Kafka API: localhost only
+      - "127.0.0.1:8083:8082"   # Pandaproxy REST: localhost only
+      - "127.0.0.1:9645:9644"   # Admin API: localhost only
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info --brokers localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 15s
+      retries: 20
+      start_period: 90s
+    volumes:
+      - redpandadata:/var/lib/redpanda/data
+    networks:
+      default:
+        aliases:
+          - mysql-redpanda
+
+  redpanda-init:
+    image: redpandadata/redpanda:v24.1.9
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until rpk --brokers redpanda:9092 cluster info >/dev/null 2>&1; do
+          echo "waiting for redpanda..."
+          sleep 2
+        done
+        rpk --brokers redpanda:9092 topic create mysql-query-events   --partitions 4 --replicas 1 || true
+        rpk --brokers redpanda:9092 topic create mysql-query-dedup    --partitions 4 --replicas 1 || true
+        rpk --brokers redpanda:9092 topic create mysql-session-events --partitions 4 --replicas 1 || true
+        echo "Topics created."
+
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3306:3306"   # proxy impersonates MySQL default port
+      - "127.0.0.1:9091:9091"   # metrics
+    environment:
+      PROXY_LISTEN_ADDR: "0.0.0.0:3306"
+      MYSQL_BACKEND_ADDR: "mysql:3306"
+      HTTP_ADDR: "0.0.0.0:9091"
+      LOG_LEVEL: "info"
+      SHUTDOWN_TIMEOUT: "30s"
+      BACKEND_PING_INTERVAL: "15s"
+      MAX_CONNECTIONS: "10000"
+      KAFKA_BROKERS: "redpanda:9092"
+      KAFKA_TOPIC: "mysql-query-events"
+      KAFKA_DEDUP_TOPIC: "mysql-query-dedup"
+      KAFKA_SESSION_TOPIC: "mysql-session-events"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  mysqldata:
+  redpandadata:

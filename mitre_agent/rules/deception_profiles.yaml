@@ -1,0 +1,95 @@
+version: "1.0"
+
+# ─── Deception profiles ───────────────────────────────────────────────────────
+# Each profile defines what the deception engine returns for a given response mode.
+# The proxy shaper reads the deception_level and profile from mitre-events and
+# calls the deception engine's /decide endpoint.
+
+profiles:
+
+  fake_system_info:
+    description: "Return convincing fake system variable responses"
+    override_responses:
+      "select @@version":           "8.0.34-log"
+      "select @@version_comment":   "MySQL Community Server - GPL"
+      "select @@hostname":          "db-prod-02"
+      "select @@datadir":           "/var/lib/mysql"
+      "select @@basedir":           "/usr"
+      "select @@port":              "3306"
+      "select @@global.max_connections": "1000"
+      "select version()":           "8.0.34-log"
+      "show variables like 'version'": [["version", "8.0.34-log"]]
+      "show variables like 'datadir'": [["datadir", "/var/lib/mysql"]]
+    latency_ms: 25
+
+  fake_schema:
+    description: "Return fake but realistic schema via progressive table exposure"
+    mode: progressive
+    initial_tables:
+      - users
+      - orders
+      - products
+      - logs
+      - sessions
+    depth_2_tables:
+      - payments
+      - api_keys
+      - audit_log
+    depth_3_tables:
+      - api_keys_backup      # trap table — triggers R001
+      - salary_executives    # trap table — triggers R001
+      - prod_credentials     # trap table — triggers R001
+    latency_ms: 40
+
+  fake_limited_grants:
+    description: "Return believable but restricted grant information"
+    override_responses:
+      "show grants":
+        - ["Grants for guest@%", "GRANT SELECT ON `production`.* TO `guest`@`%`"]
+      "show grants for current_user()":
+        - ["Grants for guest@%", "GRANT SELECT ON `production`.* TO `guest`@`%`"]
+      "select * from mysql.user":
+        rows: []                          # empty — permission denied simulation
+        error: "ERROR 1142 (42000): SELECT command denied to user 'guest'@'%' for table 'user'"
+    latency_ms: 35
+
+  fake_table_data:
+    description: "Return seeded Faker data for queried tables"
+    mode: seeded_faker
+    seed_strategy: session_id_plus_table  # MD5(session_id + ":" + table_name)
+    latency_ms_base: 45
+    latency_ms_jitter: 20
+
+  fake_exploit_response:
+    description: "Return plausible-but-fake exploit results to keep attacker engaged"
+    override_responses:
+      "select load_file(?)":
+        - "[mysqld]\ndatadir=/var/lib/mysql\nuser=mysql\nport=3306\nlog_error=/var/log/mysql/error.log"
+      "select pg_read_file(?)":
+        - "# PostgreSQL config\nlisten_addresses = 'localhost'\nport = 5432\n"
+    error_responses:
+      "select sleep(?)":     null          # execute normally — SLEEP must work for timing probes
+      "select benchmark(?)": null
+    latency_ms: 1500                       # simulate processing time for exploit
+
+  fake_exfil_data:
+    description: "Simulate successful but fake data exfiltration"
+    mode: seeded_faker
+    seed_strategy: session_id_plus_table
+    row_limit_override: 50                 # never return more than 50 rows regardless of LIMIT
+    latency_ms_base: 80
+    latency_ms_jitter: 30
+
+  high_value_target:
+    description: "Maximum engagement — trap table accessed, return convincing fake data"
+    mode: seeded_faker
+    seed_strategy: session_id_plus_table
+    trap_response: true
+    latency_ms_base: 60
+    latency_ms_jitter: 25
+    # The deception engine logs a CRITICAL alert when this profile activates
+
+  slow_auth_response:
+    description: "Slow down brute force by injecting authentication delays"
+    latency_ms: 2000
+    latency_ms_jitter: 500

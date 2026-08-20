@@ -1,0 +1,36 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  deception-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      PORT: "8001"
+      # Banner hardening — override to match your fake identity
+      DECEPTION_HOSTNAME:        "db-prod-02"
+      DECEPTION_DATADIR:         "/var/lib/mysql"
+      DECEPTION_VERSION_COMMENT: "MySQL Community Server - GPL"
+      DECEPTION_VERSION:         "8.0.34-log"
+      DECEPTION_PORT:            "3306"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/readyz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
