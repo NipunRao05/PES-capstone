@@ -16,6 +16,7 @@
 | 10 | Attacker evidence store | PASS |
 | 11 | Isolated sandbox replay engine | PASS |
 | 12 | Hardening recommendation and verification engine | PASS |
+| 13 | Redis-backed scaling-agent state persistence | PASS |
 
 ## Key Hardening Completed
 
@@ -379,3 +380,74 @@ The deterministic AI JSON evidence block and Markdown incident brief include
 the latest hardening report ID, status, session, recommendation count, before
 and after replay counts, and verified-control count. The AI agent explains this
 evidence but does not generate or apply the database fix.
+
+## Scaling-Agent Persistent State Validation (2026-08-20)
+
+| Check | Result |
+|---|---|
+| Versioned Redis state document | PASS - version 1 |
+| Redis state key has no TTL | PASS - TTL `-1` |
+| Baseline state creation | PASS |
+| High-risk trap event scale-up | PASS - replicas 1 to 3 |
+| Current replica target restored | PASS - 3 |
+| Scorer replica target restored | PASS - 3 |
+| Trap-trigger count restored | PASS - 1 |
+| Scale-up/down counters restored | PASS - 1 / 0 |
+| Recent high/low events restored | PASS |
+| Last scale-up timestamp restored | PASS |
+| Scale-down timer preserved exactly | PASS |
+| EWMA and rolling statistics state round trip | PASS |
+| Operator-control state round trip | PASS |
+| Processed-event-ID state round trip | PASS |
+| Persistence status exposed in JSON metrics | PASS |
+| Persistence status exposed in Prometheus metrics | PASS |
+| Invalid/inconsistent state fails closed | PASS |
+| Go test suite | PASS - 26 tests |
+| Go vet | PASS |
+
+### Restart Evidence
+
+Synthetic MITRE session `phase5-final-1787215256` generated a critical trap
+signal. The bounded scale-up moved the desired target from one to three replicas
+and produced:
+
+```text
+current_replicas=3
+scorer_replicas=3
+trap_triggers=1
+scale_up_events=1
+scale_down_events=0
+```
+
+Synthetic low-risk session `phase5-low-1787215275` then entered the scale-down
+window. Before restart, Redis stored:
+
+```text
+last_scale_up_at=2026-08-20T08:40:57.367568612Z
+below_scale_down_since=2026-08-20T08:41:11.584333046Z
+```
+
+After restarting only `scaling-agent`, both timestamps were restored exactly.
+The replica target remained three, both synthetic events remained in recent
+history, and the trap and scale counters were unchanged. Normal startup metric
+collection added new signal/event samples but did not reset the restored
+scale-down timer.
+
+As low pressure continued beyond the preserved window, the restored scorer
+subsequently scaled down from three to two and then from two to one. This
+follow-on behavior confirms that restart continuity preserved the hysteresis
+timeline rather than merely restoring the replica gauge.
+
+### Persistence Safety
+
+The state key `capstone:scaling-agent:state:v1` is stored in the existing private
+`redis-mitre` service without a TTL. State is saved after every processed signal,
+session cleanup, and graceful shutdown. Startup validates the version, replica
+bounds and consistency, counters, pressure, EWMA entries, event targets, and
+reserved control values before restoration.
+
+With `STATE_PERSISTENCE_REQUIRED=true`, unavailable Redis or invalid state causes
+startup to fail instead of silently returning to baseline. An intentionally
+incompatible pre-final synthetic test payload was rejected with
+`persisted replicas out of range`; only that synthetic state key was removed,
+then the final versioned-schema acceptance test was rerun successfully.

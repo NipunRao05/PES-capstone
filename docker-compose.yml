@@ -421,9 +421,16 @@ services:
       LOG_LEVEL: "info"
       DIAL_TIMEOUT: "10s"
       CONSUMER_START_OFFSET: "${CONSUMER_START_OFFSET:-latest}"
+      STATE_REDIS_ADDR: "redis-mitre:6379"
+      STATE_REDIS_DB: "0"
+      STATE_REDIS_KEY: "capstone:scaling-agent:state:v1"
+      STATE_REDIS_TIMEOUT: "1s"
+      STATE_PERSISTENCE_REQUIRED: "true"
     depends_on:
       redpanda-init:
         condition: service_completed_successfully
+      redis-mitre:
+        condition: service_started
     restart: unless-stopped
 
   metrics-bridge:

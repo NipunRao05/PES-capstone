@@ -75,6 +75,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	snap := s.sc.Snapshot()
 	mean, stdDev, count, replicas := s.sc.ScorerSnapshot()
+	persistence := s.sc.PersistenceStatus()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -87,21 +88,22 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"current_replicas":  snap.CurrentReplicas,
 		"scale_pressure":    snap.ScalePressure,
 		// EWMA / Z-score global statistics
-		"scorer_mean":     mean,
-		"scorer_std_dev":  stdDev,
-		"scorer_count":    count,
-		"scorer_replicas": replicas,
+		"scorer_mean":       mean,
+		"scorer_std_dev":    stdDev,
+		"scorer_count":      count,
+		"scorer_replicas":   replicas,
+		"state_persistence": persistence,
 		// Config (for dashboards)
 		"config": map[string]interface{}{
-			"ewma_alpha":           scorer.EWMAAlpha,
-			"z_score_threshold":    scorer.ZScoreThreshold,
-			"scale_up_threshold":   scorer.ScaleUpThreshold,
-			"scale_down_threshold": scorer.ScaleDownThreshold,
+			"ewma_alpha":                scorer.EWMAAlpha,
+			"z_score_threshold":         scorer.ZScoreThreshold,
+			"scale_up_threshold":        scorer.ScaleUpThreshold,
+			"scale_down_threshold":      scorer.ScaleDownThreshold,
 			"scale_down_window_seconds": int(scorer.ScaleDownWindow.Seconds()),
 			"scale_up_cooldown_seconds": int(scorer.ScaleUpCooldown.Seconds()),
-			"max_scale_up_step": scorer.MaxScaleUpStep,
-			"replica_min":          scorer.ReplicaMin,
-			"replica_max":          scorer.ReplicaMax,
+			"max_scale_up_step":         scorer.MaxScaleUpStep,
+			"replica_min":               scorer.ReplicaMin,
+			"replica_max":               scorer.ReplicaMax,
 			"weights": map[string]float64{
 				"attacker_confidence": scorer.WeightAttackerConfidence,
 				"session_depth":       scorer.WeightSessionDepth,
@@ -116,6 +118,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 	snap := s.sc.Snapshot()
 	mean, stdDev, count, _ := s.sc.ScorerSnapshot()
+	persistence := s.sc.PersistenceStatus()
+	persistenceEnabled := 0
+	persistenceRestored := 0
+	if persistence.Enabled {
+		persistenceEnabled = 1
+	}
+	if persistence.Restored {
+		persistenceRestored = 1
+	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 
@@ -159,6 +170,14 @@ func (s *Server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 		"# HELP scaling_agent_scorer_sample_count Total samples in rolling stats",
 		"# TYPE scaling_agent_scorer_sample_count counter",
 		fmt.Sprintf("scaling_agent_scorer_sample_count %d", count),
+
+		"# HELP scaling_agent_state_persistence_enabled Whether Redis state persistence is enabled",
+		"# TYPE scaling_agent_state_persistence_enabled gauge",
+		fmt.Sprintf("scaling_agent_state_persistence_enabled %d", persistenceEnabled),
+
+		"# HELP scaling_agent_state_restored Whether startup restored a prior Redis state",
+		"# TYPE scaling_agent_state_restored gauge",
+		fmt.Sprintf("scaling_agent_state_restored %d", persistenceRestored),
 	}
 
 	for _, line := range lines {

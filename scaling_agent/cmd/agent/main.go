@@ -2,6 +2,7 @@ package main
 
 import (
 "context"
+"errors"
 "log/slog"
 "os"
 "os/signal"
@@ -15,6 +16,7 @@ import (
 "github.com/scalingagent/internal/metrics"
 "github.com/scalingagent/internal/scaler"
 "github.com/scalingagent/internal/scorer"
+"github.com/scalingagent/internal/state"
 )
 
 func main() {
@@ -45,6 +47,63 @@ StartOffset:          consumer.ParseStartOffset(getEnv("CONSUMER_START_OFFSET", 
 }, logger)
 
 sc := scaler.New(logger)
+stateRequired := getBool("STATE_PERSISTENCE_REQUIRED", true)
+stateStore := state.NewRedisStore(
+getEnv("STATE_REDIS_ADDR", "redis-mitre:6379"),
+os.Getenv("STATE_REDIS_PASSWORD"),
+getInt("STATE_REDIS_DB", 0),
+getEnv("STATE_REDIS_KEY", "capstone:scaling-agent:state:v1"),
+getDuration("STATE_REDIS_TIMEOUT", time.Second),
+)
+defer stateStore.Close()
+stateAvailable := true
+if err := stateStore.Ping(); err != nil {
+stateAvailable = false
+logger.Error("scaling state Redis unavailable", "error", err, "required", stateRequired)
+if stateRequired {
+os.Exit(1)
+}
+}
+
+if stateAvailable {
+restored := false
+persisted, err := stateStore.Load()
+switch {
+case err == nil:
+if err := sc.RestoreState(persisted); err != nil {
+logger.Error("invalid persisted scaling state", "error", err)
+if stateRequired {
+os.Exit(1)
+}
+} else {
+restored = true
+snap := sc.Snapshot()
+logger.Info("restored scaling state",
+"state_key", stateStore.Key(),
+"current_replicas", snap.CurrentReplicas,
+"trap_triggers", snap.TrapTriggers,
+"scale_up_events", snap.ScaleUpEvents,
+"scale_down_events", snap.ScaleDownEvents,
+"recent_events", len(sc.RecentEvents(1000)),
+)
+}
+case errors.Is(err, state.ErrNotFound):
+logger.Info("no persisted scaling state found; starting from baseline", "state_key", stateStore.Key())
+default:
+logger.Error("failed to load persisted scaling state", "error", err)
+if stateRequired {
+os.Exit(1)
+}
+}
+
+sc.SetStateSaver(stateStore.Save, restored, stateStore.Key())
+if err := sc.SaveNow(); err != nil {
+logger.Error("failed to write initial scaling state", "error", err)
+if stateRequired {
+os.Exit(1)
+}
+}
+}
 metricsSrv := metrics.New(httpAddr, sc, logger)
 
 metricCollector := metriccollector.New(metriccollector.Config{
@@ -147,6 +206,18 @@ if err != nil {
 return fallback
 }
 return f
+}
+
+func getInt(key string, fallback int) int {
+v := strings.TrimSpace(os.Getenv(key))
+if v == "" {
+return fallback
+}
+n, err := strconv.Atoi(v)
+if err != nil {
+return fallback
+}
+return n
 }
 
 func splitBrokers(s string) []string {

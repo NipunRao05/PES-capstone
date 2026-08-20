@@ -14,6 +14,7 @@
 package scorer
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -118,6 +119,19 @@ type Scorer struct {
 	belowThresholdSince map[string]time.Time
 }
 
+// PersistentState is the complete decision state required to continue
+// cooldown, EWMA, anomaly, and scale-down timing behavior after a restart.
+type PersistentState struct {
+	EWMAState              map[string]float64   `json:"ewma_state"`
+	Count                  int64                `json:"count"`
+	Mean                   float64              `json:"mean"`
+	M2                     float64              `json:"m2"`
+	CurrentReplicas        int                  `json:"current_replicas"`
+	LastScaleUpAt          time.Time            `json:"last_scale_up_at"`
+	BelowScaleDownSince    time.Time            `json:"below_scale_down_since"`
+	BelowThresholdSince    map[string]time.Time `json:"below_threshold_since"`
+}
+
 // New creates a Scorer with sensible defaults.
 func New() *Scorer {
 	return &Scorer{
@@ -125,6 +139,68 @@ func New() *Scorer {
 		belowThresholdSince: make(map[string]time.Time),
 		currentReplicas:     ReplicaMin,
 	}
+}
+
+// ExportState returns a deep copy suitable for durable JSON persistence.
+func (s *Scorer) ExportState() PersistentState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ewma := make(map[string]float64, len(s.ewmaState))
+	for sessionID, value := range s.ewmaState {
+		ewma[sessionID] = value
+	}
+	below := make(map[string]time.Time, len(s.belowThresholdSince))
+	for sessionID, since := range s.belowThresholdSince {
+		below[sessionID] = since
+	}
+
+	return PersistentState{
+		EWMAState:           ewma,
+		Count:               s.count,
+		Mean:                s.mean,
+		M2:                  s.m2,
+		CurrentReplicas:     s.currentReplicas,
+		LastScaleUpAt:       s.lastScaleUpAt,
+		BelowScaleDownSince: s.belowScaleDownSince,
+		BelowThresholdSince: below,
+	}
+}
+
+// RestoreState validates and restores decision state without resetting timers.
+func (s *Scorer) RestoreState(state PersistentState) error {
+	if state.CurrentReplicas < ReplicaMin || state.CurrentReplicas > ReplicaMax {
+		return fmt.Errorf("scorer replicas out of range: %d", state.CurrentReplicas)
+	}
+	if state.Count < 0 || state.M2 < 0 || math.IsNaN(state.Mean) || math.IsInf(state.Mean, 0) || math.IsNaN(state.M2) || math.IsInf(state.M2, 0) {
+		return fmt.Errorf("invalid scorer rolling statistics")
+	}
+	ewma := make(map[string]float64, len(state.EWMAState))
+	for sessionID, value := range state.EWMAState {
+		if sessionID == "" || value < 0 || value > 1 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("invalid EWMA entry for session %q", sessionID)
+		}
+		ewma[sessionID] = value
+	}
+	below := make(map[string]time.Time, len(state.BelowThresholdSince))
+	for sessionID, since := range state.BelowThresholdSince {
+		if sessionID == "" {
+			return fmt.Errorf("invalid empty session in scale-down state")
+		}
+		below[sessionID] = since
+	}
+
+	s.mu.Lock()
+	s.ewmaState = ewma
+	s.count = state.Count
+	s.mean = state.Mean
+	s.m2 = state.M2
+	s.currentReplicas = state.CurrentReplicas
+	s.lastScaleUpAt = state.LastScaleUpAt
+	s.belowScaleDownSince = state.BelowScaleDownSince
+	s.belowThresholdSince = below
+	s.mu.Unlock()
+	return nil
 }
 
 // Score computes the scale_score for one session signal and returns a decision.
