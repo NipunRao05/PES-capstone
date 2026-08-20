@@ -28,6 +28,127 @@ services:
         condition: service_completed_successfully
       scaling-agent:
         condition: service_started
+    networks:
+      - default
+      - control-internal
+    restart: unless-stopped
+
+  sandbox-replay-engine:
+    build:
+      context: ./sandbox_replay
+    container_name: capstone-sandbox-replay-engine
+    environment:
+      EVIDENCE_STORE_URL: "http://evidence-store:8011"
+      REDIS_HOST: "redis-mitre"
+      REDIS_PORT: "6379"
+      SANDBOX_POSTGRES_HOST: "sandbox-postgres"
+      SANDBOX_POSTGRES_PORT: "5432"
+      SANDBOX_POSTGRES_DATABASE: "sandboxdb"
+      SANDBOX_POSTGRES_USER: "replay_user"
+      SANDBOX_POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      SANDBOX_MYSQL_HOST: "sandbox-mysql"
+      SANDBOX_MYSQL_PORT: "3306"
+      SANDBOX_MYSQL_DATABASE: "sandboxdb"
+      SANDBOX_MYSQL_USER: "replay_user"
+      SANDBOX_MYSQL_PASSWORD: "${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}"
+      REPLAY_QUERY_TIMEOUT_MS: "750"
+      REPLAY_RESULT_TTL_SECONDS: "604800"
+      MAX_QUERIES_PER_REPLAY: "100"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      evidence-store:
+        condition: service_started
+      redis-mitre:
+        condition: service_started
+      sandbox-postgres:
+        condition: service_healthy
+      sandbox-mysql:
+        condition: service_healthy
+    networks:
+      - control-internal
+      - sandbox-internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    restart: unless-stopped
+
+  sandbox-replay-api:
+    image: nginx:1.27-alpine
+    container_name: capstone-sandbox-replay-api
+    user: "101:101"
+    entrypoint: ["nginx", "-g", "daemon off;"]
+    ports:
+      - "127.0.0.1:8012:8012"
+    volumes:
+      - ./sandbox_replay/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      sandbox-replay-engine:
+        condition: service_started
+    networks:
+      - default
+      - control-internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    restart: unless-stopped
+
+  sandbox-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_USER: "postgres"
+      POSTGRES_DB: "sandboxdb"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./sandbox_replay/init/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sandboxdb"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - sandbox-internal
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  sandbox-mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}"
+      MYSQL_DATABASE: "sandboxdb"
+      MYSQL_USER: "replay_user"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}"
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+    tmpfs:
+      - /var/lib/mysql
+    volumes:
+      - ./sandbox_replay/init/mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "--silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    networks:
+      - sandbox-internal
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   ai-agent:
@@ -136,6 +257,9 @@ services:
     image: redis:7-alpine
     volumes:
       - redismitre:/data
+    networks:
+      - default
+      - control-internal
 
   pgproxy:
     build:
@@ -404,3 +528,10 @@ volumes:
   prometheusdata:
   lokidata:
   grafanadata:
+
+networks:
+  default:
+  control-internal:
+    internal: true
+  sandbox-internal:
+    internal: true

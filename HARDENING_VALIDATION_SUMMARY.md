@@ -14,6 +14,7 @@
 | 8 | Security cleanup | PASS |
 | 9 | AI Agent v1 incident briefing | PASS |
 | 10 | Attacker evidence store | PASS |
+| 11 | Isolated sandbox replay engine | PASS |
 
 ## Key Hardening Completed
 
@@ -246,3 +247,61 @@ event ID, and an AI report ID. Its trace reported all five stages as complete.
 The evidence store uses the existing persistent `redis-mitre` volume. Restarting
 only the evidence-store container preserved the session, queries, MITRE
 techniques, scale event, AI report link, and complete trace.
+
+## Sandbox Replay Engine Validation (2026-08-20)
+
+| Check | Result |
+|---|---|
+| Health and dependency readiness | PASS |
+| Captured-evidence-only replay API | PASS |
+| Caller-supplied query field rejected | PASS - HTTP 422 |
+| PostgreSQL captured `SELECT` replay | PASS |
+| MySQL captured read replay | PASS |
+| Schema enumeration replay | PASS |
+| `DROP TABLE` blocked | PASS |
+| `DELETE` blocked | PASS |
+| Long-running query timeout | PASS - 750 ms |
+| Execute and simulate modes | PASS |
+| Stored result linked to `session_id` | PASS |
+| Replay result survives worker restart | PASS |
+| Read-only database role enforcement | PASS |
+| Non-root, capability-dropped worker | PASS |
+| Disposable synthetic database isolation | PASS |
+| Query-policy and request-schema unit tests | PASS - 9 tests |
+
+### Replay Safety and End-to-End Evidence
+
+The replay worker consumes only queries already stored by the evidence service;
+its API does not accept arbitrary query text. The worker has no Docker default
+network, runs with a read-only root filesystem and all capabilities dropped,
+and reaches only the evidence/Redis control network and the isolated sandbox
+network. The disposable PostgreSQL and MySQL databases contain synthetic data,
+use `tmpfs` storage, and publish no host ports.
+
+Synthetic policy session `phase3-policy-1787211203` contained a safe read,
+metadata enumeration, `DROP TABLE`, `DELETE`, and `pg_sleep(5)`. Execution replay
+`3518d053-bce9-4a3d-ab1a-c693b91c8300` produced:
+
+```text
+query_count=5
+executed_count=2
+blocked_count=2
+timeout_count=1
+failed_count=0
+```
+
+The safe read and schema enumeration executed against the disposable PostgreSQL
+sandbox. `DROP TABLE` and `DELETE` were blocked before execution. The
+resource-intensive read was terminated by the 750 ms statement timeout. A
+simulation replay classified the same inputs without executing allowed reads.
+The stored replay result retained the original session ID.
+
+Independent database-role checks also rejected PostgreSQL `DROP TABLE` and
+MySQL `DELETE`, confirming that read-only database privileges remain a second
+control if application policy is bypassed. Existing captured PostgreSQL and
+MySQL evidence sessions both replayed their safe reads successfully.
+
+During integration testing, Redpanda records produced by the local `rpk` client
+used Snappy compression. Explicit `python-snappy` dependencies were added to the
+evidence-store, session-module, and MITRE-agent Python consumers so compressed
+records are consumed consistently instead of raising `UnsupportedCodecError`.
