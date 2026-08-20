@@ -2,6 +2,34 @@
 
 services:
 
+  evidence-store:
+    build:
+      context: ./evidence_store
+    container_name: capstone-evidence-store
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      KAFKA_GROUP_ID: "evidence-store-v1"
+      KAFKA_OFFSET_RESET: "latest"
+      KAFKA_TOPICS: "mysql-query-events,pg-query-events,mysql-session-events,pg-session-events,session-profiles,mitre-events,mitre-sessions"
+      REDIS_HOST: "redis-mitre"
+      REDIS_PORT: "6379"
+      SCALING_AGENT_URL: "http://scaling-agent:8080"
+      POLL_TIMEOUT_SECONDS: "2"
+      SCALE_POLL_INTERVAL_SECONDS: "2"
+      EVIDENCE_TTL_SECONDS: "2592000"
+      MAX_QUERY_EVENTS: "500"
+      MAX_STAGE_EVENTS: "100"
+    ports:
+      - "127.0.0.1:8011:8011"
+    depends_on:
+      redis-mitre:
+        condition: service_started
+      redpanda-init:
+        condition: service_completed_successfully
+      scaling-agent:
+        condition: service_started
+    restart: unless-stopped
+
   ai-agent:
     build:
       context: ./ai_agent
@@ -10,6 +38,7 @@ services:
       SCALING_AGENT_URL: http://scaling-agent:8080
       PROMETHEUS_URL: http://prometheus:9090
       METRICS_BRIDGE_URL: http://metrics-bridge:9100
+      EVIDENCE_STORE_URL: http://evidence-store:8011
       POLL_TIMEOUT_SECONDS: "2"
     ports:
       - "127.0.0.1:8010:8010"
@@ -17,6 +46,7 @@ services:
       - scaling-agent
       - prometheus
       - metrics-bridge
+      - evidence-store
     restart: unless-stopped
 
   redpanda:

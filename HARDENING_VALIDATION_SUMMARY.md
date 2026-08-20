@@ -13,6 +13,7 @@
 | 7 | Deterministic fake-data seeding | PASS |
 | 8 | Security cleanup | PASS |
 | 9 | AI Agent v1 incident briefing | PASS |
+| 10 | Attacker evidence store | PASS |
 
 ## Key Hardening Completed
 
@@ -205,3 +206,43 @@ agent selected the higher authoritative observed count, so the stale Prometheus
 value did not suppress the high-risk result. This confirms the AI-side fallback;
 the underlying cross-system metric inconsistency remains scheduled for roadmap
 Phase 6.
+
+## Attacker Evidence Store Validation (2026-08-20)
+
+| Check | Result |
+|---|---|
+| Evidence-store image and service startup | PASS |
+| Health endpoint | PASS |
+| Redis/Redpanda/scaling readiness | PASS |
+| AI readiness includes evidence store | PASS |
+| SQL and credential redaction unit tests | PASS - 5 tests |
+| MySQL connection and query evidence | PASS |
+| PostgreSQL connection and query evidence | PASS |
+| Source IP anonymization | PASS |
+| Raw and normalized query correlation | PASS |
+| MITRE `T1213.006` correlation | PASS |
+| Trap and risk correlation | PASS |
+| Scaling-event ID correlation | PASS |
+| AI-report ID correlation | PASS |
+| Complete five-stage trace | PASS |
+| Redis evidence survives service restart | PASS |
+
+### End-to-End Evidence
+
+Local-only synthetic MySQL and PostgreSQL clients connected through their
+respective honeypot proxies. Both sessions produced connection and query
+evidence. PostgreSQL session `b8a1796d-5ea7-4eaa-b467-38a4f197ca80` queried the
+synthetic `api_keys_backup` trap table and was correlated through:
+
+```text
+connection → query → MITRE T1213.006 → scaling event → AI report
+```
+
+The resulting evidence record retained the same proxy-generated `session_id`,
+an HMAC-anonymized source IP, attempted protocol/database/user, redacted raw and
+normalized query text, risk score `12.0`, trap status, a deterministic scaling
+event ID, and an AI report ID. Its trace reported all five stages as complete.
+
+The evidence store uses the existing persistent `redis-mitre` volume. Restarting
+only the evidence-store container preserved the session, queries, MITRE
+techniques, scale event, AI report link, and complete trace.

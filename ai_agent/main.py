@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 SCALING_AGENT_URL = os.getenv("SCALING_AGENT_URL", "http://scaling-agent:8080")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 METRICS_BRIDGE_URL = os.getenv("METRICS_BRIDGE_URL", "http://metrics-bridge:9100")
+EVIDENCE_STORE_URL = os.getenv("EVIDENCE_STORE_URL", "http://evidence-store:8011")
 POLL_TIMEOUT_SECONDS = float(os.getenv("POLL_TIMEOUT_SECONDS", "2"))
 
 
@@ -22,6 +24,7 @@ class AgentStatus(BaseModel):
     scaling_agent_url: str
     prometheus_url: str
     metrics_bridge_url: str
+    evidence_store_url: str
 
 
 def now_iso() -> str:
@@ -39,6 +42,15 @@ def get_json(url: str, default: Any) -> Any:
             "source": url,
             "fallback": default,
         }
+
+
+def post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        response = requests.post(url, json=payload, timeout=POLL_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        return response.json()
+    except Exception as exc:
+        return {"stored": False, "error": str(exc), "source": url}
 
 
 def prometheus_query(query: str) -> Dict[str, Any]:
@@ -223,7 +235,9 @@ def build_brief() -> Dict[str, Any]:
         current_replicas,
     )
 
-    return {
+    report_id = str(uuid.uuid4())
+    brief = {
+        "report_id": report_id,
         "agent": "capstone-ai-agent",
         "generated_at": now_iso(),
         "risk_level": classification["risk_level"],
@@ -255,6 +269,27 @@ def build_brief() -> Dict[str, Any]:
         "recommended_response": recommendations,
     }
 
+    latest_high_event = recent_event_risk.get("latest_high_event") or {}
+    attacker_session_id = latest_high_event.get("session_id")
+    if attacker_session_id:
+        evidence_link = post_json(
+            f"{EVIDENCE_STORE_URL}/evidence/report",
+            {
+                "report_id": report_id,
+                "session_id": attacker_session_id,
+                "generated_at": brief["generated_at"],
+                "risk_level": brief["risk_level"],
+                "summary": brief["summary"],
+            },
+        )
+    else:
+        evidence_link = {
+            "stored": False,
+            "reason": "no recent attacker session available for correlation",
+        }
+    brief["evidence"]["evidence_store_link"] = evidence_link
+    return brief
+
 
 def brief_to_markdown(brief: Dict[str, Any]) -> str:
     interp = brief["scaling_interpretation"]
@@ -262,6 +297,7 @@ def brief_to_markdown(brief: Dict[str, Any]) -> str:
     lines = [
         "# Capstone AI Agent Brief",
         "",
+        f"Report ID: `{brief['report_id']}`",
         f"Generated: {brief['generated_at']}",
         f"Risk level: **{brief['risk_level'].upper()}**",
         "",
@@ -309,6 +345,7 @@ def healthz() -> AgentStatus:
         scaling_agent_url=SCALING_AGENT_URL,
         prometheus_url=PROMETHEUS_URL,
         metrics_bridge_url=METRICS_BRIDGE_URL,
+        evidence_store_url=EVIDENCE_STORE_URL,
     )
 
 
@@ -316,8 +353,10 @@ def healthz() -> AgentStatus:
 def readyz() -> Dict[str, Any]:
     scaling = get_json(f"{SCALING_AGENT_URL}/metrics", {})
     prometheus = prometheus_query("up")
+    evidence_store = get_json(f"{EVIDENCE_STORE_URL}/readyz", {})
 
-    ready = "error" not in scaling and "error" not in prometheus
+    evidence_ready = "error" not in evidence_store and evidence_store.get("ready") is True
+    ready = "error" not in scaling and "error" not in prometheus and evidence_ready
 
     return {
         "ready": ready,
@@ -325,6 +364,7 @@ def readyz() -> Dict[str, Any]:
         "dependencies": {
             "scaling_agent": "ok" if "error" not in scaling else scaling,
             "prometheus": "ok" if "error" not in prometheus else prometheus,
+            "evidence_store": "ok" if evidence_ready else evidence_store,
         },
     }
 

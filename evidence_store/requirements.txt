@@ -1,0 +1,6 @@
+fastapi==0.135.1
+uvicorn[standard]==0.41.0
+kafka-python==2.3.0
+redis==5.0.1
+requests==2.32.5
+
