@@ -73,6 +73,17 @@ def bounded_text(value: Any, limit: int = MAX_TEXT_LENGTH) -> str:
     return str(value).replace("\x00", "")[:limit]
 
 
+def decode_json_object(value: Any) -> dict[str, Any] | None:
+    """Decode one Kafka value without allowing malformed input to stop ingestion."""
+    try:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            value = bytes(value).decode("utf-8")
+        payload = json.loads(value) if isinstance(value, str) else value
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def redact_query(value: Any) -> str:
     """Preserve SQL structure while removing literals and credential-like values."""
     text = bounded_text(value)
@@ -428,7 +439,6 @@ class EvidenceConsumer(threading.Thread):
                     group_id=KAFKA_GROUP_ID,
                     auto_offset_reset=KAFKA_OFFSET_RESET,
                     enable_auto_commit=True,
-                    value_deserializer=lambda value: json.loads(value.decode("utf-8")),
                     consumer_timeout_ms=1000,
                 )
                 self.connected = True
@@ -438,13 +448,19 @@ class EvidenceConsumer(threading.Thread):
                     for message in self.consumer:
                         if self.stop_event.is_set():
                             break
-                        if not isinstance(message.value, dict):
-                            log.warning("Ignoring non-object evidence event from %s", message.topic)
+                        payload = decode_json_object(message.value)
+                        if payload is None:
+                            log.warning(
+                                "Ignoring malformed or non-object evidence event: topic=%s partition=%s offset=%s",
+                                message.topic,
+                                message.partition,
+                                message.offset,
+                            )
                             continue
                         try:
                             self.repository.ingest_kafka(
                                 message.topic,
-                                message.value,
+                                payload,
                                 message.partition,
                                 message.offset,
                             )
@@ -455,13 +471,18 @@ class EvidenceConsumer(threading.Thread):
                                 message.partition,
                                 message.offset,
                             )
-                if self.consumer:
-                    self.consumer.close()
             except Exception as exc:
                 self.connected = False
                 self.last_error = str(exc)
                 log.error("Evidence consumer error: %s", exc)
                 self.stop_event.wait(2)
+            finally:
+                consumer, self.consumer = self.consumer, None
+                if consumer:
+                    try:
+                        consumer.close()
+                    except Exception:
+                        log.exception("Failed to close evidence Kafka consumer")
 
     def close(self) -> None:
         if self.consumer:

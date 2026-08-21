@@ -1,6 +1,6 @@
 import unittest
 
-from main import bounded_text, kafka_event_id, redact_query, stable_id
+from main import bounded_text, decode_json_object, kafka_event_id, redact_query, stable_id
 
 
 class EvidenceSafetyTests(unittest.TestCase):
@@ -42,6 +42,11 @@ class EvidenceSafetyTests(unittest.TestCase):
         first = kafka_event_id({}, "mitre-events", 0, 10, "session-1")
         replay = kafka_event_id({}, "mitre-events", 0, 11, "session-1")
         self.assertNotEqual(first, replay)
+
+    def test_malformed_kafka_value_is_skipped_without_raising(self):
+        self.assertIsNone(decode_json_object(b"{not-json"))
+        self.assertIsNone(decode_json_object(b"[1, 2, 3]"))
+        self.assertEqual(decode_json_object(b'{"session_id":"safe-1"}'), {"session_id": "safe-1"})
 
 
 if __name__ == "__main__":
