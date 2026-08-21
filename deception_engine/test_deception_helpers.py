@@ -2,12 +2,31 @@ import asyncio
 import json
 import sys
 import unittest
+from dataclasses import asdict
 from unittest.mock import MagicMock
 
 sys.modules.setdefault("redis", MagicMock())
 
 import api
 from models import DecisionRequest
+
+
+def run_decide(request: DecisionRequest):
+    """Invoke the current endpoint signature with isolated ready dependencies."""
+    old_components = (api._generator, api._exposure, api._mutations)
+    old_rate_limit = api.DECIDE_RATE_LIMIT_ENABLED
+    try:
+        if api._generator is None:
+            api._generator = MagicMock()
+        if api._exposure is None:
+            api._exposure = MagicMock()
+        if api._mutations is None:
+            api._mutations = MagicMock()
+        api.DECIDE_RATE_LIMIT_ENABLED = False
+        return asyncio.run(api.decide(MagicMock(), asdict(request)))
+    finally:
+        api._generator, api._exposure, api._mutations = old_components
+        api.DECIDE_RATE_LIMIT_ENABLED = old_rate_limit
 
 
 class TestLimitOffsetParsing(unittest.TestCase):
@@ -104,7 +123,7 @@ class TestPostgresCatalogDeception(unittest.TestCase):
                 database="testdb",
                 protocol="postgres",
             )
-            resp = asyncio.run(api.decide(req))
+            resp = run_decide(req)
             payload = json.loads(resp.body.decode("utf-8"))
             self.assertEqual(payload["mode"], "fake")
             self.assertEqual(payload["columns"], ["datname"])
@@ -190,7 +209,7 @@ class TestPostgresSchemaAndCountShapes(unittest.TestCase):
                 database="testdb",
                 protocol="postgres",
             )
-            resp = asyncio.run(api.decide(req))
+            resp = run_decide(req)
             payload = json.loads(resp.body.decode("utf-8"))
             self.assertEqual(payload["mode"], "fake")
             self.assertEqual(payload["columns"], ["schema_name"])
@@ -304,7 +323,8 @@ class TestHealthReadinessEndpoints(unittest.TestCase):
             api._schema_loader.get_schema_names.return_value = ["hr"]
             payload = asyncio.run(api.health())
             self.assertEqual(payload["status"], "ok")
-            self.assertEqual(payload["schemas"], ["hr"])
+            self.assertEqual(payload["service"], "deception-engine")
+            self.assertNotIn("schemas", payload)
         finally:
             api._schema_loader = old_schema
 
