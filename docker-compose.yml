@@ -19,6 +19,8 @@ services:
       EVIDENCE_TTL_SECONDS: "2592000"
       MAX_QUERY_EVENTS: "500"
       MAX_STAGE_EVENTS: "100"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
     ports:
       - "127.0.0.1:8011:8011"
     depends_on:
@@ -31,6 +33,14 @@ services:
     networks:
       - default
       - control-internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
     restart: unless-stopped
 
   sandbox-replay-engine:
@@ -168,6 +178,8 @@ services:
       EVIDENCE_STORE_URL: http://evidence-store:8011
       SANDBOX_REPLAY_URL: http://sandbox-replay-engine:8012
       POLL_TIMEOUT_SECONDS: "2"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
     ports:
       - "127.0.0.1:8010:8010"
     depends_on:
@@ -179,6 +191,70 @@ services:
     networks:
       - default
       - control-internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    restart: unless-stopped
+
+  llm-agent:
+    build:
+      context: ./llm_agent
+    container_name: capstone-llm-agent
+    environment:
+      LLM_AGENT_MODE: deterministic_local
+      EVIDENCE_STORE_URL: http://evidence-store:8011
+      SANDBOX_REPLAY_URL: http://sandbox-replay-engine:8012
+      LLM_REQUEST_TIMEOUT_SECONDS: "3"
+      LLM_MAX_RESPONSE_BYTES: "1048576"
+      LLM_MAX_REPORTS: "500"
+      LLM_MAX_TIMELINE_EVENTS: "50"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      evidence-store:
+        condition: service_started
+      sandbox-replay-engine:
+        condition: service_started
+    networks:
+      - control-internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    restart: unless-stopped
+
+  llm-agent-api:
+    image: nginx:1.27-alpine
+    container_name: capstone-llm-agent-api
+    user: "101:101"
+    entrypoint: ["nginx", "-g", "daemon off;"]
+    ports:
+      - "127.0.0.1:8013:8013"
+    volumes:
+      - ./llm_agent/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      llm-agent:
+        condition: service_started
+    networks:
+      - default
+      - control-internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 20
     restart: unless-stopped
 
   redpanda:
@@ -473,6 +549,24 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  json-exporter:
+    image: quay.io/prometheuscommunity/json-exporter:v0.7.0
+    command:
+      - --config.file=/config.yml
+    volumes:
+      - ./observability/json_exporter.yml:/config.yml:ro
+    networks:
+      - default
+      - control-internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.48.0
     ports:
@@ -487,6 +581,7 @@ services:
       - --web.enable-lifecycle
     depends_on:
       - metrics-bridge
+      - json-exporter
     restart: unless-stopped
 
   loki:

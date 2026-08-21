@@ -1,0 +1,197 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {"title": "AI JSON brief", "type": "link", "url": "http://127.0.0.1:8010/brief/latest", "targetBlank": true},
+    {"title": "Latest hardening result", "type": "link", "url": "http://127.0.0.1:8012/hardening/latest", "targetBlank": true},
+    {"title": "Prometheus alerts", "type": "link", "url": "http://127.0.0.1:9096/alerts", "targetBlank": true}
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Internal Service Readiness",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "mappings": [{"type": "value", "options": {"0": {"text": "NOT READY", "color": "red"}, "1": {"text": "READY", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_ai_agent_ready", "legendFormat": "AI agent", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_sandbox_replay_ready", "legendFormat": "Sandbox replay", "refId": "B"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_bridge_scrape_success{service=\"scaling-agent\"}", "legendFormat": "Scaling agent", "refId": "C"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_llm_agent_ready", "legendFormat": "Evidence report", "refId": "D"}
+      ]
+    },
+    {
+      "id": 2,
+      "title": "AI Risk Level",
+      "description": "Code is derived from the same deterministic pressure, trap and actor-risk evidence used by AI Agent v1. 0=LOW, 1=MEDIUM, 2=HIGH, 3=CRITICAL.",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "fieldConfig": {"defaults": {"min": 0, "max": 3, "mappings": [{"type": "value", "options": {"0": {"text": "LOW", "color": "green"}, "1": {"text": "MEDIUM", "color": "yellow"}, "2": {"text": "HIGH", "color": "orange"}, "3": {"text": "CRITICAL", "color": "red"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "orange", "value": 2}, {"color": "red", "value": 3}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_ai_risk_level_code", "legendFormat": "risk", "refId": "A"}]
+    },
+    {
+      "id": 3,
+      "title": "Trap Triggers",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 0},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_mitre_trap_triggers_total", "legendFormat": "traps", "refId": "A"}]
+    },
+    {
+      "id": 4,
+      "title": "KEDA ScaledObject Readiness",
+      "description": "Shows NOT READY when KEDA error telemetry is nonzero or unavailable.",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 0},
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "mappings": [{"type": "value", "options": {"0": {"text": "NOT READY", "color": "red"}, "1": {"text": "READY", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "1 - clamp_max(max(keda_scaled_object_errors{namespace=\"capstone-deception\",scaledObject=\"deception-engine-prometheus-scaler\"}) or vector(1), 1)", "legendFormat": "KEDA", "refId": "A"}]
+    },
+    {
+      "id": 5,
+      "title": "DLQ Records Produced",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 4, "x": 20, "y": 0},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_dlq_records_total", "legendFormat": "DLQ", "refId": "A"}]
+    },
+    {
+      "id": 6,
+      "title": "Active Honeypot Sessions",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 5},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 2}, "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_mysqlproxy_active_connections", "legendFormat": "MySQL", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_pgproxy_active_connections", "legendFormat": "PostgreSQL", "refId": "B"}
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Connection / Query Activity Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 5},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 2}, "min": 0, "unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(capstone_mysqlproxy_total_connections[1m])", "legendFormat": "MySQL connections/s", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(capstone_pgproxy_total_connections[1m])", "legendFormat": "PostgreSQL connections/s", "refId": "B"}
+      ]
+    },
+    {
+      "id": 8,
+      "title": "MITRE Technique Actors",
+      "type": "barchart",
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 5},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "orientation": "auto", "showValue": "always", "stacking": "none", "xTickLabelRotation": 0},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (technique) (capstone_mitre_technique_actor_count)", "legendFormat": "{{technique}}", "refId": "A"}]
+    },
+    {
+      "id": 9,
+      "title": "Scale Pressure",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 12},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "custom": {"drawStyle": "line", "fillOpacity": 20, "lineWidth": 2}, "min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.3}, {"color": "red", "value": 0.6}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_scaling_scale_pressure", "legendFormat": "pressure", "refId": "A"}]
+    },
+    {
+      "id": 10,
+      "title": "Replica Target and Max Budget",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 6, "x": 6, "y": 12},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 2}, "min": 0, "decimals": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_scaling_current_replicas", "legendFormat": "current target", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_scaling_max_replica_budget", "legendFormat": "max budget", "refId": "B"}
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Scale-Up / Scale-Down Events",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 6, "x": 12, "y": 12},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1}, "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "increase(capstone_scaling_scale_up_events[5m])", "legendFormat": "scale up", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "increase(capstone_scaling_scale_down_events[5m])", "legendFormat": "scale down", "refId": "B"}
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Operator Controls",
+      "type": "stat",
+      "gridPos": {"h": 7, "w": 6, "x": 18, "y": 12},
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "mappings": [{"type": "value", "options": {"0": {"text": "OFF", "color": "green"}, "1": {"text": "ON", "color": "orange"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_scaling_safe_mode", "legendFormat": "safe mode", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "1 - capstone_scaling_autoscaling_enabled", "legendFormat": "autoscaling disabled", "refId": "B"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_scaling_manual_override_active", "legendFormat": "manual override", "refId": "C"}
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Latest Sandbox Replay Outcome",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 19},
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "decimals": 0, "min": 0}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_sandbox_hardening_before_executed", "legendFormat": "before: executed", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_sandbox_hardening_after_failed", "legendFormat": "after: blocked/failed", "refId": "B"}
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Hardening Recommendations and Verification",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 19},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_sandbox_hardening_recommendations", "legendFormat": "recommendations", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "capstone_sandbox_hardening_verified", "legendFormat": "verified fixes", "refId": "B"}
+      ]
+    },
+    {
+      "id": 15,
+      "title": "AI / Replay / Hardening Activity",
+      "type": "logs",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 19},
+      "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": true, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "expr": "{compose_service=~\"ai-agent|sandbox-replay-engine|evidence-store\"}", "legendFormat": "", "refId": "A"}]
+    },
+    {
+      "id": 16,
+      "title": "Firing Capstone Alerts",
+      "type": "table",
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 25},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"cellHeight": "sm", "showHeader": true},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "ALERTS{alertstate=\"firing\",alertname=~\"Capstone.*\"}", "format": "table", "instant": true, "legendFormat": "{{alertname}}", "refId": "A"}]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "tags": ["capstone", "operator", "phase-10"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Capstone Operator Overview",
+  "uid": "capstone-operator",
+  "version": 1,
+  "weekStart": ""
+}

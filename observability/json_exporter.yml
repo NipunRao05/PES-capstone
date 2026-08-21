@@ -1,0 +1,76 @@
+modules:
+  ai_ready:
+    metrics:
+      - name: capstone_ai_agent_ready
+        path: "{ .ready }"
+        help: "1 when the deterministic AI incident reporter and its dependencies are ready"
+
+  llm_ready:
+    metrics:
+      - name: capstone_llm_agent_ready
+        path: "{ .ready }"
+        help: "1 when the bounded evidence-grounded report generator is ready"
+
+  sandbox_ready:
+    metrics:
+      - name: capstone_sandbox_replay_ready
+        path: "{ .ready }"
+        help: "1 when the isolated sandbox replay engine and its dependencies are ready"
+
+  hardening_latest:
+    metrics:
+      - name: capstone_sandbox_hardening_available
+        path: "{ .available }"
+        help: "1 when a sandbox hardening report is available"
+        labels:
+          status: "{ .status }"
+          protocol: "{ .protocol }"
+          session_id: "{ .session_id }"
+
+      - name: capstone_sandbox_hardening_recommendations
+        path: "{ .recommendation_count }"
+        help: "Recommendations in the latest sandbox hardening report"
+        labels:
+          status: "{ .status }"
+          protocol: "{ .protocol }"
+          session_id: "{ .session_id }"
+
+      - name: capstone_sandbox_hardening_before_executed
+        path: "{ .before.executed_count }"
+        help: "Queries that executed before sandbox hardening"
+        labels:
+          status: "{ .status }"
+          protocol: "{ .protocol }"
+          session_id: "{ .session_id }"
+
+      - name: capstone_sandbox_hardening_before_failed
+        path: "{ .before.failed_count }"
+        help: "Queries that failed before sandbox hardening"
+        labels:
+          status: "{ .status }"
+          protocol: "{ .protocol }"
+          session_id: "{ .session_id }"
+
+      - name: capstone_sandbox_hardening_after_executed
+        path: "{ .verification.after.executed_count }"
+        help: "Queries that still executed after sandbox hardening"
+        labels:
+          status: "{ .status }"
+          protocol: "{ .protocol }"
+          session_id: "{ .session_id }"
+
+      - name: capstone_sandbox_hardening_after_failed
+        path: "{ .verification.after.failed_count }"
+        help: "Queries rejected or failed after sandbox hardening"
+        labels:
+          status: "{ .status }"
+          protocol: "{ .protocol }"
+          session_id: "{ .session_id }"
+
+      - name: capstone_sandbox_hardening_verified
+        path: "{ .verification.verified_count }"
+        help: "Recommendations verified by before/after sandbox replay"
+        labels:
+          status: "{ .status }"
+          protocol: "{ .protocol }"
+          session_id: "{ .session_id }"

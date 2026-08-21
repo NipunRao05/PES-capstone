@@ -18,3 +18,63 @@ scrape_configs:
   - job_name: "redpanda"
     static_configs:
       - targets: ["redpanda:9644"]
+
+  - job_name: "json-exporter"
+    static_configs:
+      - targets: ["json-exporter:7979"]
+
+  - job_name: "capstone-ai-ready"
+    metrics_path: /probe
+    params:
+      module: [ai_ready]
+    static_configs:
+      - targets: ["http://ai-agent:8010/readyz"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: json-exporter:7979
+
+  - job_name: "capstone-llm-ready"
+    metrics_path: /probe
+    params:
+      module: [llm_ready]
+    static_configs:
+      - targets: ["http://llm-agent:8013/readyz"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: json-exporter:7979
+
+  - job_name: "sandbox-replay-ready"
+    metrics_path: /probe
+    params:
+      module: [sandbox_ready]
+    static_configs:
+      - targets: ["http://sandbox-replay-engine:8012/readyz"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: json-exporter:7979
+
+  - job_name: "sandbox-hardening-latest"
+    metrics_path: /probe
+    params:
+      module: [hardening_latest]
+    static_configs:
+      - targets: ["http://sandbox-replay-engine:8012/hardening/latest"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: json-exporter:7979

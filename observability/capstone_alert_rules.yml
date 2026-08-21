@@ -1,4 +1,22 @@
 groups:
+  - name: capstone-recording-rules
+    interval: 15s
+    rules:
+      - record: capstone_ai_risk_critical
+        expr: clamp_max(max(capstone_scaling_scale_pressure >= bool 0.8) + max(capstone_mitre_avg_actor_risk >= bool 80), 1)
+
+      - record: capstone_ai_risk_high_condition
+        expr: clamp_max(max(capstone_scaling_scale_pressure >= bool 0.6) + max(capstone_mitre_trap_triggers_total > bool 0), 1)
+
+      - record: capstone_ai_risk_medium_condition
+        expr: clamp_max(max(capstone_scaling_scale_pressure >= bool 0.3) + max(capstone_mitre_avg_actor_risk >= bool 40), 1)
+
+      - record: capstone_ai_risk_level_code
+        expr: 3 * capstone_ai_risk_critical + 2 * (1 - capstone_ai_risk_critical) * capstone_ai_risk_high_condition + (1 - capstone_ai_risk_critical) * (1 - capstone_ai_risk_high_condition) * capstone_ai_risk_medium_condition
+
+      - record: capstone_dlq_records_total
+        expr: sum(vectorized_cluster_partition_records_produced{namespace="kafka",topic="dead-letter-events"})
+
   - name: capstone-platform-health
     interval: 15s
     rules:
@@ -41,6 +59,46 @@ groups:
         annotations:
           summary: "PostgreSQL backend is unreachable through pgproxy"
           description: "pgproxy reports backend_healthy=0 for more than 30 seconds."
+
+      - alert: CapstoneAIAgentDown
+        expr: (capstone_ai_agent_ready != 1) or absent(capstone_ai_agent_ready)
+        for: 30s
+        labels:
+          severity: critical
+          component: ai-agent
+        annotations:
+          summary: "AI incident reporter is not ready"
+          description: "The deterministic AI reporter or one of its internal dependencies has been unavailable for more than 30 seconds."
+
+      - alert: CapstoneLLMAgentDown
+        expr: (capstone_llm_agent_ready != 1) or absent(capstone_llm_agent_ready)
+        for: 30s
+        labels:
+          severity: critical
+          component: llm-agent
+        annotations:
+          summary: "Evidence-grounded report generator is not ready"
+          description: "The bounded local report generator or its evidence-store dependency has been unavailable for more than 30 seconds."
+
+      - alert: CapstoneScalingAgentDown
+        expr: (capstone_bridge_scrape_success{service="scaling-agent"} != 1) or absent(capstone_bridge_scrape_success{service="scaling-agent"})
+        for: 30s
+        labels:
+          severity: critical
+          component: scaling-agent
+        annotations:
+          summary: "Scaling agent telemetry is unavailable"
+          description: "The metrics bridge has not been able to read scaling-agent telemetry for more than 30 seconds."
+
+      - alert: CapstoneKEDANotReady
+        expr: (max(keda_scaled_object_errors{namespace="capstone-deception",scaledObject="deception-engine-prometheus-scaler"}) > 0) or absent(keda_scaled_object_errors{namespace="capstone-deception",scaledObject="deception-engine-prometheus-scaler"})
+        for: 1m
+        labels:
+          severity: critical
+          component: keda
+        annotations:
+          summary: "KEDA ScaledObject is not verifiably ready"
+          description: "KEDA reports a scaler error, or its readiness telemetry is missing from Prometheus. Check the ScaledObject before relying on physical autoscaling."
 
   - name: capstone-threat-detection
     interval: 15s
@@ -87,6 +145,26 @@ groups:
           summary: "Trap-triggered attack phase observed"
           description: "Actor profile data contains trap_triggered phase observations. Current value: {{ $value }}."
 
+      - alert: CapstoneAIRiskHigh
+        expr: capstone_ai_risk_level_code >= 2
+        for: 0s
+        labels:
+          severity: critical
+          component: ai-agent
+        annotations:
+          summary: "AI incident risk posture is high or critical"
+          description: "The evidence-equivalent deterministic AI risk code is {{ $value }} (2=high, 3=critical)."
+
+      - alert: CapstoneSandboxWeaknessFound
+        expr: capstone_sandbox_hardening_before_executed > 0
+        for: 0s
+        labels:
+          severity: warning
+          component: sandbox-replay
+        annotations:
+          summary: "Sandbox replay found an exploitable weakness"
+          description: "The latest isolated replay executed {{ $value }} query or queries before hardening. Review the linked recommendation and verification result."
+
   - name: capstone-scaling
     interval: 15s
     rules:
@@ -119,6 +197,29 @@ groups:
         annotations:
           summary: "Scaling pressure is high"
           description: "Scaling pressure is {{ $value }} for more than 1 minute."
+
+      - alert: CapstoneReplicasAtMaxBudget
+        expr: capstone_scaling_current_replicas >= capstone_scaling_max_replica_budget
+        for: 1m
+        labels:
+          severity: critical
+          component: scaling-agent
+        annotations:
+          summary: "Replica target has reached the operator budget"
+          description: "Current replicas equal or exceed the configured max replica budget."
+
+  - name: capstone-dlq
+    interval: 15s
+    rules:
+      - alert: CapstoneDLQIncreasing
+        expr: increase(capstone_dlq_records_total[5m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+          component: redpanda
+        annotations:
+          summary: "Dead-letter topic is increasing"
+          description: "One or more new records were produced to dead-letter-events during the last five minutes."
 
   - name: capstone-proxy-traffic
     interval: 15s
