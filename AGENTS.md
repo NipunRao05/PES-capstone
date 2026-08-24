@@ -1163,6 +1163,38 @@ session duration
 
 Hundreds/thousands of repeatable controlled sessions can be generated locally without real data.
 
+### Phase 10 validation record (2026-08-24)
+
+```text
+Implementation: scripts/controlled_workloads.py (controlled-workload-v1) plus
+tests/workloads/test_controlled_workloads.py and operator README.
+
+The offline standard-library generator covers BENIGN, CATALOG_RECON,
+USER_ENUMERATION, BACKUP_SEARCH, CREDENTIAL_SEARCH, SENSITIVE_DATA_SEARCH,
+PRIVILEGE_PROBING, DESTRUCTIVE_INTENT, and MIXED_MULTI_STAGE. Every labeled
+session is guaranteed to contain its defining query families. Same-seed prefixes
+are stable and the generator varies query ordering, synthetic databases/tables,
+synthetic usernames, bounded timing mode, attack depth, MySQL/PostgreSQL protocol,
+and planned duration.
+
+Safety: generation never opens a network connection or executes SQL; every plan
+is synthetic and LOCAL_DECOY_ONLY. Queries are individually marked DECOY_ONLY or
+SIMULATE_ONLY, all destructive statements are SIMULATE_ONLY, external URLs/IPs,
+shell/database command escapes, unsafe identifiers, production scope, multi-query
+statements, and out-of-bound timing are rejected. Output creation refuses to
+overwrite an existing file. Maximum generation is bounded at 10,000 sessions.
+
+Validation: workload tests 7/7. In-memory validation generated 1,000 sessions
+across all nine profiles and both protocols with 208 query-order signatures,
+five databases, five usernames, three timing modes, depths 2-7, and durations
+41-4,672 ms. Two independently written 1,000-session JSONL plans using seed
+20260824 were byte-identical by SHA-256:
+c6ba15f67aaa31ed40889c7867dc56921be69b5214f40b4ac8ddcdfce856ac67.
+
+No plan was executed. No application service, container, port, database, reward
+weight, learner, deployment, load test, or GitHub push was changed.
+```
+
 ---
 
 ## Phase 11 — Add a Contextual Bandit in Shadow Mode

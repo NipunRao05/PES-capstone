@@ -4,11 +4,11 @@ Checkpoint date: 2026-08-24
 
 Repository: `F:\b\Capstone-main`
 
-Branch / HEAD: main / 4853da6 (phase 8 done)
+Branch / HEAD: main / 4b03c79 (phase 9 done)
 
 ## Repository and runtime checkpoint
 
-- Worktree at Phase 9 handoff: Phase 9 implementation and validation artifacts are uncommitted for manual review/commit.
+- Worktree at Phase 10 handoff: Phase 10 implementation and validation artifacts are uncommitted for manual review/commit.
 - `docker compose -f docker-compose.yml config --services` succeeds and defines 26 services.
 - The existing stack was started with builds and pulls disabled. All 25 long-running services are up; one-shot `redpanda-init` exited `0` as designed.
 - Nineteen bounded health/readiness/metrics requests returned HTTP 200. Prometheus has 8/8 active targets up, both Redis services return `PONG`, and all 11 required Redpanda topics exist.
@@ -37,6 +37,9 @@ Branch / HEAD: main / 4853da6 (phase 8 done)
 - Phase 9 adds `deception-reward-v1`: reproducible completed-decision vectors for all ten required reward dimensions and a labeled per-decision arithmetic-mean session vector. Open or incomplete telemetry remains pending; invalid, cross-session, duplicate, missing, nonfinite, and forged evidence fails closed.
 - Phase 9 validation passed: focused reward/telemetry/adaptation/state 31/31, complete affected session-module 229/229, and live session `phase9-live-0083d098` returned four completed ten-dimension decision vectors plus byte-identical repeated session output without raw SQL/fingerprint evidence.
 - Only session-module was rebuilt/recreated for Phase 9 runtime validation. Calibration remains explicitly pending Phase 10: weight profile and composite reward are null. No learner, persistence, new service/port/topic, database connection, load test, deployment, or GitHub push was performed.
+- Phase 10 adds offline `controlled-workload-v1` generation for all nine required profiles. Same-seed plans vary order, synthetic names, users, timing, depth, protocol, and duration while preserving stable prefixes and mandatory profile signals.
+- Phase 10 validation passed: 7/7 workload tests; a 1,000-session in-memory validation covered all profiles and both protocols; two independently written 1,000-session JSONL plans matched SHA-256 `c6ba15f67aaa31ed40889c7867dc56921be69b5214f40b4ac8ddcdfce856ac67`.
+- Phase 10 performed no traffic. Plans are synthetic/local-decoy-only, destructive intent is simulate-only, unsafe external/command capabilities are rejected, generation is capped at 10,000, and no service/container/database/deployment/load test was changed.
 
 ## Phase 0 component evidence
 
@@ -65,8 +68,8 @@ Branch / HEAD: main / 4853da6 (phase 8 done)
 | 7 - Two-speed adaptation | Required after Phase 6 | `session_module/async_adaptation.py`; nonblocking consumer enqueue; structured `/strategy/next`; stale-safe validated next-strategy session state; focused/full affected tests and live Redpanda validation | **VERIFIED:** current strategy remains deterministic; next rule strategy is prepared asynchronously; queue/timeout/failure/stale cases preserve fallback | Complete; preserve async-adaptation-v1 and fast-path isolation. |
 | 8 - Decision/outcome telemetry | Required after Phase 7 | `session_module/strategy_telemetry.py`; accepted decision/action-space evidence; linked evolving outcomes; read-only loopback telemetry endpoints; focused, affected, and live synthetic validation | **VERIFIED:** every accepted rule-v1 decision has a unique linked outcome; subsequent query/MITRE/error/disconnect evidence updates deterministically; raw SQL and fingerprints are excluded | Complete; preserve bounded structured-only telemetry. Persistence remains Phase 24. |
 | 9 - Reward model | Required after Phase 8 | `session_module/reward_model.py`; ten deterministic decision dimensions; completed-session aggregation; read-only reward endpoints; focused, affected, and live validation | **VERIFIED:** completed decisions/sessions return reproducible reward vectors; incomplete outcomes remain pending; malformed/unsafe evidence fails closed; no uncalibrated weights or scalar were invented | Complete; preserve deception-reward-v1. Calibrate a weight profile only from Phase 10 evidence. |
-| 10 - Controlled workloads | Pending | `scripts/controlled_calibration.ps1` and a 13-case bounded report exist, but not the required nine versioned profiles or reproducible reward-producing workload framework | **IMPLEMENTED/PARTIAL / NEXT:** current scripts do not meet Phase 10 acceptance | Start Phase 10 only; add synthetic, bounded, repeatable profiles and vary ordering/names/timing/depth/protocol/duration without running a long workload. |
-| 11-12 - Shadow bandit / bounded learned selection | Pending | No bandit, shadow recommendation, confidence gate, or learned selector | **PENDING** | Do not start before Phase 10 passes. |
+| 10 - Controlled workloads | Required after Phase 9 | `scripts/controlled_workloads.py`; all nine versioned profiles; strict offline safety validator; 1,000-session deterministic tests and matching JSONL artifacts | **VERIFIED:** thousands of repeatable synthetic local-decoy-only sessions can be generated without execution or real data; every required variation is present | Complete; preserve controlled-workload-v1. Use only bounded subsets for future live calibration. |
+| 11-12 - Shadow bandit / bounded learned selection | Pending | Phase 10 now supplies deterministic workload plans; no bandit, shadow recommendation, confidence gate, or learned selector exists | **PENDING / NEXT PHASE 11** | Start Phase 11 in shadow mode only; actual execution must remain the Phase 6 rule decision. Do not start Phase 12 learned control. |
 | 13-17 - Learning, counterfactuals, proposals, review, validation | Pending | No `learning_agent/`, proposal/review workflow, or candidate-strategy pipeline | **PENDING** | Follow phase order after Phase 12. |
 | 18-19 - Local CPU LLM / decoy generation | Pending | Existing `llm_agent/` is deterministic bounded reporting; no local model runtime or `decoy_generation_agent/` | **PENDING** | Benchmark a local runtime only after Phase 17; generation remains offline and reviewed. |
 | 20 - Evidence store | Claimed/verify | Service, APIs, Redis/Redpanda correlation, redaction and persistence tests | **IMPLEMENTED/PARTIAL:** historical scope verified; adaptive trace fields unavailable | Re-verify live later and extend after upstream adaptive telemetry exists. |
@@ -84,4 +87,4 @@ Branch / HEAD: main / 4853da6 (phase 8 done)
 
 ## Checkpoint decision
 
-Phases 0, 1, 2, 3, 4, 5, 6, 7, 8, and 9 are complete. The exact next implementation phase is **Phase 10 - Build Controlled Attack Workloads**. Phase 10 has not been started.
+Phases 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, and 10 are complete. The exact next implementation phase is **Phase 11 - Add a Contextual Bandit in Shadow Mode**. Phase 11 has not been started.
