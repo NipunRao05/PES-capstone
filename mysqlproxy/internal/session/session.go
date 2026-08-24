@@ -123,6 +123,14 @@ func (s *Session) SetAutoCommit(ac bool) {
 	s.mu.Unlock()
 }
 
+// SetTransactionStatus records authoritative status flags returned by MySQL.
+func (s *Session) SetTransactionStatus(inTransaction, autoCommit bool) {
+	s.mu.Lock()
+	s.InTransaction = inTransaction
+	s.AutoCommit = autoCommit
+	s.mu.Unlock()
+}
+
 // ClientCapabilities returns the negotiated client capability flags.
 func (s *Session) GetClientCapabilities() uint32 {
 	s.mu.RLock()

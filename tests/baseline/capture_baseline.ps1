@@ -107,7 +107,6 @@ $executions = [ordered]@{
 
 $evidence = Get-EvidenceSessions $markers $EvidenceWaitSeconds
 $scaleMetrics = Invoke-RestMethod -Uri "http://127.0.0.1:9095/metrics" -TimeoutSec 10
-$aiBrief = Invoke-RestMethod -Uri "http://127.0.0.1:8010/brief/latest" -TimeoutSec 15
 
 foreach ($name in $executions.Keys) {
   $execution = $executions[$name]
@@ -135,6 +134,7 @@ foreach ($name in @("catalog_enumeration", "trap_table")) {
 }
 
 $trapEvidence = $evidence.trap_table
+$aiBrief = Invoke-RestMethod -Uri "http://127.0.0.1:8010/brief/latest?session_id=$($trapEvidence.session_id)" -TimeoutSec 15
 $trapScaleDecision = if ($trapEvidence) { @($trapEvidence.scaling_events | Sort-Object raw_score -Descending) | Select-Object -First 1 } else { $null }
 Add-Check "trap scaling decision linked" ($null -ne $trapScaleDecision) "session_id=$($trapEvidence.session_id)"
 Add-Check "scaling replica bounds" ($scaleMetrics.config.replica_min -eq $expected.scaling.replica_min -and $scaleMetrics.config.replica_max -eq $expected.scaling.replica_max) "observed=$($scaleMetrics.config.replica_min)-$($scaleMetrics.config.replica_max)"

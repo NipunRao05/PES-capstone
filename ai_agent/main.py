@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Query, Response
 from pydantic import BaseModel
 
 
@@ -212,7 +212,7 @@ def build_recommendations(risk_level: str, pressure: float, current_replicas: fl
     ]
 
 
-def build_brief() -> Dict[str, Any]:
+def build_brief(session_id: str = "") -> Dict[str, Any]:
     scaling_metrics = get_json(f"{SCALING_AGENT_URL}/metrics", {})
     scaling_events = get_json(f"{SCALING_AGENT_URL}/scale/events", {"events": []})
     hardening_report = get_json(f"{SANDBOX_REPLAY_URL}/hardening/latest", {"available": False})
@@ -240,12 +240,18 @@ def build_brief() -> Dict[str, Any]:
     control_mode = str(scaling_metrics.get("control_mode") or "automatic")
 
     attribution_events = extract_recent_scale_events(scaling_events)
+    requested_session_id = session_id.strip()[:256]
+    if requested_session_id:
+        attribution_events = [
+            event for event in attribution_events
+            if str(event.get("session_id") or "") == requested_session_id
+        ]
     recent_event_risk = analyze_recent_events(attribution_events)
     recent_events = attribution_events[-5:]
     classification = classify_pressure(
-        pressure,
-        trap_triggers,
-        avg_actor_risk,
+        0.0 if requested_session_id else pressure,
+        0.0 if requested_session_id else trap_triggers,
+        0.0 if requested_session_id else avg_actor_risk,
         recent_event_risk,
     )
     recommendations = build_recommendations(
@@ -314,6 +320,8 @@ def build_brief() -> Dict[str, Any]:
             "scaling_agent_metrics": scaling_metrics,
             "recent_scale_events": recent_events,
             "recent_event_risk": recent_event_risk,
+            "attribution_scope": "session" if requested_session_id else "latest",
+            "requested_session_id": requested_session_id or None,
             "sandbox_hardening": hardening_report,
         },
         "recommended_response": recommendations,
@@ -456,8 +464,8 @@ def readyz() -> Dict[str, Any]:
 
 
 @app.get("/brief/latest")
-def latest_brief() -> Dict[str, Any]:
-    return build_brief()
+def latest_brief(session_id: str = Query(default="", max_length=256)) -> Dict[str, Any]:
+    return build_brief(session_id)
 
 
 @app.get("/brief/markdown")

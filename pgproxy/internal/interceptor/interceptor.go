@@ -29,11 +29,25 @@ type QueryEvent struct {
 	// Identical query shapes always produce the same fingerprint,
 	// regardless of literal values or parameter bindings.
 	// Used as the deduplication key in the publisher.
-	Fingerprint  string
-	ProtocolMode string // "simple" | "extended"
-	QueryLength  int
-	BytesIn      int64
-	BytesOut     int64
+	Fingerprint      string
+	ProtocolMode     string // "simple" | "extended"
+	QueryLength      int
+	BytesIn          int64
+	BytesOut         int64
+	OutcomeVerified  bool
+	Success          bool
+	Authority        string // backend | deception | policy
+	TransactionState string // idle | in_transaction | failed_transaction
+	ErrorCode        string
+}
+
+// QueryOutcome is attached only after a deterministic result is known.
+type QueryOutcome struct {
+	Verified         bool
+	Success          bool
+	Authority        string
+	TransactionState string
+	ErrorCode        string
 }
 
 // Interceptor captures query events from the protocol stream.
@@ -47,10 +61,10 @@ type Interceptor struct {
 
 // extendedQueryState tracks state across Parse/Bind/Execute for extended protocol.
 type extendedQueryState struct {
-	stmtName  string
+	stmtName   string
 	portalName string
-	query     string
-	params    [][]byte
+	query      string
+	params     [][]byte
 }
 
 // New creates a new Interceptor with a buffered event channel.
@@ -79,21 +93,31 @@ func (i *Interceptor) CleanupSession(sessionID string) {
 
 // InterceptSimple captures a simple Query message.
 func (i *Interceptor) InterceptSimple(sess *session.Session, sql string) {
+	i.InterceptSimpleOutcome(sess, sql, QueryOutcome{})
+}
+
+// InterceptSimpleOutcome captures a simple query after its response is known.
+func (i *Interceptor) InterceptSimpleOutcome(sess *session.Session, sql string, outcome QueryOutcome) {
 	snap := sess.Snapshot()
 	normalized := NormalizeSQL(sql)
 	event := QueryEvent{
-		SessionID:       snap.ID,
-		Timestamp:       time.Now(),
-		ClientIP:        snap.ClientIP,
-		Username:        snap.Username,
-		Database:        snap.Database,
-		QueryRaw:        sql,
-		QueryNormalized: normalized,
-		Fingerprint:     FingerprintSQL(normalized),
-		ProtocolMode:    "simple",
-		QueryLength:     len(sql),
-		BytesIn:         snap.BytesIn,
-		BytesOut:        snap.BytesOut,
+		SessionID:        snap.ID,
+		Timestamp:        time.Now(),
+		ClientIP:         snap.ClientIP,
+		Username:         snap.Username,
+		Database:         snap.Database,
+		QueryRaw:         sql,
+		QueryNormalized:  normalized,
+		Fingerprint:      FingerprintSQL(normalized),
+		ProtocolMode:     "simple",
+		QueryLength:      len(sql),
+		BytesIn:          snap.BytesIn,
+		BytesOut:         snap.BytesOut,
+		OutcomeVerified:  outcome.Verified,
+		Success:          outcome.Success,
+		Authority:        outcome.Authority,
+		TransactionState: outcome.TransactionState,
+		ErrorCode:        outcome.ErrorCode,
 	}
 
 	sess.IncrQueryCount()

@@ -47,7 +47,8 @@ type Handler struct {
 	pub       *publisher.Publisher
 
 	// auth metadata captured during handshake
-	authMethod string
+	authMethod       string
+	lastQueryOutcome interceptor.QueryOutcome
 }
 
 // NewHandler constructs a protocol handler.
@@ -452,7 +453,7 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 		if h.intercept != nil {
 			switch m := clientMsg.(type) {
 			case *pgproto3.Query:
-				h.intercept.InterceptSimple(h.sess, m.String)
+				// Emitted after a backend/deception outcome is known.
 			case *pgproto3.Parse:
 				h.intercept.InterceptParse(h.sess, m.Name, m.Query)
 			case *pgproto3.Bind:
@@ -475,6 +476,9 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 					return fmt.Errorf("send rfq after block: %w", err)
 				}
 			}
+			if q, ok := clientMsg.(*pgproto3.Query); ok {
+				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.postgresTransactionState(), ErrorCode: "blocked"})
+			}
 			continue
 		}
 
@@ -495,6 +499,7 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 				if err := h.sendPostgresDeceptionResult(dec, q.String); err != nil {
 					return fmt.Errorf("send deception-engine fake result: %w", err)
 				}
+				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.postgresTransactionState()})
 				continue
 			}
 		}
@@ -512,9 +517,13 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 				h.logger.Error("failed to send postgres fake trap response", "err", err)
 				return fmt.Errorf("send fake trap response: %w", err)
 			}
+			h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.postgresTransactionState()})
 			continue
 		}
 
+		if _, ok := clientMsg.(*pgproto3.Query); ok {
+			h.lastQueryOutcome = interceptor.QueryOutcome{Verified: true, Success: true, Authority: "backend", TransactionState: h.postgresTransactionState()}
+		}
 		if err := h.sendToBackend(clientMsg); err != nil {
 			return fmt.Errorf("forward to backend: %w", err)
 		}
@@ -526,9 +535,32 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 			return fmt.Errorf("drain backend: %w", err)
 		}
 
+		if q, ok := clientMsg.(*pgproto3.Query); ok {
+			h.emitSimpleOutcome(q.String, h.lastQueryOutcome)
+		}
 		if _, ok := clientMsg.(*pgproto3.Terminate); ok {
 			return nil
 		}
+	}
+}
+
+func (h *Handler) emitSimpleOutcome(sql string, outcome interceptor.QueryOutcome) {
+	if h.intercept != nil && h.sess != nil {
+		h.intercept.InterceptSimpleOutcome(h.sess, sql, outcome)
+	}
+}
+
+func (h *Handler) postgresTransactionState() string {
+	if h.sess == nil {
+		return "idle"
+	}
+	switch h.sess.Snapshot().TxStatus {
+	case 'T':
+		return "in_transaction"
+	case 'E':
+		return "failed_transaction"
+	default:
+		return "idle"
 	}
 }
 
@@ -609,8 +641,12 @@ func (h *Handler) drainBackendResponses(ctx context.Context, trigger pgproto3.Fr
 		switch m := msg.(type) {
 		case *pgproto3.ReadyForQuery:
 			h.sess.SetTxStatus(m.TxStatus)
+			h.lastQueryOutcome.TransactionState = h.postgresTransactionState()
 			return nil
 		case *pgproto3.ErrorResponse:
+			h.lastQueryOutcome.Success = false
+			h.lastQueryOutcome.ErrorCode = m.Code
+			h.lastQueryOutcome.TransactionState = h.postgresTransactionState()
 			h.logger.Debug("backend error response", "msg", m.Message)
 			if !needsRFQ {
 				return nil

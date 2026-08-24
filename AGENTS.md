@@ -344,7 +344,7 @@ Prometheus consistency                   CLAIMED/VERIFY
 Kafka idempotency/replay safety          CLAIMED/VERIFY
 Operator controls                        CLAIMED/VERIFY
 
-Explicit state-grounded deception        PENDING
+Explicit state-grounded deception        VERIFIED (Phase 2, 2026-08-24)
 Strategy registry                        PENDING
 Behavior-state feature model             PENDING
 Policy guard/action-space engine         PENDING
@@ -537,6 +537,31 @@ session consistency
 ### Acceptance
 
 No later response contradicts an established database/session fact unless a legitimate database operation changed it.
+
+### Current verification (2026-08-24)
+
+~~~text
+VERIFIED
+- MySQL/PostgreSQL text/simple query events are emitted after confirmed outcomes.
+- MySQL prepared executions also carry confirmed outcomes.
+- Backend, deterministic deception, and policy outcomes are authority-labeled.
+- Only confirmed successful backend outcomes mutate projected database objects.
+- Transaction rollback restores projected state; failed queries do not mutate it.
+- Required state is exposed by session-module on a Compose host-loopback API.
+- MITRE stage/risk and trap evidence are joined asynchronously by session_id.
+- 197 Python tests, both Go proxy suites/vet, and bounded live CRUD/transaction/
+  permission/discovery/consistency validation passed.
+- Frozen Phase 1 baseline re-passed 40/40 after targeted AI v1 attribution was
+  made deterministic.
+
+KNOWN SAFE BOUNDARIES
+- The SQL engines remain authoritative; the projector never connects to or
+  executes against a database.
+- Phase 2 state is bounded in memory; restart persistence remains Phase 24.
+- PostgreSQL extended-protocol executions remain explicitly unverified until
+  Sync/ReadyForQuery correlation is implemented and cannot mutate projected
+  authoritative state.
+~~~
 
 ---
 
@@ -2275,41 +2300,19 @@ Add final research validation artifacts
 
 # 13. Immediate Next Step for Codex
 
-Do **not** start the Learning Agent.
+Current verified checkpoint:
 
-Do **not** start the local LLM.
+~~~text
+Phase 0 — Verify Current Checkpoint              VERIFIED
+Phase 1 — Freeze Deterministic Baseline          VERIFIED
+Phase 2 — Authoritative State                    VERIFIED
+~~~
 
-Do **not** start internet deployment.
+Start **Phase 3 — Strategy Registry** only.
 
-First execute:
-
-```text
-Phase 0 — Verify Current Checkpoint
-```
-
-Then:
-
-```text
-Phase 1 — Freeze Deterministic Baseline
-Phase 2 — Authoritative State
-Phase 3 — Strategy Registry
-Phase 4 — Behavior State
-Phase 5 — Policy Guard
-Phase 6 — Rule-Only Strategy Agent
-Phase 7 — Asynchronous Adaptation
-Phase 8 — Decision/Outcome Telemetry
-Phase 9 — Reward Model
-```
-
-Only after these foundations are validated should learning begin.
-
-The first learning milestone is:
-
-```text
-Contextual bandit in SHADOW MODE
-```
-
-not live AI control.
+Do **not** start Phase 4 or any learning, local LLM, deployment, or public
+exposure work until Phase 3 passes its acceptance checks. After Phase 3, follow
+the existing ordered roadmap without skipping upstream verification.
 
 ---
 

@@ -36,11 +36,25 @@ type QueryEvent struct {
 	QueryNormalized string
 	// Fingerprint is a stable FNV-64a hex hash of QueryNormalized.
 	// Same query shape always → same fingerprint, regardless of literals.
-	Fingerprint  string
-	ProtocolMode string // "text" (COM_QUERY) | "prepared" (COM_STMT_EXECUTE)
-	QueryLength  int
-	BytesIn      int64
-	BytesOut     int64
+	Fingerprint      string
+	ProtocolMode     string // "text" (COM_QUERY) | "prepared" (COM_STMT_EXECUTE)
+	QueryLength      int
+	BytesIn          int64
+	BytesOut         int64
+	OutcomeVerified  bool
+	Success          bool
+	Authority        string // backend | deception | policy
+	TransactionState string // idle | in_transaction
+	ErrorCode        string
+}
+
+// QueryOutcome is attached only after a deterministic result is known.
+type QueryOutcome struct {
+	Verified         bool
+	Success          bool
+	Authority        string
+	TransactionState string
+	ErrorCode        string
 }
 
 // ─── Interceptor ─────────────────────────────────────────────────────────────
@@ -85,22 +99,32 @@ func (i *Interceptor) CleanupSession(sessID string) {
 
 // InterceptTextQuery captures a COM_QUERY command.
 func (i *Interceptor) InterceptTextQuery(sess *session.Session, sql string) {
+	i.InterceptTextQueryOutcome(sess, sql, QueryOutcome{})
+}
+
+// InterceptTextQueryOutcome captures a COM_QUERY command after its response is known.
+func (i *Interceptor) InterceptTextQueryOutcome(sess *session.Session, sql string, outcome QueryOutcome) {
 	sql = CleanTextQuery(sql)
 	snap := sess.Snapshot()
 	normalized := NormalizeSQL(sql)
 	i.emit(QueryEvent{
-		SessionID:       snap.ID,
-		Timestamp:       time.Now(),
-		ClientIP:        snap.ClientIP,
-		Username:        snap.Username,
-		Database:        snap.Database,
-		QueryRaw:        sql,
-		QueryNormalized: normalized,
-		Fingerprint:     FingerprintSQL(normalized),
-		ProtocolMode:    "text",
-		QueryLength:     len(sql),
-		BytesIn:         snap.BytesIn,
-		BytesOut:        snap.BytesOut,
+		SessionID:        snap.ID,
+		Timestamp:        time.Now(),
+		ClientIP:         snap.ClientIP,
+		Username:         snap.Username,
+		Database:         snap.Database,
+		QueryRaw:         sql,
+		QueryNormalized:  normalized,
+		Fingerprint:      FingerprintSQL(normalized),
+		ProtocolMode:     "text",
+		QueryLength:      len(sql),
+		BytesIn:          snap.BytesIn,
+		BytesOut:         snap.BytesOut,
+		OutcomeVerified:  outcome.Verified,
+		Success:          outcome.Success,
+		Authority:        outcome.Authority,
+		TransactionState: outcome.TransactionState,
+		ErrorCode:        outcome.ErrorCode,
 	})
 	sess.IncrQueryCount()
 }
@@ -116,6 +140,11 @@ func (i *Interceptor) InterceptStmtPrepare(sessID string, stmtID uint32, sql str
 
 // InterceptStmtExecute emits a QueryEvent for a COM_STMT_EXECUTE command.
 func (i *Interceptor) InterceptStmtExecute(sess *session.Session, stmtID uint32) {
+	i.InterceptStmtExecuteOutcome(sess, stmtID, QueryOutcome{})
+}
+
+// InterceptStmtExecuteOutcome captures a prepared execution after its response is known.
+func (i *Interceptor) InterceptStmtExecuteOutcome(sess *session.Session, stmtID uint32, outcome QueryOutcome) {
 	snap := sess.Snapshot()
 	key := stmtKey(snap.ID, stmtID)
 
@@ -128,18 +157,23 @@ func (i *Interceptor) InterceptStmtExecute(sess *session.Session, stmtID uint32)
 
 	normalized := NormalizeSQL(sql)
 	i.emit(QueryEvent{
-		SessionID:       snap.ID,
-		Timestamp:       time.Now(),
-		ClientIP:        snap.ClientIP,
-		Username:        snap.Username,
-		Database:        snap.Database,
-		QueryRaw:        sql,
-		QueryNormalized: normalized,
-		Fingerprint:     FingerprintSQL(normalized),
-		ProtocolMode:    "prepared",
-		QueryLength:     len(sql),
-		BytesIn:         snap.BytesIn,
-		BytesOut:        snap.BytesOut,
+		SessionID:        snap.ID,
+		Timestamp:        time.Now(),
+		ClientIP:         snap.ClientIP,
+		Username:         snap.Username,
+		Database:         snap.Database,
+		QueryRaw:         sql,
+		QueryNormalized:  normalized,
+		Fingerprint:      FingerprintSQL(normalized),
+		ProtocolMode:     "prepared",
+		QueryLength:      len(sql),
+		BytesIn:          snap.BytesIn,
+		BytesOut:         snap.BytesOut,
+		OutcomeVerified:  outcome.Verified,
+		Success:          outcome.Success,
+		Authority:        outcome.Authority,
+		TransactionState: outcome.TransactionState,
+		ErrorCode:        outcome.ErrorCode,
 	})
 	sess.IncrQueryCount()
 }

@@ -23,20 +23,25 @@ import (
 // RawEvent is the full per-execution query event.
 // Kafka key: session_id (guarantees ordering within a session)
 type RawEvent struct {
-	EventType       string `json:"event_type"` // "query"
-	Protocol        string `json:"protocol"`
-	SessionID       string `json:"session_id"`
-	Timestamp       string `json:"timestamp"`
-	ClientIP        string `json:"client_ip"`
-	Username        string `json:"username"`
-	Database        string `json:"database"`
-	QueryRaw        string `json:"query_raw"`
-	QueryNormalized string `json:"query_normalized"`
-	Fingerprint     string `json:"fingerprint"`
-	ProtocolMode    string `json:"protocol_mode"`
-	QueryLength     int    `json:"query_length"`
-	BytesIn         int64  `json:"bytes_in"`
-	BytesOut        int64  `json:"bytes_out"`
+	EventType        string `json:"event_type"` // "query"
+	Protocol         string `json:"protocol"`
+	SessionID        string `json:"session_id"`
+	Timestamp        string `json:"timestamp"`
+	ClientIP         string `json:"client_ip"`
+	Username         string `json:"username"`
+	Database         string `json:"database"`
+	QueryRaw         string `json:"query_raw"`
+	QueryNormalized  string `json:"query_normalized"`
+	Fingerprint      string `json:"fingerprint"`
+	ProtocolMode     string `json:"protocol_mode"`
+	QueryLength      int    `json:"query_length"`
+	BytesIn          int64  `json:"bytes_in"`
+	BytesOut         int64  `json:"bytes_out"`
+	OutcomeVerified  bool   `json:"outcome_verified"`
+	Success          bool   `json:"success"`
+	Authority        string `json:"authority,omitempty"`
+	TransactionState string `json:"transaction_state,omitempty"`
+	ErrorCode        string `json:"error_code,omitempty"`
 }
 
 // AuthEvent is published on every authentication attempt (success or failure).
@@ -276,20 +281,25 @@ func (p *Publisher) ingestLoop(ctx context.Context, events <-chan interceptor.Qu
 				return
 			}
 			raw := RawEvent{
-				EventType:       "query",
-				Protocol:        "mysql",
-				SessionID:       qe.SessionID,
-				Timestamp:       qe.Timestamp.UTC().Format(time.RFC3339Nano),
-				ClientIP:        qe.ClientIP,
-				Username:        qe.Username,
-				Database:        qe.Database,
-				QueryRaw:        qe.QueryRaw,
-				QueryNormalized: qe.QueryNormalized,
-				Fingerprint:     qe.Fingerprint,
-				ProtocolMode:    qe.ProtocolMode,
-				QueryLength:     qe.QueryLength,
-				BytesIn:         qe.BytesIn,
-				BytesOut:        qe.BytesOut,
+				EventType:        "query",
+				Protocol:         "mysql",
+				SessionID:        qe.SessionID,
+				Timestamp:        qe.Timestamp.UTC().Format(time.RFC3339Nano),
+				ClientIP:         qe.ClientIP,
+				Username:         qe.Username,
+				Database:         qe.Database,
+				QueryRaw:         qe.QueryRaw,
+				QueryNormalized:  qe.QueryNormalized,
+				Fingerprint:      qe.Fingerprint,
+				ProtocolMode:     qe.ProtocolMode,
+				QueryLength:      qe.QueryLength,
+				BytesIn:          qe.BytesIn,
+				BytesOut:         qe.BytesOut,
+				OutcomeVerified:  qe.OutcomeVerified,
+				Success:          qe.Success,
+				Authority:        qe.Authority,
+				TransactionState: qe.TransactionState,
+				ErrorCode:        qe.ErrorCode,
 			}
 			select {
 			case p.rawBuf <- raw:

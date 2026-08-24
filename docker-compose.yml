@@ -408,6 +408,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8003:8003"
     environment:
       KAFKA_BROKERS: "redpanda:9092"
       OWN_REDPANDA_BOOTSTRAP: "redpanda:9092"
@@ -417,11 +418,15 @@ services:
       TOPIC_PG_INPUT: "pg-query-events"
       TOPIC_MYSQL_SESSION: "mysql-session-events"
       TOPIC_PG_SESSION: "pg-session-events"
+      TOPIC_MITRE_EVENTS: "mitre-events"
       TOPIC_SESSION_CLOSED: "session-closed-events"
       TOPIC_SESSION_PROFILES: "session-profiles"
       CONSUMER_GROUP: "session-module-group"
       CONSUMER_AUTO_OFFSET_RESET: "${CONSUMER_AUTO_OFFSET_RESET:-latest}"
       METRICS_PORT: "8000"
+      STATE_API_HOST: "0.0.0.0"
+      STATE_API_PORT: "8003"
+      STATE_MAX_SESSIONS: "5000"
       PYTHONUNBUFFERED: "1"
     depends_on:
       redpanda-init:

@@ -125,8 +125,9 @@ type Handler struct {
 	intercept *interceptor.Interceptor
 
 	// Phase 3: session/auth event publishing
-	pub        *publisher.Publisher
-	authMethod string // captured from server greeting auth plugin name
+	pub              *publisher.Publisher
+	authMethod       string // captured from server greeting auth plugin name
+	lastQueryOutcome interceptor.QueryOutcome
 }
 
 // NewHandler constructs a Handler.
@@ -627,15 +628,12 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 					"query_raw", truncate(sql, 300),
 				)
 			}
-			// Phase 3: intercept SQL (emits to publisher via interceptor's internal channel)
-			if h.intercept != nil {
-				h.intercept.InterceptTextQuery(h.sess, sql)
-			}
 
 			if shapingDecision.ShouldBlock {
 				if err := h.sendBlockResponse(shapeCtx); err != nil {
 					return err
 				}
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.mysqlTransactionState(), ErrorCode: "blocked"})
 				continue
 			}
 			// Synchronous deception-engine response synthesis.
@@ -653,6 +651,7 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 				if err := h.sendMySQLDeceptionResult(dec); err != nil {
 					return fmt.Errorf("send deception-engine fake result: %w", err)
 				}
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.mysqlTransactionState()})
 				continue
 			}
 
@@ -669,12 +668,14 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 						return fmt.Errorf("send fake trap OK: %w", err)
 					}
 				}
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.mysqlTransactionState()})
 				continue
 			}
 
 			if err := h.forwardAndDrain(ctx, cmdPkt, shapeCtx, true); err != nil {
 				return err
 			}
+			h.emitTextQueryOutcome(sql, h.lastQueryOutcome)
 
 		case comInitDB:
 			db := string(payload)
@@ -728,19 +729,20 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 			stmtID := binary.LittleEndian.Uint32(payload[:4])
 			h.logger.Debug("COM_STMT_EXECUTE", "stmt_id", stmtID)
 
-			// Phase 3: intercept prepared statement execute
-			if h.intercept != nil {
-				h.intercept.InterceptStmtExecute(h.sess, stmtID)
-			}
-
 			if shapingDecision.ShouldBlock {
 				if err := h.sendBlockResponse(shapeCtx); err != nil {
 					return err
+				}
+				if h.intercept != nil {
+					h.intercept.InterceptStmtExecuteOutcome(h.sess, stmtID, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.mysqlTransactionState(), ErrorCode: "blocked"})
 				}
 				continue
 			}
 			if err := h.forwardAndDrain(ctx, cmdPkt, shapeCtx, true); err != nil {
 				return err
+			}
+			if h.intercept != nil {
+				h.intercept.InterceptStmtExecuteOutcome(h.sess, stmtID, h.lastQueryOutcome)
 			}
 
 		case comStmtClose:
@@ -851,6 +853,7 @@ func (h *Handler) handleStmtPrepare(ctx context.Context, cmdPkt []byte, sql stri
 // response packets back to the client. isQuery=true enables row counting.
 // Fix 2 equivalent: handles multi-resultset, LOCAL INFILE, and all edge cases.
 func (h *Handler) forwardAndDrain(ctx context.Context, cmdPkt []byte, sc *shaper.ShapeContext, isQuery bool) error {
+	h.lastQueryOutcome = interceptor.QueryOutcome{Verified: isQuery, Success: true, Authority: "backend", TransactionState: h.mysqlTransactionState()}
 	if err := h.sendPacket(h.backendConn, cmdPkt, 0); err != nil {
 		return fmt.Errorf("send to backend: %w", err)
 	}
@@ -916,6 +919,7 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 
 		switch pkt[0] {
 		case packetOK:
+			h.updateMySQLStatus(pkt)
 			// Check for more results (SERVER_MORE_RESULTS_EXISTS in status flags)
 			if err := h.sendPacket(h.clientConn, pkt, seqNum); err != nil {
 				return err
@@ -927,9 +931,13 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 			return nil
 
 		case packetERR:
+			h.lastQueryOutcome.Success = false
+			h.lastQueryOutcome.ErrorCode = mysqlErrorCode(pkt)
+			h.lastQueryOutcome.TransactionState = h.mysqlTransactionState()
 			return h.sendPacket(h.clientConn, pkt, seqNum)
 
 		case packetEOF:
+			h.updateMySQLStatus(pkt)
 			if err := h.sendPacket(h.clientConn, pkt, seqNum); err != nil {
 				return err
 			}
@@ -1022,6 +1030,7 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 				}
 
 				if isResultSetTerminator(rowPkt) {
+					h.updateMySQLStatus(rowPkt)
 					// End of rows — always forward terminator
 					if err := h.sendPacket(h.clientConn, rowPkt, seqNum); err != nil {
 						return err
@@ -1044,6 +1053,35 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 			// More results — outer loop continues
 		}
 	}
+}
+
+func (h *Handler) emitTextQueryOutcome(sql string, outcome interceptor.QueryOutcome) {
+	if h.intercept != nil && h.sess != nil {
+		h.intercept.InterceptTextQueryOutcome(h.sess, sql, outcome)
+	}
+}
+
+func (h *Handler) mysqlTransactionState() string {
+	if h.sess != nil && h.sess.Snapshot().InTransaction {
+		return "in_transaction"
+	}
+	return "idle"
+}
+
+func (h *Handler) updateMySQLStatus(pkt []byte) {
+	status, ok := mysqlStatusFlags(pkt)
+	if !ok || h.sess == nil {
+		return
+	}
+	h.sess.SetTransactionStatus(status&0x0001 != 0, status&0x0002 != 0)
+	h.lastQueryOutcome.TransactionState = h.mysqlTransactionState()
+}
+
+func mysqlErrorCode(pkt []byte) string {
+	if len(pkt) < 3 || pkt[0] != packetERR {
+		return "mysql_error"
+	}
+	return fmt.Sprintf("mysql_%d", uint16(pkt[1])|uint16(pkt[2])<<8)
 }
 
 // handleLocalInfile implements Fix 2 (MySQL): streams LOCAL INFILE data from
@@ -1561,36 +1599,37 @@ func firstByte(pkt []byte) byte {
 
 // hasMoreResults checks the SERVER_MORE_RESULTS_EXISTS flag (bit 3) in an OK/EOF packet.
 func hasMoreResults(pkt []byte) bool {
+	status, ok := mysqlStatusFlags(pkt)
+	return ok && status&0x0008 != 0
+}
+
+func mysqlStatusFlags(pkt []byte) (uint16, bool) {
 	if len(pkt) < 3 {
-		return false
+		return 0, false
 	}
-	// OK: 0x00 + affected_rows(lenenc) + last_insert_id(lenenc) + status_flags(2)
-	// EOF: 0xFE + warnings(2) + status_flags(2)
 	var statusOffset int
 	if pkt[0] == packetOK {
-		// Skip affected_rows and last_insert_id (both lenenc)
 		pos := 1
 		_, n, err := readLenEnc(pkt, pos)
 		if err != nil {
-			return false
+			return 0, false
 		}
 		pos += n
 		_, n, err = readLenEnc(pkt, pos)
 		if err != nil {
-			return false
+			return 0, false
 		}
 		pos += n
 		statusOffset = pos
 	} else if pkt[0] == packetEOF {
-		statusOffset = 3 // 0xFE + warnings(2)
+		statusOffset = 3
 	} else {
-		return false
+		return 0, false
 	}
 	if statusOffset+2 > len(pkt) {
-		return false
+		return 0, false
 	}
-	status := uint16(pkt[statusOffset]) | uint16(pkt[statusOffset+1])<<8
-	return status&0x0008 != 0 // SERVER_MORE_RESULTS_EXISTS = 0x0008
+	return uint16(pkt[statusOffset]) | uint16(pkt[statusOffset+1])<<8, true
 }
 
 // readLenEnc reads a length-encoded integer from b at position pos.

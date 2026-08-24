@@ -4,11 +4,11 @@ Checkpoint date: 2026-08-24
 
 Repository: `F:\b\Capstone-main`
 
-Branch / HEAD: `main` / `84e61b0` (`Document local predeployment validation checkpoint`)
+Branch / HEAD: main / b92e4f0 (Freeze deterministic baseline behavior)
 
 ## Repository and runtime checkpoint
 
-- Worktree before this checkpoint: modified `AGENTS.md`; untracked `AGENTS_UPDATED.md`.
+- Worktree at Phase 2 handoff: Phase 2 implementation and validation artifacts are uncommitted for manual review/commit.
 - `docker compose -f docker-compose.yml config --services` succeeds and defines 26 services.
 - The existing stack was started with builds and pulls disabled. All 25 long-running services are up; one-shot `redpanda-init` exited `0` as designed.
 - Nineteen bounded health/readiness/metrics requests returned HTTP 200. Prometheus has 8/8 active targets up, both Redis services return `PONG`, and all 11 required Redpanda topics exist.
@@ -16,7 +16,9 @@ Branch / HEAD: `main` / `84e61b0` (`Document local predeployment validation chec
 - Fresh protocol smoke passed through both proxies. PostgreSQL returned consistent database/user state; MySQL returned deterministic catalog data and synthetic trap-table data.
 - Fresh MySQL session `d1329d3d-4735-40a6-8b95-f44a196ca1cf` was traced through evidence, MITRE `T1213.006`, CRITICAL risk, scaling telemetry, sandbox replay (4 findings), hardening (1 recommendation), and bounded local reporting.
 - Phase 1 run `baseline-1787551496-5f7480` passed 40/40 deterministic baseline assertions across benign MySQL/PostgreSQL, catalog enumeration, synthetic-token allowlisting, trap behavior, MITRE, logical scaling, and AI Agent v1 with stored evidence linkage.
-- No stack rebuild, long load test, deployment, or GitHub push was performed.
+- Phase 2 live validation passed with PostgreSQL session 01440315-4894-4efc-b05b-d35b1413e0b0 (19 confirmed outcomes) and MySQL session 357a65e1-81f0-42de-a433-461bda8f4283 (13 confirmed outcomes), including CRUD, rollback, role/permission, schema discovery, DROP failure, and state consistency.
+- Phase 2 unit/regression checks passed: session/state Python 197/197, both Go proxy suites plus go vet, AI v1 4/4, and frozen baseline run baseline-1787554852-687956 40/40, and local predeployment security gate 17/17.
+- Only mysqlproxy, pgproxy, session-module, and the failed-baseline ai-agent attribution fix were rebuilt locally. No whole-stack rebuild, load test, deployment, or GitHub push was performed.
 
 ## Phase 0 component evidence
 
@@ -35,10 +37,10 @@ Branch / HEAD: `main` / `84e61b0` (`Document local predeployment validation chec
 
 | Phase | Claimed status | Evidence found in repo | Verification result | Next action |
 |---|---|---|---|---|
-| 0 - Verify current checkpoint | Mandatory | All required directories/Compose services exist; all long-running services are up; bounded readiness, protocol, evidence, MITRE, scaling, replay, hardening, reporting, and observability checks passed | **VERIFIED** | Freeze this checkpoint and start Phase 1 only. |
-| 1 - Freeze deterministic baseline | Required after Phase 0 | `BASELINE_BEHAVIOR.md`; `tests/baseline/capture_baseline.ps1`; `expected_baseline.json`; fresh live capture of all seven required behaviors | **VERIFIED:** 40/40 assertions passed; outputs, latency, MITRE, risk, trap, rules, scaling, AI v1, and evidence linkage recorded | Freeze fixtures and start Phase 2 only. |
-| 2 - Authoritative session/database state | Pending | Existing per-session database, exposure, deterministic rows, and mutation state; no complete required state model or acceptance suite | **IMPLEMENTED/PARTIAL, NOT VERIFIED TO PHASE 2** | Add only after Phase 1; prove CRUD, transaction, permission, discovery, and cross-query consistency. |
-| 3 - Strategy registry | Pending | No `adaptive_deception/`, registry, strategy metadata, or `strategy_id` implementation | **PENDING** | Do not start before Phase 2 passes. |
+| 0 - Verify current checkpoint | Mandatory | All required directories/Compose services exist; all long-running services are up; bounded readiness, protocol, evidence, MITRE, scaling, replay, hardening, reporting, and observability checks passed | **VERIFIED** | Complete; preserve. |
+| 1 - Freeze deterministic baseline | Required after Phase 0 | BASELINE_BEHAVIOR.md; baseline fixtures; targeted AI v1 session attribution; fresh post-Phase-2 run baseline-1787554852-687956 | **VERIFIED:** 40/40 assertions passed after correcting nondeterministic latest-session attribution | Complete; keep as regression gate. |
+| 2 - Authoritative session/database state | Required after Phase 1 | Confirmed outcome fields in both proxies; session_module/authoritative_state.py; loopback state API; test_authoritative_state.py; tests/state/validate_authoritative_state.ps1 | **VERIFIED:** Python 197/197; Go tests/vet pass; live PostgreSQL 19 and MySQL 13 confirmed outcomes; CRUD, rollback, role/permission, discovery, DROP failure, and consistency pass | Start Phase 3 only. Persistence remains Phase 24; PostgreSQL extended protocol stays explicitly unverified/no-mutation. |
+| 3 - Strategy registry | Pending | No adaptive_deception registry, strategy metadata, or approved strategy implementation | **PENDING / NEXT** | Start Phase 3 only; map existing behavior before adding strategies. |
 | 4 - Behavior-state feature model | Pending | Existing session/MITRE/risk inputs only; no normalized behavior-state module or determinism tests | **PENDING** | Do not start before Phase 3 passes. |
 | 5 - Policy guard/action space | Pending | No policy guard, approved-action set, or allowed/default action output | **PENDING** | Do not start before Phase 4 passes. |
 | 6 - Rule-only Strategy Agent | Pending | No selector output, selector type, or policy version implementation | **PENDING** | Do not start before Phase 5 passes. |
@@ -59,9 +61,9 @@ Branch / HEAD: `main` / `84e61b0` (`Document local predeployment validation chec
 | 27 - Adaptive observability | Pending | Baseline Prometheus/Grafana and scaling/AI panels exist | **IMPLEMENTED/PARTIAL:** required adaptive/learning/evolution metrics and panels absent | Add after their producers exist. |
 | 28 - Physical Kubernetes/KEDA scaling | Claimed/verify | Manifests plus committed live evidence for pod scale-up/down and safety controls | **VERIFIED committed artifact; not re-run** | Do not revisit unless a verification fails or upstream scaling behavior changes. |
 | 29-31 - Research, learning evaluation, resource feasibility | Pending | Bounded calibration and local test reports only; no four-mode adaptive experiment package | **PENDING** | Run after the adaptive system is complete. No long tests in this checkpoint. |
-| 32 - Pre-public security gate | Pending | `scripts/predeploy_security_gate.ps1`; committed local result `PASS_LOCAL_PREDEPLOY (17/17)` | **IMPLEMENTED/PARTIAL:** local gate verified as artifact; deployment-specific controls remain | Re-run locally after all code phases, then complete provider-specific checks before exposure. |
+| 32 - Pre-public security gate | Pending deployment-specific controls | scripts/predeploy_security_gate.ps1; fresh local run PASS_LOCAL_PREDEPLOY 17/17; no public exposure | **VERIFIED LOCAL PORTION:** loopback listeners, isolated databases/networks, disabled Windows PostgreSQL, redaction, kill switch, and alerts pass | Re-run after all code phases; provider egress, budget delivery, public firewall, and provider kill-switch checks remain deployment-only. |
 | 33-35 - Deployment, observation, final research package | Do not start / pending | No public deployment artifacts or real-world observation dataset | **PENDING / INTENTIONALLY DEFERRED** | Start only after all local phases and Phase 32 pass and the user explicitly approves deployment. |
 
 ## Checkpoint decision
 
-Phases 0 and 1 are complete. The exact next implementation phase is **Phase 2 - Build Explicit Authoritative Session/Database State**. No Phase 2 work was started.
+Phases 0, 1, and 2 are complete. The exact next implementation phase is **Phase 3 - Refactor Existing Rules into a Deception Strategy Registry**. Phase 3 has not been started.

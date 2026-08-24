@@ -92,5 +92,49 @@ class HardeningBriefTests(unittest.TestCase):
         self.assertTrue(any("manual replica target of 3" in item for item in brief["recommended_response"]))
 
 
+    @patch("main.post_json")
+    @patch("main.prometheus_query")
+    @patch("main.get_json")
+    def test_brief_can_target_one_confirmed_session(self, get_json, prometheus_query, post_json):
+        get_json.side_effect = [
+            {
+                "scale_pressure": 0.7,
+                "current_replicas": 3,
+                "trap_triggers": 2,
+                "control": {},
+            },
+            {
+                "events": [
+                    {
+                        "session_id": "older-session",
+                        "timestamp": "2099-01-01T00:00:00Z",
+                        "raw_score": 0.9,
+                        "smoothed_score": 0.9,
+                    },
+                    {
+                        "session_id": "target-session",
+                        "timestamp": "2099-01-01T00:00:01Z",
+                        "raw_score": 0.8,
+                        "smoothed_score": 0.8,
+                    },
+                ]
+            },
+            {"available": False},
+        ]
+        prometheus_query.return_value = {"value": None, "status": "success"}
+        post_json.return_value = {"stored": True, "session_id": "target-session"}
+
+        brief = build_brief("target-session")
+
+        self.assertEqual(brief["risk_level"], "high")
+        self.assertIn("target-session", brief["summary"])
+        self.assertEqual(brief["evidence"]["attribution_scope"], "session")
+        self.assertNotIn("older-session", brief["summary"])
+        recent = brief["evidence"]["recent_scale_events"]
+        self.assertEqual([event["session_id"] for event in recent], ["target-session"])
+        self.assertEqual(brief["evidence"]["evidence_store_link"]["session_id"], "target-session")
+        self.assertEqual(post_json.call_args.args[1]["session_id"], "target-session")
+
+
 if __name__ == "__main__":
     unittest.main()

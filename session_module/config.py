@@ -41,6 +41,7 @@ TOPIC_MYSQL_INPUT        = os.getenv("TOPIC_MYSQL_INPUT", "mysql-query-events")
 TOPIC_PG_INPUT           = os.getenv("TOPIC_PG_INPUT",    "pg-query-events")
 TOPIC_MYSQL_SESSION      = os.getenv("TOPIC_MYSQL_SESSION", "mysql-session-events")
 TOPIC_PG_SESSION         = os.getenv("TOPIC_PG_SESSION",    "pg-session-events")
+TOPIC_MITRE_EVENTS       = os.getenv("TOPIC_MITRE_EVENTS",  "mitre-events")
 
 CONSUMER_GROUP           = os.getenv("CONSUMER_GROUP", "session-module-group")
 CONSUMER_AUTO_OFFSET_RESET = os.getenv("CONSUMER_AUTO_OFFSET_RESET", "latest")
@@ -63,6 +64,9 @@ DEAD_LETTER_MAX_RAW_BYTES = int(os.getenv("DEAD_LETTER_MAX_RAW_BYTES", "16384"))
 # Prometheus
 # ------------------------------------------------------------------
 METRICS_PORT             = int(os.getenv("METRICS_PORT", 8000))
+STATE_API_HOST           = os.getenv("STATE_API_HOST", "0.0.0.0")
+STATE_API_PORT           = int(os.getenv("STATE_API_PORT", 8003))
+STATE_MAX_SESSIONS       = int(os.getenv("STATE_MAX_SESSIONS", 5000))
 
 # Kafka producer ack wait for low-volume session/profile outputs.
 PRODUCER_ACK_TIMEOUT_SECONDS = float(os.getenv("PRODUCER_ACK_TIMEOUT_SECONDS", "10"))
