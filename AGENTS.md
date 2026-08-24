@@ -1090,6 +1090,41 @@ Do not freeze numeric weights until calibration tests exist.
 
 A completed session can produce reproducible per-decision and per-session reward values.
 
+### Phase 9 validation record (2026-08-24)
+
+```text
+Implementation: session_module/reward_model.py (deception-reward-v1), computed
+on demand from linked strategy-telemetry-v1 records.
+
+Every completed decision produces the ten required deterministic dimensions:
+engagement (queries plus duration), intelligence gain, behavior novelty, MITRE
+progression, meaningful verified trap interaction, latency, resource, protocol
+error, authoritative-state inconsistency, and policy-safety penalties. Completed
+session output contains every per-decision vector plus a labeled arithmetic mean
+for each numeric dimension. Open outcomes remain PENDING; invalid linkage,
+duplicates, cross-session records, missing penalty evidence, negative/nonfinite
+values, and forged action spaces fail closed.
+
+GET /reward/decision/{decision_id}
+GET /reward/session/{session_id}
+
+No numeric weights were frozen: calibration_status is
+REQUIRES_PHASE_10_CALIBRATION, weight_profile is null, and composite_reward is
+null. This prevents uncalibrated session duration or any single dimension from
+silently becoming the optimization target.
+
+Validation: focused reward/telemetry/adaptation/state 31/31; complete affected
+session-module 229/229. Live synthetic Redpanda session phase9-live-0083d098
+produced four completed per-decision vectors and one reproducible session vector;
+all ten dimensions were present, repeated JSON was identical, protocol error
+evidence was counted, state/safety penalties were zero, and raw SQL/fingerprint
+evidence was absent.
+
+Runtime change: only session-module was rebuilt/recreated. No calibrated weights,
+scalar reward, learner, workload generator, persistence, new topic/service/port,
+database connection, deployment, load test, or GitHub push was introduced.
+```
+
 ---
 
 ## Phase 10 — Build Controlled Attack Workloads

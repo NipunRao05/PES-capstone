@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from behavior_state import BehaviorStateStore
+from reward_model import DeceptionRewardModel
 from strategy_telemetry import StrategyTelemetryStore
 
 _RELATION = r'([A-Za-z_][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)?)'
@@ -153,6 +154,7 @@ class AuthoritativeStateStore:
         self._transaction_snapshots: dict[str, dict] = {}
         self._behavior = BehaviorStateStore(self.max_sessions)
         self._telemetry = StrategyTelemetryStore(self.max_sessions * 20)
+        self._rewards = DeceptionRewardModel()
         self._lock = threading.RLock()
         self.ready = False
 
@@ -419,6 +421,8 @@ class AuthoritativeStateStore:
                 },
                 "query_count": state.query_count,
                 "failed_query_count": state.failed_query_count,
+                "unverified_query_count": state.unverified_query_count,
+                "state_inconsistency_count": self._consistency_violation_count(state),
                 "observed_at": state.updated_at,
                 "closed": state.closed,
                 "closed_at": state.closed_at,
@@ -439,6 +443,32 @@ class AuthoritativeStateStore:
 
     def list_strategy_telemetry(self, limit: int = 100) -> list[dict]:
         return self._telemetry.list(limit)
+
+    @staticmethod
+    def _consistency_violation_count(state: AuthoritativeSessionState) -> int:
+        violations = len(state.created_objects & state.dropped_objects)
+        violations += len(state.visible_tables & state.dropped_objects)
+        if state.next_strategy_ready and (
+            state.next_strategy_id not in _APPROVED_STRATEGY_IDS
+            or state.next_strategy_selector_type != "rule"
+            or state.next_strategy_policy_version != "rule-v1"
+        ):
+            violations += 1
+        if (
+            state.closed
+            and state.query_count >= state.expected_query_count
+            and state.transaction_state != "idle"
+        ):
+            violations += 1
+        return violations
+
+    def get_decision_reward(self, decision_id: str) -> dict | None:
+        linked = self._telemetry.get(decision_id)
+        return self._rewards.decision(linked) if linked else None
+
+    def get_session_reward(self, session_id: str) -> dict | None:
+        linked = self._telemetry.session(session_id)
+        return self._rewards.session(linked) if linked["records"] else None
 
     def set_next_strategy(
         self, session_id: str, decision: dict, expected_query_count: int
@@ -533,6 +563,18 @@ class _StateAPIHandler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "invalid limit"})
                 return
             self._send(200, {"records": self.store.list_strategy_telemetry(limit)})
+            return
+        reward_decision_prefix = "/reward/decision/"
+        if parsed.path.startswith(reward_decision_prefix):
+            decision_id = unquote(parsed.path[len(reward_decision_prefix):])
+            reward = self.store.get_decision_reward(decision_id)
+            self._send(200, reward) if reward else self._send(404, {"error": "decision not found"})
+            return
+        reward_session_prefix = "/reward/session/"
+        if parsed.path.startswith(reward_session_prefix):
+            session_id = unquote(parsed.path[len(reward_session_prefix):])
+            reward = self.store.get_session_reward(session_id)
+            self._send(200, reward) if reward else self._send(404, {"error": "session not found"})
             return
         decision_prefix = "/telemetry/decision/"
         if parsed.path.startswith(decision_prefix):

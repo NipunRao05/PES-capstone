@@ -92,6 +92,12 @@ class StrategyTelemetryStore:
             ),
             "errors": _nonnegative_int(snapshot.get("failed_query_count"))
             + _nonnegative_int(behavior.get("failed_auth_count")),
+            "protocol_errors": _nonnegative_int(
+                snapshot.get("unverified_query_count")
+            ),
+            "state_inconsistencies": _nonnegative_int(
+                snapshot.get("state_inconsistency_count")
+            ),
             "mitre_stage": _stage(
                 behavior.get("mitre_stage") or mitre.get("phase")
             ),
@@ -195,6 +201,8 @@ class StrategyTelemetryStore:
                 },
                 "disconnect_time": baseline["closed_at"],
                 "errors": 0,
+                "protocol_errors": 0,
+                "state_inconsistencies": 0,
                 "latency": self._cost(latency_ms),
                 "CPU_cost": self._cost(cpu_cost_ms),
                 "memory_cost": _nonnegative_int(memory_cost_bytes),
@@ -270,6 +278,15 @@ class StrategyTelemetryStore:
                     - baseline["trap_trigger_count"],
                 )
                 outcome["errors"] = max(0, current["errors"] - baseline["errors"])
+                outcome["protocol_errors"] = max(
+                    0,
+                    current["protocol_errors"] - baseline["protocol_errors"],
+                )
+                outcome["state_inconsistencies"] = max(
+                    0,
+                    current["state_inconsistencies"]
+                    - baseline["state_inconsistencies"],
+                )
                 from_stage = baseline["mitre_stage"]
                 outcome["attacker_progression"] = {
                     "from_stage": from_stage,
