@@ -353,7 +353,7 @@ Two-speed asynchronous adaptation        VERIFIED (Phase 7, 2026-08-24)
 Reward/outcome telemetry                 VERIFIED (Phases 8-9, 2026-08-24)
 Contextual bandit                        VERIFIED shadow v1 (Phase 11, 2026-08-24)
 Bounded learned strategy selection       VERIFIED (Phase 12, 2026-08-24)
-Learning & Policy Improvement Agent      PENDING
+Learning & Policy Improvement Agent      VERIFIED retrospective v1 (Phase 13, 2026-08-24)
 Action-space gap proposals               PENDING
 Blue-team review workflow                PENDING
 Candidate-strategy validation pipeline   PENDING
@@ -1361,6 +1361,50 @@ identify action-space coverage gaps
 ### Acceptance
 
 The agent produces evidence-backed evaluation of past decisions without modifying live policy.
+
+### Phase 13 validation record (2026-08-24)
+
+```text
+Implementation: learning_agent/retrospective.py
+(retrospective-learning-v1) plus a bounded GET-only internal evidence client and
+local CLI. It is a standalone offline module: no new service, port, topic, or
+live query-path integration was added.
+
+Inputs are completed strategy-telemetry-v1 records, linked
+deception-reward-v1 vectors, and a non-degraded approved strategy-registry-v1
+snapshot. The analyzer rejects raw SQL/source/fingerprint fields, incomplete or
+cross-session evidence, duplicate IDs/actions, unapproved action spaces, forged
+telemetry/decision contracts, nonfinite/fractional counts, and reward vectors
+that do not exactly match their observed outcomes.
+
+Output reconstructs the protocol and selected-strategy sequence, evaluates every
+decision, identifies important decisions from deterministic evidence, attaches
+verified observed reward dimensions, emits policy-review signals, and ranks only
+currently allowed/approved alternatives by evidence availability with supporting
+decision IDs. No performance rank is claimed because the reward scalar remains
+uncalibrated.
+
+Phase boundaries are explicit: similar-session retrieval and counterfactual
+estimates return DEFERRED_PHASE_14 with no claim/confidence; coverage-gap and
+proposal work returns DEFERRED_PHASE_15. Authority flags prove read-only=true,
+live_policy_mutation=false, model_training=false, strategy_activation=false,
+and infrastructure_authority=false.
+
+Validation: focused learning-agent tests 8/8. Completed trap session
+2b0de47f-b6d6-48d2-9c69-a22efdfaaaea produced deterministic analysis
+LA-3efb4787482bb1d27a80a506 for 2/2 decisions, with input SHA-256
+0d446d6a52a4dd15fdfe1431ba92a65975c9c87c43fbdc3410435811bd4191aa,
+approved-only alternatives, no deterministic policy failure, null
+counterfactual claim, and no raw SQL/source/database fields. Benign session
+fb76ece8-9dc7-4eea-b88e-bc9685a6af3a also completed; missing evidence was
+rejected with a bounded error.
+Frozen baseline baseline-1787566523-0fe5cb passed 40/40, and the local
+predeployment security gate passed 17/17 with no public exposure.
+
+Runtime change: none. No existing image/service was rebuilt or recreated. No
+policy/model write, training, persistence, database connection, shell authority,
+load test, deployment, or GitHub push was introduced.
+```
 
 ---
 
@@ -2645,13 +2689,14 @@ Phase 8 — Decision and Outcome Telemetry         VERIFIED
 Phase 9 — Deception Reward Model                 VERIFIED
 Phase 10 — Controlled Attack Workloads           VERIFIED
 Phase 11 — Contextual Bandit Shadow Mode         VERIFIED
-Phase 12 — Bounded Learned Strategy Selection    VERIFIED
+Phase 12 - Bounded Learned Strategy Selection    VERIFIED
+Phase 13 - Learning & Policy Improvement Agent   VERIFIED
 ~~~
 
-Start **Phase 13 — Learning & Policy Improvement Agent** only.
+Start **Phase 14 - Similar-Session Retrieval and Counterfactual Evaluation** only.
 
-Do **not** start Phase 14, any local LLM, deployment, or public exposure work
-until Phase 13 passes its acceptance checks. Continue to preserve the
+Do **not** start Phase 15, any local LLM, deployment, or public exposure work
+until Phase 14 passes its acceptance checks. Continue to preserve the
 deterministic D0 fallback and ordered roadmap.
 
 ---
