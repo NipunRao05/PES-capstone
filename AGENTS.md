@@ -355,7 +355,7 @@ Contextual bandit                        VERIFIED shadow v1 (Phase 11, 2026-08-2
 Bounded learned strategy selection       VERIFIED (Phase 12, 2026-08-24)
 Learning & Policy Improvement Agent      VERIFIED retrospective v1 (Phase 13, 2026-08-24)
 Similar-session counterfactual analysis VERIFIED observational v1 (Phase 14, 2026-08-24)
-Action-space gap proposals               PENDING
+Action-space gap proposals               VERIFIED recommendation v1 (Phase 15, 2026-08-24)
 Blue-team review workflow                PENDING
 Candidate-strategy validation pipeline   PENDING
 Local CPU LLM runtime                    PENDING
@@ -1532,6 +1532,38 @@ It may **not activate them**.
 ### Acceptance
 
 New capabilities always enter a human-review queue.
+
+### Phase 15 validation record (2026-08-24)
+
+```text
+Implementation: learning_agent/gap_detection.py (action-space-gap-v1 and
+strategy-gap-proposal-v1) plus the bounded gap_main.py CLI.
+
+Classification: deterministic ACTION_SPACE_GAP, NO_GAP_DETECTED, or
+INSUFFICIENT_EVIDENCE. A proposal requires a recurring high-diversity structured
+behavior pattern not mapped to an existing strategy theme, at least three distinct
+comparable completed historical sessions, repeated weak safe outcomes, and evidence
+across at least two existing strategies. One weak session, one disconnect, missing
+counterfactual support, or insufficient alternatives cannot create a proposal.
+
+Proposal authority: recommendation-only, read-only, non-deployable, and always
+REQUIRES_REVIEW. Registry, policy, rules, live responses, strategy activation,
+infrastructure, and approval state cannot be changed. Phase 16 review workflow and
+queue writes are explicitly NOT_IMPLEMENTED. No LLM is used.
+
+Validation: 10/10 focused Phase 15 tests and 31/31 complete learning-agent tests
+passed. Coverage includes GAP/NO_GAP/INSUFFICIENT classification, stable proposal
+IDs/evidence under reordered identical history, structured evidence linkage,
+confidence cap, known-theme coverage, malformed target/history rejection,
+incomplete-history exclusion, zero authority, and preservation of Phase 14 tests.
+Live target 2b0de47f-b6d6-48d2-9c69-a22efdfaaaea returned NO_GAP_DETECTED twice
+as GD-63f2162c0ec0088673dc4d98 with 2 decisions, 7 completed historical sessions,
+1 incomplete session excluded, and 0 proposals. Missing target evidence was rejected.
+
+Runtime change: none. No service/image was rebuilt or recreated. No registry,
+policy, rule, database, persistence, service, port, topic, LLM, deployment, or
+GitHub push change was introduced. Phase 16 was not started.
+```
 
 ---
 
@@ -2723,11 +2755,12 @@ Phase 11 — Contextual Bandit Shadow Mode         VERIFIED
 Phase 12 - Bounded Learned Strategy Selection    VERIFIED
 Phase 13 - Learning & Policy Improvement Agent   VERIFIED
 Phase 14 - Similar-Session Counterfactuals        VERIFIED
+Phase 15 - Action-Space Gap Detection             VERIFIED
 ~~~
 
-The next pending phase is **Phase 15 - Action-Space Gap Detection**.
+The next pending phase is **Phase 16 - Blue-Team Review Workflow**.
 
-Phase 15 was not started in the Phase 14 checkpoint. Continue to preserve the
+Phase 16 was not started in the Phase 15 checkpoint. Continue to preserve the
 deterministic D0 fallback and ordered roadmap; do not start local LLM, deployment,
 or public exposure work out of order.
 
