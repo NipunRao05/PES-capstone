@@ -92,3 +92,76 @@ class SafeInternalEvidenceClient:
         reward = self._get(f"{self.session_base_url}/reward/session/{encoded}")
         registry = self._get(f"{self.registry_base_url}/strategies")
         return telemetry, reward, registry
+
+    @staticmethod
+    def _validated_session_id(session_id: str) -> str:
+        session_id = str(session_id or "").strip()
+        if not _SESSION_ID.fullmatch(session_id):
+            raise ValueError("session_id contains unsupported characters")
+        return session_id
+
+    def load_session_with_history(
+        self,
+        session_id: str,
+        decision_limit: int = 100,
+        history_limit: int = 25,
+    ) -> tuple[dict, dict, list[dict], dict, dict]:
+        """Load one target and a bounded set of completed historical sessions."""
+        session_id = self._validated_session_id(session_id)
+        for value, name, upper in (
+            (decision_limit, "decision_limit", 250),
+            (history_limit, "history_limit", 50),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= upper:
+                raise ValueError(f"{name} must be an integer between 1 and {upper}")
+        encoded = quote(session_id, safe="")
+        target_telemetry = self._get(f"{self.session_base_url}/telemetry/session/{encoded}")
+        target_reward = self._get(f"{self.session_base_url}/reward/session/{encoded}")
+        registry = self._get(f"{self.registry_base_url}/strategies")
+        listing = self._get(
+            f"{self.session_base_url}/telemetry/decisions?limit={decision_limit}"
+        )
+        records = listing.get("records")
+        if not isinstance(records, list) or len(records) > decision_limit:
+            raise ValueError("historical decision listing is invalid")
+
+        candidate_ids: list[str] = []
+        for linked in records:
+            if not isinstance(linked, dict) or not isinstance(linked.get("decision"), dict):
+                raise ValueError("historical decision listing is invalid")
+            candidate = self._validated_session_id(linked["decision"].get("session_id"))
+            if candidate != session_id and candidate not in candidate_ids:
+                candidate_ids.append(candidate)
+            if len(candidate_ids) >= history_limit:
+                break
+
+        history: list[dict] = []
+        unavailable: list[str] = []
+        incomplete: list[str] = []
+        for candidate in candidate_ids:
+            candidate_encoded = quote(candidate, safe="")
+            try:
+                telemetry = self._get(
+                    f"{self.session_base_url}/telemetry/session/{candidate_encoded}"
+                )
+                reward = self._get(
+                    f"{self.session_base_url}/reward/session/{candidate_encoded}"
+                )
+            except ValueError:
+                unavailable.append(candidate)
+                continue
+            if reward.get("status") != "COMPLETE":
+                incomplete.append(candidate)
+                continue
+            history.append({"telemetry": telemetry, "reward": reward})
+        summary = {
+            "decision_scan_limit": decision_limit,
+            "history_session_limit": history_limit,
+            "candidate_session_count": len(candidate_ids),
+            "loaded_session_count": len(history),
+            "unavailable_session_count": len(unavailable),
+            "unavailable_session_ids": unavailable,
+            "incomplete_session_count": len(incomplete),
+            "incomplete_session_ids": incomplete,
+        }
+        return target_telemetry, target_reward, history, registry, summary

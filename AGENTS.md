@@ -354,6 +354,7 @@ Reward/outcome telemetry                 VERIFIED (Phases 8-9, 2026-08-24)
 Contextual bandit                        VERIFIED shadow v1 (Phase 11, 2026-08-24)
 Bounded learned strategy selection       VERIFIED (Phase 12, 2026-08-24)
 Learning & Policy Improvement Agent      VERIFIED retrospective v1 (Phase 13, 2026-08-24)
+Similar-session counterfactual analysis VERIFIED observational v1 (Phase 14, 2026-08-24)
 Action-space gap proposals               PENDING
 Blue-team review workflow                PENDING
 Candidate-strategy validation pipeline   PENDING
@@ -1444,6 +1445,36 @@ D4 is estimated to have performed better under similar contexts.
 ### Acceptance
 
 Counterfactual estimates include uncertainty/confidence and supporting session IDs.
+
+### Phase 14 validation record (2026-08-24)
+
+```text
+Implementation: learning_agent/similarity.py (similar-session-v1 and
+counterfactual-estimate-v1), a bounded history loader in learning_agent/client.py,
+and counterfactual_main.py for offline/local analysis.
+
+Method: independently validated completed telemetry/reward bundles are converted
+to deterministic bounded structured features. Same-protocol nearest decisions are
+ordered by normalized RMS distance. Only alternatives inside the target decision's
+recorded approved action space and actually observed in qualifying historical
+decisions may receive an estimate. Estimates include per-dimension uncertainty,
+evidence confidence, and supporting session/decision IDs. Unsupported alternatives
+remain INSUFFICIENT_EVIDENCE. No causal or uncalibrated composite better/worse claim
+is produced.
+
+Validation: learning-agent 21/21 tests passed. Tests cover deterministic bounded
+normalization, uncertainty/confidence/support linkage, target exclusion, duplicate,
+malformed-target, and forged evidence rejection, same-protocol isolation, incomplete-history filtering,
+required non-causal wording, zero live authority, and the Phase 15 boundary. Live
+target 2b0de47f-b6d6-48d2-9c69-a22efdfaaaea completed twice as
+CF-367a998a4e9c1d786ec44d0d with 2 decisions, 7 completed historical sessions,
+10 historical decisions, and one incomplete session explicitly excluded. Missing
+target evidence was rejected without internal details.
+
+Runtime change: none. No image/service was rebuilt or recreated. No policy/model
+write, training, proposal, strategy activation, database connection, new service,
+port, topic, deployment, or GitHub push was introduced. Phase 15 was not started.
+```
 
 ---
 
@@ -2691,13 +2722,14 @@ Phase 10 — Controlled Attack Workloads           VERIFIED
 Phase 11 — Contextual Bandit Shadow Mode         VERIFIED
 Phase 12 - Bounded Learned Strategy Selection    VERIFIED
 Phase 13 - Learning & Policy Improvement Agent   VERIFIED
+Phase 14 - Similar-Session Counterfactuals        VERIFIED
 ~~~
 
-Start **Phase 14 - Similar-Session Retrieval and Counterfactual Evaluation** only.
+The next pending phase is **Phase 15 - Action-Space Gap Detection**.
 
-Do **not** start Phase 15, any local LLM, deployment, or public exposure work
-until Phase 14 passes its acceptance checks. Continue to preserve the
-deterministic D0 fallback and ordered roadmap.
+Phase 15 was not started in the Phase 14 checkpoint. Continue to preserve the
+deterministic D0 fallback and ordered roadmap; do not start local LLM, deployment,
+or public exposure work out of order.
 
 ---
 
