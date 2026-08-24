@@ -1,0 +1,109 @@
+registry_version: strategy-registry-v1
+default_strategy_id: D0
+unmapped_strategy_ids: [D7]
+strategies:
+  - strategy_id: D0
+    name: BASELINE
+    description: Existing deterministic protocol, banner, passthrough, and safe fallback behavior.
+    supported_protocols: [mysql, postgres]
+    required_state: [session_id, protocol]
+    forbidden_state: []
+    activation_conditions: [no more-specific mapped behavior applies, requested strategy is missing or not approved]
+    compatible_personas: [unknown, low_activity, script, automated_tool, human_attacker, brute_bot]
+    schema_assets: []
+    trap_assets: []
+    risk_level: low
+    resource_cost: low
+    validation_version: phase3-v1
+    approval_status: APPROVED
+    evidence: [deception_engine/api.py, mysqlproxy/internal/protocol/handler.go, pgproxy/internal/protocol/handler.go]
+  - strategy_id: D1
+    name: CATALOG_RECON_LURE
+    description: Existing deterministic catalog deception with progressive exposure.
+    supported_protocols: [mysql, postgres]
+    required_state: [session_id, protocol, database, session_depth]
+    forbidden_state: []
+    activation_conditions: [phase is enumeration, query targets a supported catalog surface]
+    compatible_personas: [unknown, low_activity, script, automated_tool, human_attacker, brute_bot]
+    schema_assets: [hr, finance, crm]
+    trap_assets: []
+    risk_level: low
+    resource_cost: low
+    validation_version: phase3-v1
+    approval_status: APPROVED
+    evidence: [deception_engine/exposure.py, deception_engine/schema_loader.py, mitre_agent/rules/detection_rules.yaml]
+  - strategy_id: D2
+    name: BACKUP_LURE
+    description: Existing backup and archive named synthetic trap assets.
+    supported_protocols: [mysql, postgres]
+    required_state: [session_id, protocol, database, session_depth]
+    forbidden_state: []
+    activation_conditions: [table is an existing backup or archive lure, asset is visible at current exposure depth]
+    compatible_personas: [script, automated_tool, human_attacker]
+    schema_assets: []
+    trap_assets: [api_keys_backup, credit_cards_archive, backup_passwords]
+    risk_level: high
+    resource_cost: low
+    validation_version: phase3-v1
+    approval_status: APPROVED
+    evidence: [deception_engine/schemas/hr.yaml, deception_engine/schemas/finance.yaml, deception_engine/schemas/crm.yaml]
+  - strategy_id: D3
+    name: CREDENTIAL_LURE
+    description: Existing synthetic credential, token, and key trap assets.
+    supported_protocols: [mysql, postgres]
+    required_state: [session_id, protocol, database, session_depth]
+    forbidden_state: []
+    activation_conditions: [table is an existing credential or token lure, asset is visible at current exposure depth]
+    compatible_personas: [script, automated_tool, human_attacker, brute_bot]
+    schema_assets: [hr.api_keys, crm.integrations]
+    trap_assets: [prod_credentials, payment_tokens, internal_api_keys, aws_credentials, admin_tokens]
+    risk_level: critical
+    resource_cost: low
+    validation_version: phase3-v1
+    approval_status: APPROVED
+    evidence: [deception_engine/schemas/hr.yaml, deception_engine/schemas/finance.yaml, deception_engine/schemas/crm.yaml, mitre_agent/rules/detection_rules.yaml]
+  - strategy_id: D4
+    name: SENSITIVE_DATA_LURE
+    description: Existing synthetic HR, finance, and CRM records plus sensitive-data traps.
+    supported_protocols: [mysql, postgres]
+    required_state: [session_id, protocol, database]
+    forbidden_state: []
+    activation_conditions: [query targets an existing synthetic sensitive-data asset]
+    compatible_personas: [low_activity, script, automated_tool, human_attacker]
+    schema_assets: [hr.employees, hr.payroll, finance.accounts, finance.customers, finance.transactions, crm.contacts, crm.companies, crm.deals]
+    trap_assets: [salary_executives]
+    risk_level: high
+    resource_cost: low
+    validation_version: phase3-v1
+    approval_status: APPROVED
+    evidence: [deception_engine/schemas/hr.yaml, deception_engine/schemas/finance.yaml, deception_engine/schemas/crm.yaml, deception_engine/generator.py]
+  - strategy_id: D5
+    name: PRIVILEGE_LURE
+    description: Existing MITRE rule/profile metadata; standalone attacker-facing execution remains unverified.
+    supported_protocols: [mysql, postgres]
+    required_state: [session_id, protocol, user, role, permissions]
+    forbidden_state: []
+    activation_conditions: [phase is privilege_discovery, standalone execution requires verification]
+    compatible_personas: [script, automated_tool, human_attacker]
+    schema_assets: []
+    trap_assets: []
+    risk_level: medium
+    resource_cost: low
+    validation_version: phase3-v1
+    approval_status: REQUIRES_REVIEW
+    evidence: [mitre_agent/rules/detection_rules.yaml, mitre_agent/rules/deception_profiles.yaml]
+  - strategy_id: D6
+    name: DESTRUCTIVE_OPERATION_SIMULATION
+    description: Existing fake-schema INSERT UPDATE and DELETE simulation backed by per-session mutation state.
+    supported_protocols: [mysql, postgres]
+    required_state: [session_id, protocol, database, modified_objects]
+    forbidden_state: [target is outside managed synthetic schema]
+    activation_conditions: [operation is INSERT UPDATE or DELETE, target exists in managed synthetic schema]
+    compatible_personas: [unknown, low_activity, script, automated_tool, human_attacker]
+    schema_assets: [hr, finance, crm]
+    trap_assets: []
+    risk_level: high
+    resource_cost: low
+    validation_version: phase3-v1
+    approval_status: APPROVED
+    evidence: [deception_engine/mutation_store.py, deception_engine/api.py, tests/state/validate_authoritative_state.ps1]

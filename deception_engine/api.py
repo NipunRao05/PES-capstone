@@ -34,6 +34,7 @@ from generator import DataGenerator
 from models import DecisionRequest, DecisionResponse
 from mutation_store import MutationStore
 from schema_loader import SchemaLoader
+from strategy_registry import StrategyRegistry
 
 log = logging.getLogger(__name__)
 
@@ -114,11 +115,12 @@ _schema_loader: SchemaLoader | None = None
 _generator: DataGenerator | None = None
 _exposure: ExposureTracker | None = None
 _mutations: MutationStore | None = None
+_strategy_registry: StrategyRegistry = StrategyRegistry.load_with_fallback()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _redis_client, _schema_loader, _generator, _exposure, _mutations
+    global _redis_client, _schema_loader, _generator, _exposure, _mutations, _strategy_registry
     _redis_client = redis.Redis(
         host=REDIS_HOST, port=REDIS_PORT,
         decode_responses=True,
@@ -129,7 +131,15 @@ async def lifespan(app: FastAPI):
     _generator     = DataGenerator()
     _exposure      = ExposureTracker(_redis_client)
     _mutations     = MutationStore(_redis_client)
-    log.info("Deception engine started — schemas: %s", _schema_loader.get_schema_names())
+    _strategy_registry = StrategyRegistry.load_with_fallback()
+    if _strategy_registry.degraded:
+        log.error("Strategy registry invalid; using built-in D0 fallback")
+    log.info(
+        "Deception engine started — schemas: %s registry=%s approved=%s",
+        _schema_loader.get_schema_names(),
+        _strategy_registry.registry_version,
+        [item.strategy_id for item in _strategy_registry.approved()],
+    )
     yield
     if _redis_client:
         _redis_client.close()
@@ -165,6 +175,9 @@ def _runtime_components_loaded() -> bool:
         and _generator is not None
         and _exposure is not None
         and _mutations is not None
+        and _strategy_registry.resolve(
+            _strategy_registry.default_strategy_id
+        ).approval_status == "APPROVED"
     )
 
 
@@ -178,6 +191,11 @@ def _readiness_payload() -> dict:
         "generator_loaded": _generator is not None,
         "exposure_tracker_loaded": _exposure is not None,
         "mutation_store_loaded": _mutations is not None,
+        "strategy_registry_default_approved": (
+            _strategy_registry.resolve(
+                _strategy_registry.default_strategy_id
+            ).approval_status == "APPROVED"
+        ),
         "redis": redis_ok,
     }
     ready = all(checks.values())
@@ -189,6 +207,8 @@ def _readiness_payload() -> dict:
         "checks": checks,
         "schema_count": len(schemas),
         "schemas": schemas,
+        "strategy_registry_version": _strategy_registry.registry_version,
+        "strategy_registry_degraded": _strategy_registry.degraded,
     }
 
 
@@ -478,6 +498,21 @@ async def readyz():
     )
 
 
+@app.get("/strategies")
+async def list_strategies() -> dict:
+    """Return the versioned deterministic registry; this endpoint is read-only."""
+    return _strategy_registry.to_dict()
+
+
+@app.get("/strategies/{strategy_id}")
+async def get_strategy(strategy_id: str) -> dict:
+    """Return one mapped entry without activating or approving it."""
+    strategy = _strategy_registry.get(strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    return strategy.to_dict()
+
+
 @app.post("/decide", response_model=None)
 async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
     """
@@ -535,6 +570,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
                 columns=["schema_name"],
                 latency_ms=_latency(req.deception_level, base=30),
                 profile="fake_schema",
+                strategy_id="D1",
             ))
         if req.protocol.lower().startswith("postgres") or " from pg_database" in fp:
             return _json_response(DecisionResponse(
@@ -544,6 +580,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
                 columns=["datname"],
                 latency_ms=_latency(req.deception_level, base=30),
                 profile="fake_schema",
+                strategy_id="D1",
             ))
         return _json_response(DecisionResponse(
             mode="fake",
@@ -552,6 +589,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
             columns=["Database"],
             latency_ms=_latency(req.deception_level, base=30),
             profile="fake_schema",
+            strategy_id="D1",
         ))
 
     # 3. Table enumeration — progressive exposure. Support common MySQL and
@@ -568,14 +606,17 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
     if _is_count_query(fp):
         return await _handle_count(req, fp, schema_name)
 
-    # 5. SELECT from a known fake table
     table = req.table or _extract_table(fp)
-    if table and _schema_loader.get_table(schema_name, table):
-        return await _handle_select(req, table, schema_name)
 
-    # 6. Mutation queries (INSERT/UPDATE/DELETE) — record and fake success
+    # 5. Managed mutations must be classified before generic table reads.
+    # The handlers already existed, but the earlier branch order made them
+    # unreachable for known fake tables and returned SELECT-shaped rows instead.
     if _is_mutation(fp):
         return await _handle_mutation(req, fp, table, schema_name)
+
+    # 6. SELECT from a known fake table
+    if table and _schema_loader.get_table(schema_name, table):
+        return await _handle_select(req, table, schema_name)
 
     # 7. SELECT from unknown table — passthrough to real backend
     return _json_response(DecisionResponse(
@@ -610,6 +651,7 @@ async def _handle_show_tables(
         profile="fake_schema",
         is_trap=is_trap,
         explanation=f"Progressive exposure depth={depth}, {len(visible)} tables visible",
+        strategy_id="D1",
     ))
 
 
@@ -645,6 +687,7 @@ async def _handle_count(
         profile="fake_table_data",
         is_trap=is_trap,
         explanation=f"COUNT for {table}: {count} rows (base={base_count} delta={delta})",
+        strategy_id=_strategy_id_for_table(schema_name, table),
     ))
 
 
@@ -706,6 +749,7 @@ async def _handle_select(
         profile="high_value_target" if is_trap else "fake_table_data",
         is_trap=is_trap,
         explanation=f"Fake rows for {table}: {len(rows)} rows returned",
+        strategy_id=_strategy_id_for_table(schema_name, table),
     ))
 
 
@@ -744,6 +788,7 @@ async def _handle_mutation(
         latency_ms=_latency(req.deception_level, base=30),
         profile="fake_table_data",
         explanation=f"Mutation recorded: {fp[:30]} — {affected} rows affected",
+        strategy_id="D6",
     ))
 
 
@@ -808,8 +853,18 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
     return None
 
 
+def _strategy_id_for_table(schema_name: str, table_name: str) -> str:
+    """Map only existing approved assets; unknown assets stay on D0."""
+    return _strategy_registry.strategy_for_asset(
+        schema_name, table_name
+    ).strategy_id
+
+
 def _json_response(resp: DecisionResponse) -> JSONResponse:
     import dataclasses
+    resolved = _strategy_registry.resolve(resp.strategy_id)
+    resp.strategy_id = resolved.strategy_id
+    resp.strategy_registry_version = _strategy_registry.registry_version
     return JSONResponse(content=dataclasses.asdict(resp))
 
 

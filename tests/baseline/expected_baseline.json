@@ -6,6 +6,8 @@
     "deception_engine/exposure.py",
     "deception_engine/generator.py",
     "deception_engine/mutation_store.py",
+    "deception_engine/strategy_registry.py",
+    "deception_engine/strategies/registry.yaml",
     "deception_engine/schemas/crm.yaml",
     "deception_engine/schemas/finance.yaml",
     "deception_engine/schemas/hr.yaml",

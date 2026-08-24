@@ -345,7 +345,7 @@ Kafka idempotency/replay safety          CLAIMED/VERIFY
 Operator controls                        CLAIMED/VERIFY
 
 Explicit state-grounded deception        VERIFIED (Phase 2, 2026-08-24)
-Strategy registry                        PENDING
+Strategy registry                        VERIFIED (Phase 3, 2026-08-24)
 Behavior-state feature model             PENDING
 Policy guard/action-space engine         PENDING
 Strategy Agent                           PENDING
@@ -628,6 +628,60 @@ use default D2
 ### Acceptance
 
 All existing regression tests still pass.
+
+### Phase 3 validation record (2026-08-24)
+
+~~~text
+Registry version: strategy-registry-v1
+Default/fallback: D0 BASELINE
+
+APPROVED:
+D0 BASELINE
+D1 CATALOG_RECON_LURE
+D2 BACKUP_LURE
+D3 CREDENTIAL_LURE
+D4 SENSITIVE_DATA_LURE
+D6 DESTRUCTIVE_OPERATION_SIMULATION
+
+REQUIRES_REVIEW:
+D5 PRIVILEGE_LURE
+  Existing MITRE rule/profile metadata is present, but standalone
+  attacker-facing execution is not verified.
+
+UNMAPPED:
+D7 HIGH_INSTRUMENTATION_MODE
+  No distinct existing behavior was found, so no strategy was invented.
+~~~
+
+Implemented:
+
+- deception_engine/strategies/registry.yaml contains versioned metadata and
+  repository evidence for mapped deterministic strategies.
+- deception_engine/strategy_registry.py validates IDs, protocols, approval
+  states, assets, required/forbidden state, and provides a built-in D0 fallback.
+- Missing, invalid, or unapproved strategy IDs resolve to approved D0.
+- /decide responses are annotated with strategy_id and
+  strategy_registry_version; existing response rows/protocol behavior remains.
+- Read-only GET /strategies and GET /strategies/{strategy_id} endpoints expose
+  registry status without activating or approving anything.
+- Managed INSERT/UPDATE/DELETE classification now precedes generic fake-table
+  reads, making the existing D6 simulator reachable.
+- No learner, policy guard, dynamic action space, or deployment was added.
+
+Validation:
+
+~~~text
+deception-engine tests                  32/32 PASS
+session/state tests                     197/197 PASS
+MITRE tests                             32/32 PASS
+AI Agent v1 tests                       4/4 PASS
+MySQL proxy tests + go vet              PASS
+PostgreSQL proxy tests + go vet         PASS
+authoritative state live validation     PASS (PostgreSQL 19, MySQL 13)
+frozen baseline                         PASS 40/40
+local predeployment security gate       PASS 17/17
+live registry readiness                 ready, degraded=false
+~~~
 
 ---
 
@@ -2306,13 +2360,14 @@ Current verified checkpoint:
 Phase 0 — Verify Current Checkpoint              VERIFIED
 Phase 1 — Freeze Deterministic Baseline          VERIFIED
 Phase 2 — Authoritative State                    VERIFIED
+Phase 3 — Strategy Registry                      VERIFIED
 ~~~
 
-Start **Phase 3 — Strategy Registry** only.
+Start **Phase 4 — Behavior-State Feature Model** only.
 
-Do **not** start Phase 4 or any learning, local LLM, deployment, or public
-exposure work until Phase 3 passes its acceptance checks. After Phase 3, follow
-the existing ordered roadmap without skipping upstream verification.
+Do **not** start Phase 5 or any learning, local LLM, deployment, or public
+exposure work until Phase 4 passes its acceptance checks. Continue to preserve
+the deterministic D0 fallback and follow the ordered roadmap.
 
 ---
 

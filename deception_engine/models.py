@@ -37,6 +37,8 @@ class DecisionResponse:
     profile:     str = ""        # which deception profile was applied
     explanation: str = ""
     is_trap:     bool = False
+    strategy_id: str = "D0"
+    strategy_registry_version: str = ""
 
 
 @dataclass
