@@ -108,6 +108,7 @@ class AsyncStrategyAdapter:
             cpu_cost_ms = (time.process_time() - cpu_started) * 1000.0
             if not isinstance(decision, dict):
                 raise ValueError("strategy response must be an object")
+            shadow_evaluation = self.state_store.evaluate_shadow(snapshot, decision)
             applied = self.state_store.set_next_strategy(
                 session_id, decision, snapshot["query_count"]
             )
@@ -123,6 +124,7 @@ class AsyncStrategyAdapter:
                     latency_ms=latency_ms,
                     cpu_cost_ms=cpu_cost_ms,
                     memory_cost_bytes=memory_cost_bytes,
+                    shadow_evaluation=shadow_evaluation,
                 )
                 if recorded is None:
                     raise ValueError("accepted decision telemetry was rejected")

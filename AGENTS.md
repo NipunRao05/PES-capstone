@@ -1229,6 +1229,47 @@ Record both.
 
 The model can be evaluated against the rule baseline without controlling the honeypot.
 
+### Phase 11 validation record (2026-08-24)
+
+```text
+Implementation: session_module/shadow_bandit.py (linucb-shadow-v1,
+bandit-context-v1), integrated only into the existing asynchronous evidence path.
+
+The disjoint LinUCB model reads a deterministic 24-feature vector built from
+structured protocol, normalized risk, MITRE stage, bounded behavior counters, and
+current approved strategy. Raw SQL, fingerprints, source identities, prompts,
+nonfinite values, unsupported protocols, and unapproved current/action-space IDs
+are rejected. Recommendations are restricted to policy-allowed actions.
+
+Every accepted strategy telemetry record may now contain shadow-only evidence:
+rule_selected, model_recommended, actual_execution, allowed actions, scores,
+confidence, context/model versions, and agreement. The model recommendation is
+never passed to set_next_strategy; actual_execution remains rule-v1 and the
+attacker-facing current strategy is unchanged. Invalid/forged shadow metadata is
+discarded without losing rule telemetry. Read-only evaluation endpoints are:
+
+GET /shadow/model
+GET /shadow/decision/{decision_id}
+GET /shadow/session/{session_id}
+
+Session evaluation reports agreement/disagreement and the observed actual-rule
+reward. It explicitly makes no counterfactual performance claim. LinUCB updates
+require an explicit versioned CALIBRATED scalar in [-1,1]; Phase 9 currently has
+no scalar/weight profile, so runtime updates remain zero. Calibrated fixtures prove
+the implementation can learn, but no experimental fixture reaches runtime state.
+
+Validation: focused shadow/adaptation/telemetry/reward/state 38/38; complete
+affected session-module 236/236. Live session phase11-live-fb5bfff9 produced
+three completed shadow comparisons: the first recorded rule D1, model D0, actual
+D1, controls_execution=false, current strategy D0, next rule strategy D1, zero
+model updates, completed actual reward, and no retained raw SQL/fingerprint.
+
+Runtime change: only session-module was rebuilt/recreated. No learned action was
+executed, no Phase 12 confidence/control path, calibrated runtime reward, model
+persistence, new topic/service/port, database connection, deployment, load test,
+or GitHub push was introduced.
+```
+
 ---
 
 ## Phase 12 — Enable Bounded Learned Strategy Selection

@@ -17,6 +17,12 @@ from typing import Any
 
 TELEMETRY_VERSION = "strategy-telemetry-v1"
 _APPROVED_STRATEGIES = {"D0", "D1", "D2", "D3", "D4", "D6"}
+_FORBIDDEN_INPUTS = {
+    "query", "query_normalized", "fingerprint", "raw_sql", "source_ip",
+    "client_ip", "prompt",
+}
+_SHADOW_MODEL_VERSION = "linucb-shadow-v1"
+_SHADOW_CONTEXT_VERSION = "bandit-context-v1"
 _STAGE_ORDER = {
     "": 0,
     "recon": 1,
@@ -117,6 +123,7 @@ class StrategyTelemetryStore:
         latency_ms: float = 0.0,
         cpu_cost_ms: float = 0.0,
         memory_cost_bytes: int = 0,
+        shadow_evaluation: dict | None = None,
     ) -> dict | None:
         """Record one accepted rule decision and initialize its linked outcome."""
         if not isinstance(snapshot, dict) or not isinstance(response, dict):
@@ -184,6 +191,11 @@ class StrategyTelemetryStore:
                 "confidence": 1.0,
                 "policy_version": policy_version,
             }
+            cleaned_shadow = self._clean_shadow(
+                shadow_evaluation, session_id, selected, allowed
+            )
+            if cleaned_shadow is not None:
+                decision["shadow_evaluation"] = cleaned_shadow
             outcome = {
                 "telemetry_version": TELEMETRY_VERSION,
                 "decision_id": decision_id,
@@ -219,6 +231,74 @@ class StrategyTelemetryStore:
             self._session_index.setdefault(session_id, []).append(decision_id)
             self._evict_if_needed()
             return copy.deepcopy(decision)
+
+    @staticmethod
+    def _clean_shadow(
+        shadow: dict | None,
+        session_id: str,
+        selected: str,
+        allowed: tuple[str, ...],
+    ) -> dict | None:
+        """Accept shadow metadata only when it provably cannot alter execution."""
+        if not isinstance(shadow, dict):
+            return None
+        status = str(shadow.get("status") or "").strip().upper()
+        if (
+            status not in {"AVAILABLE", "UNAVAILABLE"}
+            or shadow.get("shadow_only") is not True
+            or shadow.get("controls_execution") is not False
+            or str(shadow.get("session_id") or "") != session_id
+            or str(shadow.get("rule_selected") or "").upper() != selected
+            or str(shadow.get("actual_execution") or "").upper() != selected
+            or str(shadow.get("execution_source") or "") != "rule-v1"
+        ):
+            return None
+        cleaned = copy.deepcopy(shadow)
+        if (
+            str(shadow.get("model_version") or "") != _SHADOW_MODEL_VERSION
+            or str(shadow.get("context_version") or "") != _SHADOW_CONTEXT_VERSION
+        ):
+            return None
+        if status == "UNAVAILABLE":
+            if str(shadow.get("model_recommended") or ""):
+                return None
+            return cleaned
+        model_action = str(shadow.get("model_recommended") or "").upper()
+        shadow_allowed = shadow.get("allowed_actions")
+        scores = shadow.get("scores")
+        features = shadow.get("context_features")
+        confidence = shadow.get("confidence")
+        training_updates = shadow.get("training_updates")
+        if (
+            not str(shadow.get("shadow_id") or "").startswith("SH-")
+            or not isinstance(shadow_allowed, list)
+            or set(shadow_allowed) != set(allowed)
+            or model_action not in allowed
+            or shadow.get("agreement") is not (model_action == selected)
+            or not isinstance(scores, dict)
+            or set(scores) != set(allowed)
+            or not isinstance(features, dict)
+            or any(key in _FORBIDDEN_INPUTS for key in features)
+            or isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not math.isfinite(float(confidence))
+            or not 0.0 <= float(confidence) <= 1.0
+            or isinstance(training_updates, bool)
+            or not isinstance(training_updates, int)
+            or training_updates < 0
+        ):
+            return None
+        numeric = tuple(scores.values()) + tuple(features.values())
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in numeric
+        ):
+            return None
+        if any(not 0.0 <= float(value) <= 1.0 for value in features.values()):
+            return None
+        return cleaned
 
     def _evict_if_needed(self) -> None:
         while len(self._decisions) > self.max_records:

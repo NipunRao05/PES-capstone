@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from behavior_state import BehaviorStateStore
 from reward_model import DeceptionRewardModel
+from shadow_bandit import ShadowLinUCB
 from strategy_telemetry import StrategyTelemetryStore
 
 _RELATION = r'([A-Za-z_][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)?)'
@@ -155,6 +156,7 @@ class AuthoritativeStateStore:
         self._behavior = BehaviorStateStore(self.max_sessions)
         self._telemetry = StrategyTelemetryStore(self.max_sessions * 20)
         self._rewards = DeceptionRewardModel()
+        self._shadow_bandit = ShadowLinUCB()
         self._lock = threading.RLock()
         self.ready = False
 
@@ -432,6 +434,20 @@ class AuthoritativeStateStore:
         """Store telemetry only after set_next_strategy accepted the decision."""
         return self._telemetry.record_decision(snapshot, response, **costs)
 
+    def evaluate_shadow(self, snapshot: dict, response: dict) -> dict:
+        """Recommend in shadow only; any failure preserves the rule decision."""
+        rule_default = response.get("rule_default_action") if isinstance(response, dict) else ""
+        try:
+            return self._shadow_bandit.recommend(
+                snapshot,
+                response.get("allowed_actions"),
+                rule_default,
+            )
+        except Exception as exc:
+            return self._shadow_bandit.unavailable(
+                snapshot, rule_default, type(exc).__name__
+            )
+
     def observe_strategy_outcomes(self, snapshot: dict) -> int:
         return self._telemetry.observe(snapshot)
 
@@ -469,6 +485,61 @@ class AuthoritativeStateStore:
     def get_session_reward(self, session_id: str) -> dict | None:
         linked = self._telemetry.session(session_id)
         return self._rewards.session(linked) if linked["records"] else None
+
+    def get_shadow_decision(self, decision_id: str) -> dict | None:
+        linked = self._telemetry.get(decision_id)
+        if not linked:
+            return None
+        shadow = linked["decision"].get("shadow_evaluation")
+        if not isinstance(shadow, dict):
+            return None
+        return {
+            "decision_id": decision_id,
+            "session_id": linked["decision"]["session_id"],
+            "rule_selected": linked["decision"]["selected_action"],
+            "model_recommended": shadow.get("model_recommended", ""),
+            "actual_execution": shadow.get("actual_execution", ""),
+            "agreement": shadow.get("agreement", False),
+            "shadow": copy.deepcopy(shadow),
+            "observed_actual_reward": self._rewards.decision(linked),
+        }
+
+    def get_shadow_session(self, session_id: str) -> dict | None:
+        linked = self._telemetry.session(session_id)
+        if not linked["records"]:
+            return None
+        records = []
+        for item in linked["records"]:
+            decision_id = item["decision"]["decision_id"]
+            evaluation = self.get_shadow_decision(decision_id)
+            if evaluation:
+                records.append(evaluation)
+        if not records:
+            return None
+        available = [
+            item for item in records if item["shadow"].get("status") == "AVAILABLE"
+        ]
+        agreements = sum(1 for item in available if item["agreement"] is True)
+        rewards_complete = all(
+            item["observed_actual_reward"]["status"] == "COMPLETE"
+            for item in records
+        )
+        return {
+            "session_id": session_id,
+            "status": "COMPLETE" if rewards_complete else "PENDING",
+            "shadow_only": True,
+            "controls_execution": False,
+            "decision_count": len(records),
+            "recommendations_available": len(available),
+            "agreements": agreements,
+            "disagreements": len(available) - agreements,
+            "agreement_rate": round(agreements / len(available), 6) if available else 0.0,
+            "counterfactual_performance_claimed": False,
+            "records": records,
+        }
+
+    def get_shadow_model_stats(self) -> dict:
+        return self._shadow_bandit.stats()
 
     def set_next_strategy(
         self, session_id: str, decision: dict, expected_query_count: int
@@ -563,6 +634,21 @@ class _StateAPIHandler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "invalid limit"})
                 return
             self._send(200, {"records": self.store.list_strategy_telemetry(limit)})
+            return
+        if parsed.path == "/shadow/model":
+            self._send(200, self.store.get_shadow_model_stats())
+            return
+        shadow_decision_prefix = "/shadow/decision/"
+        if parsed.path.startswith(shadow_decision_prefix):
+            decision_id = unquote(parsed.path[len(shadow_decision_prefix):])
+            shadow = self.store.get_shadow_decision(decision_id)
+            self._send(200, shadow) if shadow else self._send(404, {"error": "shadow decision not found"})
+            return
+        shadow_session_prefix = "/shadow/session/"
+        if parsed.path.startswith(shadow_session_prefix):
+            session_id = unquote(parsed.path[len(shadow_session_prefix):])
+            shadow = self.store.get_shadow_session(session_id)
+            self._send(200, shadow) if shadow else self._send(404, {"error": "shadow session not found"})
             return
         reward_decision_prefix = "/reward/decision/"
         if parsed.path.startswith(reward_decision_prefix):
