@@ -347,7 +347,7 @@ Operator controls                        CLAIMED/VERIFY
 Explicit state-grounded deception        VERIFIED (Phase 2, 2026-08-24)
 Strategy registry                        VERIFIED (Phase 3, 2026-08-24)
 Behavior-state feature model             VERIFIED (Phase 4, 2026-08-24)
-Policy guard/action-space engine         PENDING
+Policy guard/action-space engine         VERIFIED (Phase 5, 2026-08-24)
 Strategy Agent                           PENDING
 Reward/outcome telemetry                 PENDING
 Contextual bandit                        PENDING
@@ -812,6 +812,30 @@ The deterministic engine executes it.
 ### Acceptance
 
 An invalid/unapproved strategy can never reach attacker-facing execution.
+
+### Phase 5 validation record (2026-08-24)
+
+```text
+Implementation: deception_engine/policy_guard.py (policy-guard-v1), integrated
+at the deception-engine response boundary.
+
+Input boundary: structured session, behavior, and MITRE state plus operator mode
+and strategy-registry-v1. Raw query text is ignored by action-space evaluation.
+
+Output: deterministic allowed/default strategy IDs with policy and registry
+versions. Only approved, protocol-compatible, persona-compatible strategies with
+required state and explicit activation rules are allowed. Unapproved, missing,
+unsupported, degraded, unsafe-mode, or unknown choices fail closed to D0.
+
+Validation: focused policy/registry/readiness 26/26; deception-engine 44/44;
+session-module 207/207; MITRE 32/32; evidence-store 8/8; replay/hardening
+15/15; LLM Agent v2 9/9; AI Agent v1 4/4; MySQL, PostgreSQL, and scaling Go
+suites plus go vet; live authoritative PostgreSQL 19 and MySQL 13 outcomes;
+frozen baseline baseline-1787559435-403780 40/40; local security gate 17/17.
+
+Runtime change: only deception-engine was rebuilt/recreated. No new service,
+port, database connection, load test, deployment, or GitHub push was introduced.
+```
 
 ---
 
@@ -2387,12 +2411,13 @@ Phase 1 — Freeze Deterministic Baseline          VERIFIED
 Phase 2 — Authoritative State                    VERIFIED
 Phase 3 — Strategy Registry                      VERIFIED
 Phase 4 — Behavior-State Feature Model           VERIFIED
+Phase 5 — Policy Guard and Safe Action Space     VERIFIED
 ~~~
 
-Start **Phase 5 — Policy Guard and Safe Action-Space Engine** only.
+Start **Phase 6 — Rule-Only Strategy Agent** only.
 
-Do **not** start Phase 6 or any learning, local LLM, deployment, or public
-exposure work until Phase 5 passes its acceptance checks. Continue to preserve
+Do **not** start Phase 7 or any learning, local LLM, deployment, or public
+exposure work until Phase 6 passes its acceptance checks. Continue to preserve
 the deterministic D0 fallback and follow the ordered roadmap.
 
 ---
