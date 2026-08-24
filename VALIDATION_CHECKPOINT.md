@@ -1,34 +1,67 @@
 # Validation Checkpoint
 
-Checkpoint date: 2026-08-21  
-Repository: `F:\b\Capstone-main`  
-Baseline: `main` at `57f41e9` (`Validate Kubernetes KEDA physical scaling`)
+Checkpoint date: 2026-08-24
+
+Repository: `F:\b\Capstone-main`
+
+Branch / HEAD: `main` / `84e61b0` (`Document local predeployment validation checkpoint`)
+
+## Repository and runtime checkpoint
+
+- Worktree before this checkpoint: modified `AGENTS.md`; untracked `AGENTS_UPDATED.md`.
+- `docker compose -f docker-compose.yml config --services` succeeds and defines 26 services.
+- The existing stack was started with builds and pulls disabled. All 25 long-running services are up; one-shot `redpanda-init` exited `0` as designed.
+- Nineteen bounded health/readiness/metrics requests returned HTTP 200. Prometheus has 8/8 active targets up, both Redis services return `PONG`, and all 11 required Redpanda topics exist.
+- Windows service `postgresql-x64-18` remains `Stopped` and `Disabled`. Docker publishes `pgproxy` on `127.0.0.1:5432`, and a host TCP probe succeeds; no Windows PostgreSQL conflict is present.
+- Fresh protocol smoke passed through both proxies. PostgreSQL returned consistent database/user state; MySQL returned deterministic catalog data and synthetic trap-table data.
+- Fresh MySQL session `d1329d3d-4735-40a6-8b95-f44a196ca1cf` was traced through evidence, MITRE `T1213.006`, CRITICAL risk, scaling telemetry, sandbox replay (4 findings), hardening (1 recommendation), and bounded local reporting.
+- Phase 1 run `baseline-1787551496-5f7480` passed 40/40 deterministic baseline assertions across benign MySQL/PostgreSQL, catalog enumeration, synthetic-token allowlisting, trap behavior, MITRE, logical scaling, and AI Agent v1 with stored evidence linkage.
+- No stack rebuild, long load test, deployment, or GitHub push was performed.
+
+## Phase 0 component evidence
+
+| Component group | Files / Compose services found | Repository evidence | Current result | Known issue / next check |
+|---|---|---|---|---|
+| MySQL/PostgreSQL deception | `mysqlproxy/`, `pgproxy/`, `deception_engine/`; `mysql`, `postgres`, `mysqlproxy`, `pgproxy`, `deception-engine` | Go/Python tests and deterministic schema/trap code; fresh PostgreSQL/MySQL protocol queries | **VERIFIED live** | Preserve for Phase 1 baseline capture. |
+| Events, sessions, MITRE | `session_module/`, `mitre_agent/`; `redpanda`, `redpanda-init`, `session-module`, `mitre-agent`, Redis services | Fresh correlated benign/trap sessions; 11 topics; MITRE `T1213.006`; Redis `PONG` | **VERIFIED live** | Preserve for Phase 1 baseline capture. |
+| Scaling and controls | `scaling_agent/`; `scaling-agent` | Readiness/metrics HTTP 200; fresh session linked to a scaling decision; persistence/control tests committed | **VERIFIED live for logical scaling** | Physical KEDA remains accepted from its committed Phase 28 evidence. |
+| AI reporting | `ai_agent/`, `llm_agent/`; `ai-agent`, `llm-agent`, `llm-agent-api` | Health/readiness HTTP 200; deterministic report generated and retrieved; bounded-authority flags confirmed | **VERIFIED live for current reporters** | These are reporting foundations, not the Phase 23 Analyst Agent acceptance. |
+| Evidence store | `evidence_store/`; `evidence-store` | Health/readiness HTTP 200; fresh connection/query/MITRE/scaling trace retrieved | **VERIFIED live for current baseline scope** | Phase 20 still requires future adaptive decision/reward/proposal fields. |
+| Replay and hardening | `sandbox_replay/`; sandbox DBs plus `sandbox-replay-engine` and `sandbox-replay-api` | Ready dependencies; fresh replay returned 4 findings and hardening generated 1 recommendation | **VERIFIED live** | Preserve; no sandbox fix was applied during this checkpoint. |
+| Prometheus/Grafana | `observability/`; `metrics-bridge`, `prometheus`, `grafana`, `loki`, `promtail`, `json-exporter` | Prometheus ready with 8/8 targets up; Grafana health HTTP 200; metrics endpoints HTTP 200 | **VERIFIED live for baseline observability** | Phase 27 adaptive metrics and panels are absent. |
+| Kubernetes/KEDA | `k8s/` manifests and `k8s/README.md` | Committed evidence records KEDA/HPA `1 -> 3` and `3 -> 1`, safe mode, budget clamp, and restart restoration | **VERIFIED committed artifact; not re-run** | Preserve; only re-run in Phase 28 if an upstream adaptive change affects scaling. |
+
+## Roadmap phase classification
 
 | Phase | Claimed status | Evidence found in repo | Verification result | Next action |
 |---|---|---|---|---|
-| 1 - AI Agent v1 | Complete | `ai_agent/`, Compose service, JSON/Markdown endpoints | **Verified.** 3/3 tests, readiness, fresh HIGH attribution, 37.42 ms sample. | Freeze. |
-| 2 - Evidence store | Complete | `evidence_store/`, Redis/Kafka correlation, redaction tests | **Verified.** 8/8 tests; 13/13 calibration sessions correlated; group Stable, lag 0. Malformed-event rebalance defect fixed. | Freeze. |
-| 3 - Sandbox replay | Complete | `sandbox_replay/`, internal disposable MySQL/PostgreSQL | **Verified.** 15/15 replay/hardening tests; matching live sandbox result retrieved. | Freeze. |
-| 4 - Hardening recommendations | Complete | Before/after replay and recommendation logic | **Verified.** Live report shows one recommendation verified by failed after-fix replay. | Freeze. |
-| 5 - Persistent scaling state | Complete | Redis state store and Go state tests | **Verified.** Scaling suite passes; service running from persisted state. | Freeze. |
-| 6 - Metric consistency | Complete | Canonical bridge metric, Prometheus, Grafana and AI consumers | **Verified.** Fresh trap counter and scaling telemetry agree; 5/5 bridge tests. | Freeze. |
-| 7 - Kafka idempotency | Complete | Deterministic event IDs, processed-ID store, DLQ paths | **Verified.** MITRE/scaling regressions pass; evidence consumer safely skips malformed historical input without stalling. | Freeze. |
-| 8 - Operator controls | Complete | Safe mode, manual target, rollback, budget and audit endpoints | **Verified.** Fresh reversible safe-mode kill-switch check passed and restored automatic mode. | Freeze. |
-| 9 - Kubernetes/KEDA scaling | Complete at prior checkpoint | Commit `57f41e9`, manifests and prior 1→N→1 evidence | **Accepted from prior validation; not redeployed or altered.** | Do not revisit before an approved deployment phase. |
-| 10 - Grafana dashboards/alerts | Complete locally | `operator_overview.json`, JSON exporter, Prometheus rules | **Verified.** 16-panel dashboard, 26 accepted rules, AI-down fire/clear, fresh trap→scale→AI HIGH→alerts flow. | Freeze. |
-| AI v2 local extension | Complete locally | `llm_agent/`, internal engine plus loopback gateway | **Verified.** 9/9 tests; benign LOW, trap CRITICAL, missing evidence, matching sandbox, deterministic IDs and evidence-link trace. | Keep deterministic mode as default; no paid API is required. |
-| 11 - Controlled calibration | Complete locally | `scripts/controlled_calibration.ps1`, `CONTROLLED_CALIBRATION_REPORT.md` | **Verified.** 13/13 executed/correlated; 5 benign LOW, 3 recon MEDIUM, 5 trap CRITICAL; precision/recall/F1 1.0 for this bounded matrix. | Do not claim general accuracy; repeat after deployment on approved anonymized data. |
-| 12 - Pre-deployment security gate | Local gate complete | `scripts/predeploy_security_gate.ps1`, `PREDEPLOY_SECURITY_GATE.md` | **Verified locally: 17/17.** No public listeners, DB backends unpublished, internal networks, non-root analysis services, log-secret scan, anonymized sources, kill switch and alerts. | Enforce provider-specific egress, firewall, budget delivery and provider kill switch during deployment. |
-| 13 - Cloud deployment | Pending by user instruction | No cloud changes in this worktree | **Not started.** | Exact next implementation phase, only after explicit user approval and provider selection. |
-| 14 - Observation period | Pending deployment | Requires approved public honeypot | **Not started.** | Run only after Phase 13 and retain anonymized data. |
-| 15 - Final real-world research validation | Pending observation data | Local reports exist; real-world graphs require Phase 14 | **Locally prepared; deployment-dependent evidence pending.** | Produce final graphs from approved anonymized observations. |
+| 0 - Verify current checkpoint | Mandatory | All required directories/Compose services exist; all long-running services are up; bounded readiness, protocol, evidence, MITRE, scaling, replay, hardening, reporting, and observability checks passed | **VERIFIED** | Freeze this checkpoint and start Phase 1 only. |
+| 1 - Freeze deterministic baseline | Required after Phase 0 | `BASELINE_BEHAVIOR.md`; `tests/baseline/capture_baseline.ps1`; `expected_baseline.json`; fresh live capture of all seven required behaviors | **VERIFIED:** 40/40 assertions passed; outputs, latency, MITRE, risk, trap, rules, scaling, AI v1, and evidence linkage recorded | Freeze fixtures and start Phase 2 only. |
+| 2 - Authoritative session/database state | Pending | Existing per-session database, exposure, deterministic rows, and mutation state; no complete required state model or acceptance suite | **IMPLEMENTED/PARTIAL, NOT VERIFIED TO PHASE 2** | Add only after Phase 1; prove CRUD, transaction, permission, discovery, and cross-query consistency. |
+| 3 - Strategy registry | Pending | No `adaptive_deception/`, registry, strategy metadata, or `strategy_id` implementation | **PENDING** | Do not start before Phase 2 passes. |
+| 4 - Behavior-state feature model | Pending | Existing session/MITRE/risk inputs only; no normalized behavior-state module or determinism tests | **PENDING** | Do not start before Phase 3 passes. |
+| 5 - Policy guard/action space | Pending | No policy guard, approved-action set, or allowed/default action output | **PENDING** | Do not start before Phase 4 passes. |
+| 6 - Rule-only Strategy Agent | Pending | No selector output, selector type, or policy version implementation | **PENDING** | Do not start before Phase 5 passes. |
+| 7 - Two-speed adaptation | Pending | Redpanda async baseline exists; no current/next strategy asynchronous loop | **PENDING** | Do not start before Phase 6 passes. |
+| 8 - Decision/outcome telemetry | Pending | General session/MITRE/scaling evidence exists; required strategy decision/outcome records do not | **PENDING** | Do not start before Phase 7 passes. |
+| 9 - Reward model | Pending | No reproducible deception reward implementation | **PENDING** | Do not start before Phase 8 passes. |
+| 10 - Controlled workloads | Pending | `scripts/controlled_calibration.ps1` and a 13-case bounded report exist | **IMPLEMENTED/PARTIAL:** not the required nine profiles or hundreds/thousands of sessions | Extend only after Phase 9; keep workloads synthetic and bounded. |
+| 11-12 - Shadow bandit / bounded learned selection | Pending | No bandit, shadow recommendation, confidence gate, or learned selector | **PENDING** | Do not start before Phase 10 passes. |
+| 13-17 - Learning, counterfactuals, proposals, review, validation | Pending | No `learning_agent/`, proposal/review workflow, or candidate-strategy pipeline | **PENDING** | Follow phase order after Phase 12. |
+| 18-19 - Local CPU LLM / decoy generation | Pending | Existing `llm_agent/` is deterministic bounded reporting; no local model runtime or `decoy_generation_agent/` | **PENDING** | Benchmark a local runtime only after Phase 17; generation remains offline and reviewed. |
+| 20 - Evidence store | Claimed/verify | Service, APIs, Redis/Redpanda correlation, redaction and persistence tests | **IMPLEMENTED/PARTIAL:** historical scope verified; adaptive trace fields unavailable | Re-verify live later and extend after upstream adaptive telemetry exists. |
+| 21 - Replay Agent | Claimed/verify | Isolated disposable DBs, captured-evidence-only API, query policy, persistence, tests | **VERIFIED committed artifact; live unverified** | Preserve; smoke-test after Phase 0 service recovery. |
+| 22 - Hardening Agent | Claimed/verify | Deterministic findings, allowlisted sandbox-only fixes, same-query before/after validation | **VERIFIED committed artifact; live unverified** | Preserve; smoke-test after Phase 0 service recovery. |
+| 23 - Analyst Agent | Pending | Bounded evidence-grounded `llm_agent/` report foundation exists; no `analyst_agent/`, local LLM workflow, or adaptive sections | **IMPLEMENTED/PARTIAL, NOT VERIFIED TO PHASE 23** | Complete only after Phases 18-22 and required evidence inputs exist. |
+| 24 - Persist adaptation state | Claimed/verify | Redis-backed scaling/operator/idempotency state persists; no strategy, bandit, reward, policy, proposal, or review state | **IMPLEMENTED/PARTIAL** | Extend after the corresponding adaptive services exist. |
+| 25 - Kafka idempotency/replay safety | Claimed/verify | Deterministic MITRE IDs, processed-ID persistence, DLQ paths, evidence deduplication | **VERIFIED for current consumers; adaptive scope pending** | Add decision/reward/learner safeguards when those consumers are introduced. |
+| 26 - Operator control modes | Claimed/verify | Current safe/manual/autoscaling/budget/rollback controls exist | **IMPLEMENTED/PARTIAL:** required five adaptive modes and versioned policy/registry/model rollback absent | Extend after learned adaptation exists. |
+| 27 - Adaptive observability | Pending | Baseline Prometheus/Grafana and scaling/AI panels exist | **IMPLEMENTED/PARTIAL:** required adaptive/learning/evolution metrics and panels absent | Add after their producers exist. |
+| 28 - Physical Kubernetes/KEDA scaling | Claimed/verify | Manifests plus committed live evidence for pod scale-up/down and safety controls | **VERIFIED committed artifact; not re-run** | Do not revisit unless a verification fails or upstream scaling behavior changes. |
+| 29-31 - Research, learning evaluation, resource feasibility | Pending | Bounded calibration and local test reports only; no four-mode adaptive experiment package | **PENDING** | Run after the adaptive system is complete. No long tests in this checkpoint. |
+| 32 - Pre-public security gate | Pending | `scripts/predeploy_security_gate.ps1`; committed local result `PASS_LOCAL_PREDEPLOY (17/17)` | **IMPLEMENTED/PARTIAL:** local gate verified as artifact; deployment-specific controls remain | Re-run locally after all code phases, then complete provider-specific checks before exposure. |
+| 33-35 - Deployment, observation, final research package | Do not start / pending | No public deployment artifacts or real-world observation dataset | **PENDING / INTENTIONALLY DEFERRED** | Start only after all local phases and Phase 32 pass and the user explicitly approves deployment. |
 
-## Current operational checkpoint
+## Checkpoint decision
 
-- All expected long-running Compose services are up; `redpanda-init` exited 0 by design.
-- Windows service `postgresql-x64-18` is **Stopped / Disabled**; it was not deleted.
-- Docker `pgproxy` owns `127.0.0.1:5432` and the project PostgreSQL backend is healthy internally.
-- Offline smoke, all three Go module tests/vet, 280 Python tests, Prometheus validation, bounded calibration, and the 17-check local security gate pass.
-- No application or infrastructure was deployed, no public exposure was enabled, and nothing was pushed to GitHub.
-
-Exact next implementation phase: **Phase 13 - fictional-company cloud honeypot deployment**, preceded by an explicit user approval checkpoint and completed together with the four provider-specific Phase 12 controls.
+Phases 0 and 1 are complete. The exact next implementation phase is **Phase 2 - Build Explicit Authoritative Session/Database State**. No Phase 2 work was started.

@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "latency_ceiling_ms": 10000,
+  "rule_files": [
+    "deception_engine/api.py",
+    "deception_engine/exposure.py",
+    "deception_engine/generator.py",
+    "deception_engine/mutation_store.py",
+    "deception_engine/schemas/crm.yaml",
+    "deception_engine/schemas/finance.yaml",
+    "deception_engine/schemas/hr.yaml",
+    "mitre_agent/rules/detection_rules.yaml",
+    "mitre_agent/rules/deception_profiles.yaml",
+    "mitre_agent/rules/hmm_config.yaml",
+    "scaling_agent/internal/scaler/scaler.go",
+    "scaling_agent/internal/scorer/scorer.go"
+  ],
+  "mysql_benign": {
+    "risk_level": "low",
+    "trap_triggered": false,
+    "response_contains": [
+      "1"
+    ]
+  },
+  "postgres_benign": {
+    "risk_level": "low",
+    "trap_triggered": false,
+    "response_contains": [
+      "testdb",
+      "postgres"
+    ]
+  },
+  "catalog_enumeration": {
+    "risk_level": "medium",
+    "trap_triggered": false,
+    "mitre_technique": "T1213.006",
+    "response_contains": [
+      "information_schema",
+      "hr_production",
+      "finance_production",
+      "crm_production"
+    ]
+  },
+  "trap_table": {
+    "risk_level": "critical",
+    "trap_triggered": true,
+    "mitre_technique": "T1213.006",
+    "response_contains": [
+      "token"
+    ],
+    "token_prefixes": [
+      "HONEYPOT_SK_LIVE_FAKE_",
+      "HONEYPOT_PK_LIVE_FAKE_",
+      "DECOY_API_KEY_",
+      "DECOY_TOKEN_"
+    ]
+  },
+  "scaling": {
+    "replica_min": 1,
+    "replica_max": 10,
+    "scale_up_threshold": 0.6,
+    "scale_down_threshold": 0.3,
+    "control_mode": "automatic"
+  },
+  "ai_v1": {
+    "agent": "capstone-ai-agent",
+    "risk_level": "high",
+    "trap_metric_consistent": true,
+    "evidence_link_stored": true
+  }
+}
