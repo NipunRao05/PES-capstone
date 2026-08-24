@@ -17,7 +17,8 @@
     "scaling_agent/internal/scaler/scaler.go",
     "scaling_agent/internal/scorer/scorer.go",
     "session_module/behavior_state.py",
-    "deception_engine/policy_guard.py"
+    "deception_engine/policy_guard.py",
+    "deception_engine/strategy_agent.py"
   ],
   "mysql_benign": {
     "risk_level": "low",

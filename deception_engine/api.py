@@ -36,6 +36,7 @@ from mutation_store import MutationStore
 from schema_loader import SchemaLoader
 from strategy_registry import StrategyRegistry
 from policy_guard import POLICY_VERSION, PolicyGuard
+from strategy_agent import RULE_POLICY_VERSION, RuleOnlyStrategyAgent
 
 log = logging.getLogger(__name__)
 
@@ -118,11 +119,12 @@ _exposure: ExposureTracker | None = None
 _mutations: MutationStore | None = None
 _strategy_registry: StrategyRegistry = StrategyRegistry.load_with_fallback()
 _policy_guard: PolicyGuard = PolicyGuard(_strategy_registry)
+_strategy_agent: RuleOnlyStrategyAgent = RuleOnlyStrategyAgent(_policy_guard)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _redis_client, _schema_loader, _generator, _exposure, _mutations, _strategy_registry, _policy_guard
+    global _redis_client, _schema_loader, _generator, _exposure, _mutations, _strategy_registry, _policy_guard, _strategy_agent
     _redis_client = redis.Redis(
         host=REDIS_HOST, port=REDIS_PORT,
         decode_responses=True,
@@ -135,6 +137,7 @@ async def lifespan(app: FastAPI):
     _mutations     = MutationStore(_redis_client)
     _strategy_registry = StrategyRegistry.load_with_fallback()
     _policy_guard = PolicyGuard(_strategy_registry)
+    _strategy_agent = RuleOnlyStrategyAgent(_policy_guard)
     if _strategy_registry.degraded:
         log.error("Strategy registry invalid; using built-in D0 fallback")
     log.info(
@@ -184,6 +187,9 @@ def _runtime_components_loaded() -> bool:
         and _policy_guard.enforce_registered_choice(
             _strategy_registry.default_strategy_id
         ) == _strategy_registry.default_strategy_id
+        and _strategy_agent.select_registered_rule(
+            _strategy_registry.default_strategy_id
+        ).strategy_id == _strategy_registry.default_strategy_id
     )
 
 
@@ -207,6 +213,11 @@ def _readiness_payload() -> dict:
                 _strategy_registry.default_strategy_id
             ) == _strategy_registry.default_strategy_id
         ),
+        "rule_strategy_agent_default_approved": (
+            _strategy_agent.select_registered_rule(
+                _strategy_registry.default_strategy_id
+            ).strategy_id == _strategy_registry.default_strategy_id
+        ),
         "redis": redis_ok,
     }
     ready = all(checks.values())
@@ -221,6 +232,7 @@ def _readiness_payload() -> dict:
         "strategy_registry_version": _strategy_registry.registry_version,
         "strategy_registry_degraded": _strategy_registry.degraded,
         "policy_guard_version": POLICY_VERSION,
+        "rule_strategy_agent_version": RULE_POLICY_VERSION,
     }
 
 
@@ -874,10 +886,14 @@ def _strategy_id_for_table(schema_name: str, table_name: str) -> str:
 
 def _json_response(resp: DecisionResponse) -> JSONResponse:
     import dataclasses
-    global _policy_guard
+    global _policy_guard, _strategy_agent
     if _policy_guard.registry is not _strategy_registry:
         _policy_guard = PolicyGuard(_strategy_registry)
-    resp.strategy_id = _policy_guard.enforce_registered_choice(resp.strategy_id)
+    if _strategy_agent.policy_guard is not _policy_guard:
+        _strategy_agent = RuleOnlyStrategyAgent(_policy_guard)
+    resp.strategy_id = _strategy_agent.select_registered_rule(
+        resp.strategy_id
+    ).strategy_id
     resp.strategy_registry_version = _strategy_registry.registry_version
     return JSONResponse(content=dataclasses.asdict(resp))
 

@@ -348,7 +348,7 @@ Explicit state-grounded deception        VERIFIED (Phase 2, 2026-08-24)
 Strategy registry                        VERIFIED (Phase 3, 2026-08-24)
 Behavior-state feature model             VERIFIED (Phase 4, 2026-08-24)
 Policy guard/action-space engine         VERIFIED (Phase 5, 2026-08-24)
-Strategy Agent                           PENDING
+Strategy Agent                           VERIFIED rule-only v1 (Phase 6, 2026-08-24)
 Reward/outcome telemetry                 PENDING
 Contextual bandit                        PENDING
 Learning & Policy Improvement Agent      PENDING
@@ -873,6 +873,27 @@ Version 1 uses existing deterministic rules only.
 ### Acceptance
 
 Behavior remains equivalent to the current rule engine.
+
+### Phase 6 validation record (2026-08-24)
+
+```text
+Implementation: deception_engine/strategy_agent.py (rule-v1), integrated at
+the existing deception-engine response boundary.
+
+The agent reads the policy guard action space and selects only its deterministic
+default. Output is exactly strategy_id, confidence=1.0, selector_type=rule, and
+policy_version=rule-v1. Every selected ID is revalidated by policy-guard-v1;
+malformed, forged, unapproved, missing, degraded, safe/static, and unknown-mode
+inputs fail closed to D0. Raw query text cannot expand or alter the action space.
+
+Validation: focused selector/guard/registry/readiness 36/36; complete affected
+deception-engine suite 54/54; live loopback rule-equivalence D0/D1/D2/D3/D4/D6
+6/6; frozen baseline baseline-1787559912-137cbc 40/40.
+
+Runtime change: only deception-engine was rebuilt/recreated. No persistence,
+asynchronous processing, ML, new service, port, database connection, load test,
+deployment, or GitHub push was introduced.
+```
 
 ---
 
@@ -2412,12 +2433,13 @@ Phase 2 — Authoritative State                    VERIFIED
 Phase 3 — Strategy Registry                      VERIFIED
 Phase 4 — Behavior-State Feature Model           VERIFIED
 Phase 5 — Policy Guard and Safe Action Space     VERIFIED
+Phase 6 — Rule-Only Strategy Agent               VERIFIED
 ~~~
 
-Start **Phase 6 — Rule-Only Strategy Agent** only.
+Start **Phase 7 — Two-Speed Asynchronous Adaptation** only.
 
-Do **not** start Phase 7 or any learning, local LLM, deployment, or public
-exposure work until Phase 6 passes its acceptance checks. Continue to preserve
+Do **not** start Phase 8 or any learning, local LLM, deployment, or public
+exposure work until Phase 7 passes its acceptance checks. Continue to preserve
 the deterministic D0 fallback and follow the ordered roadmap.
 
 ---
