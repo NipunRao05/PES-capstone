@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
+from behavior_state import BehaviorStateStore
+
 _RELATION = r'([A-Za-z_][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)?)'
 _TRAP_TABLES = {
     "api_keys_backup", "salary_executives", "prod_credentials",
@@ -140,6 +142,7 @@ class AuthoritativeStateStore:
         self.max_sessions = min(max(1, max_sessions), 100_000)
         self._states: dict[str, AuthoritativeSessionState] = {}
         self._transaction_snapshots: dict[str, dict] = {}
+        self._behavior = BehaviorStateStore(self.max_sessions)
         self._lock = threading.RLock()
         self.ready = False
 
@@ -153,6 +156,7 @@ class AuthoritativeStateStore:
                 oldest = min(self._states, key=lambda key: self._states[key].updated_at or "")
                 self._states.pop(oldest, None)
                 self._transaction_snapshots.pop(oldest, None)
+                self._behavior.remove(oldest)
             protocol = str(raw.get("protocol") or source_label).lower()
             if "mysql" in protocol:
                 protocol = "mysql"
@@ -185,6 +189,7 @@ class AuthoritativeStateStore:
             if state is None:
                 return
             self._refresh_metadata(state, raw)
+            self._behavior.apply_proxy_event(raw, source_label)
             event_type = str(raw.get("event_type") or "").lower()
             if event_type == "session_end":
                 state.closed = True
@@ -337,6 +342,7 @@ class AuthoritativeStateStore:
             if state is None:
                 return
             self._refresh_metadata(state, raw)
+            self._behavior.apply_mitre_event(raw)
             stage = str(raw.get("phase") or raw.get("tactic") or "")[:_MAX_METADATA_CHARS]
             if stage:
                 state.mitre_stage = stage
@@ -360,6 +366,14 @@ class AuthoritativeStateStore:
         with self._lock:
             states = sorted(self._states.values(), key=lambda item: item.updated_at, reverse=True)
             return [state.to_dict() for state in states[:limit]]
+
+    def get_behavior(self, session_id: str) -> dict | None:
+        """Return normalized behavior features without raw SQL or identities."""
+        return self._behavior.get(session_id)
+
+    def list_behavior(self, limit: int = 100) -> list[dict]:
+        """Return bounded normalized behavior features for recent sessions."""
+        return self._behavior.list(limit)
 
 
 class _StateAPIHandler(BaseHTTPRequestHandler):
@@ -388,6 +402,20 @@ class _StateAPIHandler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "invalid limit"})
                 return
             self._send(200, {"sessions": self.store.list(limit)})
+            return
+        if parsed.path == "/behavior/sessions":
+            try:
+                limit = int(parse_qs(parsed.query).get("limit", ["100"])[0])
+            except ValueError:
+                self._send(400, {"error": "invalid limit"})
+                return
+            self._send(200, {"sessions": self.store.list_behavior(limit)})
+            return
+        behavior_prefix = "/behavior/session/"
+        if parsed.path.startswith(behavior_prefix):
+            session_id = unquote(parsed.path[len(behavior_prefix):])
+            state = self.store.get_behavior(session_id)
+            self._send(200, state) if state else self._send(404, {"error": "session not found"})
             return
         prefix = "/state/session/"
         if parsed.path.startswith(prefix):

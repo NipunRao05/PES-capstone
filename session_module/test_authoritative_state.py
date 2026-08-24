@@ -224,6 +224,16 @@ class AuthoritativeStateTests(unittest.TestCase):
         self.assertEqual(payload["session_id"], "s-1")
         self.assertIn("api_keys_backup", payload["triggered_traps"])
 
+        with urlopen(f"http://127.0.0.1:{port}/behavior/session/s-1", timeout=2) as response:
+            behavior = json.load(response)
+        self.assertEqual(behavior["feature_version"], "behavior-v1")
+        self.assertEqual(behavior["trap_trigger_count"], 1)
+        self.assertNotIn("query_normalized", behavior)
+
+        with urlopen(f"http://127.0.0.1:{port}/behavior/sessions?limit=1", timeout=2) as response:
+            listing = json.load(response)
+        self.assertEqual(listing["sessions"][0]["session_id"], "s-1")
+
         with self.assertRaises(HTTPError) as missing:
             urlopen(f"http://127.0.0.1:{port}/state/session/missing", timeout=2)
         self.assertEqual(missing.exception.code, 404)

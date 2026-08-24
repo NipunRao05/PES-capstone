@@ -4,11 +4,11 @@ Checkpoint date: 2026-08-24
 
 Repository: `F:\b\Capstone-main`
 
-Branch / HEAD: main / 7ba6f6f (Add authoritative deception session state)
+Branch / HEAD: main / 6888e06 (Refactor rules into deception strategy registry)
 
 ## Repository and runtime checkpoint
 
-- Worktree at Phase 3 handoff: Phase 3 implementation and validation artifacts are uncommitted for manual review/commit.
+- Worktree at Phase 4 handoff: Phase 4 implementation and validation artifacts are uncommitted for manual review/commit.
 - `docker compose -f docker-compose.yml config --services` succeeds and defines 26 services.
 - The existing stack was started with builds and pulls disabled. All 25 long-running services are up; one-shot `redpanda-init` exited `0` as designed.
 - Nineteen bounded health/readiness/metrics requests returned HTTP 200. Prometheus has 8/8 active targets up, both Redis services return `PONG`, and all 11 required Redpanda topics exist.
@@ -22,7 +22,9 @@ Branch / HEAD: main / 7ba6f6f (Add authoritative deception session state)
 - The registry validates metadata/assets, forces missing or unapproved IDs to D0, annotates /decide responses, and is exposed through read-only /strategies endpoints. Live readiness reports degraded=false.
 - Live validation found and fixed the existing mutation branch-order issue; managed INSERT/UPDATE/DELETE now reaches D6 instead of the generic fake-table read path.
 - Phase 3 validation passed: deception-engine 32/32, session/state 197/197, MITRE 32/32, AI v1 4/4, both Go proxy suites and vet, authoritative state live checks, frozen baseline run baseline-1787556832-e6bdd5 40/40, and local security gate 17/17.
-- Only deception-engine was rebuilt/recreated for Phase 3 runtime validation. No whole-stack rebuild, load test, deployment, or GitHub push was performed.
+- Phase 4 adds deterministic `behavior-v1` feature extraction from existing structured proxy/session and MITRE events, exposed only through read-only loopback `/behavior` endpoints. Raw SQL and source/user/database identities are not retained or returned.
+- Phase 4 validation passed: session/state 207/207, deception-engine 32/32, MITRE 32/32, AI v1 4/4, both Go proxy suites and vet, live PostgreSQL 19 and MySQL 13 authoritative outcomes with behavior features, frozen baseline run baseline-1787558106-faee3a 40/40, and local security gate 17/17.
+- Only session-module was rebuilt/recreated for Phase 4 runtime validation. No whole-stack rebuild, load test, deployment, or GitHub push was performed.
 
 ## Phase 0 component evidence
 
@@ -45,8 +47,8 @@ Branch / HEAD: main / 7ba6f6f (Add authoritative deception session state)
 | 1 - Freeze deterministic baseline | Required after Phase 0 | BASELINE_BEHAVIOR.md; baseline fixtures; targeted AI v1 session attribution; fresh post-Phase-2 run baseline-1787554852-687956 | **VERIFIED:** 40/40 assertions passed after correcting nondeterministic latest-session attribution | Complete; keep as regression gate. |
 | 2 - Authoritative session/database state | Required after Phase 1 | Confirmed outcome fields in both proxies; session_module/authoritative_state.py; loopback state API; test_authoritative_state.py; tests/state/validate_authoritative_state.ps1 | **VERIFIED:** Python 197/197; Go tests/vet pass; live PostgreSQL 19 and MySQL 13 confirmed outcomes; CRUD, rollback, role/permission, discovery, DROP failure, and consistency pass | Complete; preserve. Persistence remains Phase 24; PostgreSQL extended protocol stays explicitly unverified/no-mutation. |
 | 3 - Strategy registry | Required after Phase 2 | deception_engine/strategy_registry.py; deception_engine/strategies/registry.yaml; read-only registry endpoints; response annotations; fail-closed D0 resolution; Phase 3 tests | **VERIFIED:** D0/D1/D2/D3/D4/D6 approved from existing evidence; D5 review-only; D7 unmapped; 32/32 engine tests and all regressions pass | Complete; preserve registry-v1. |
-| 4 - Behavior-state feature model | Pending | Existing session/MITRE/risk inputs only; no normalized behavior-state module or determinism tests | **PENDING / NEXT** | Start Phase 4 only; derive deterministic normalized features from structured inputs. |
-| 5 - Policy guard/action space | Pending | No policy guard, approved-action set, or allowed/default action output | **PENDING** | Do not start before Phase 4 passes. |
+| 4 - Behavior-state feature model | Required after Phase 3 | `session_module/behavior_state.py`; authoritative-state integration; read-only loopback endpoints; deterministic and redaction tests | **VERIFIED:** session/state 207/207; reordered events produce identical normalized state; live PostgreSQL/MySQL behavior-v1 output; all regressions and gates pass | Complete; preserve behavior-v1 and raw-SQL/identity minimization. |
+| 5 - Policy guard/action space | Pending | Registry and behavior state are verified upstream; no policy guard, approved-action set, or allowed/default action output | **PENDING / NEXT** | Start Phase 5 only; fail closed to approved actions and deterministic D0/default. |
 | 6 - Rule-only Strategy Agent | Pending | No selector output, selector type, or policy version implementation | **PENDING** | Do not start before Phase 5 passes. |
 | 7 - Two-speed adaptation | Pending | Redpanda async baseline exists; no current/next strategy asynchronous loop | **PENDING** | Do not start before Phase 6 passes. |
 | 8 - Decision/outcome telemetry | Pending | General session/MITRE/scaling evidence exists; required strategy decision/outcome records do not | **PENDING** | Do not start before Phase 7 passes. |
@@ -70,4 +72,4 @@ Branch / HEAD: main / 7ba6f6f (Add authoritative deception session state)
 
 ## Checkpoint decision
 
-Phases 0, 1, 2, and 3 are complete. The exact next implementation phase is **Phase 4 - Build the Behavior-State Feature Model**. Phase 4 has not been started.
+Phases 0, 1, 2, 3, and 4 are complete. The exact next implementation phase is **Phase 5 - Build the Policy Guard and Safe Action-Space Engine**. Phase 5 has not been started.

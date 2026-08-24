@@ -346,7 +346,7 @@ Operator controls                        CLAIMED/VERIFY
 
 Explicit state-grounded deception        VERIFIED (Phase 2, 2026-08-24)
 Strategy registry                        VERIFIED (Phase 3, 2026-08-24)
-Behavior-state feature model             PENDING
+Behavior-state feature model             VERIFIED (Phase 4, 2026-08-24)
 Policy guard/action-space engine         PENDING
 Strategy Agent                           PENDING
 Reward/outcome telemetry                 PENDING
@@ -748,6 +748,31 @@ Avoid passing unnecessary raw attacker text to privileged agent logic.
 ### Acceptance
 
 The same deterministic session generates the same normalized behavior state.
+
+### Phase 4 validation record (2026-08-24)
+
+```text
+Implementation: session_module/behavior_state.py (behavior-v1), integrated into
+session_module/authoritative_state.py.
+
+Inputs: existing structured proxy/session and MITRE events only.
+Outputs: deterministic bounded counters, normalized risk, event-time duration,
+query rate, MITRE stage/technique count, trap count, and structured strategy history.
+Raw SQL, source addresses, database users, and database names are not retained or
+returned by the behavior-state API.
+
+Read-only loopback endpoints:
+GET /behavior/session/{session_id}
+GET /behavior/sessions?limit={1..250}
+
+Validation: session-module 207/207; deception-engine 32/32; MITRE 32/32;
+AI Agent v1 4/4; both Go proxy suites and go vet; live authoritative-state
+PostgreSQL 19 and MySQL 13 outcomes; frozen baseline
+baseline-1787558106-faee3a 40/40; local security gate 17/17.
+
+Runtime change: only session-module was rebuilt/recreated. No new service, port,
+database connection, load test, deployment, or GitHub push was introduced.
+```
 
 ---
 
@@ -2361,12 +2386,13 @@ Phase 0 — Verify Current Checkpoint              VERIFIED
 Phase 1 — Freeze Deterministic Baseline          VERIFIED
 Phase 2 — Authoritative State                    VERIFIED
 Phase 3 — Strategy Registry                      VERIFIED
+Phase 4 — Behavior-State Feature Model           VERIFIED
 ~~~
 
-Start **Phase 4 — Behavior-State Feature Model** only.
+Start **Phase 5 — Policy Guard and Safe Action-Space Engine** only.
 
-Do **not** start Phase 5 or any learning, local LLM, deployment, or public
-exposure work until Phase 4 passes its acceptance checks. Continue to preserve
+Do **not** start Phase 6 or any learning, local LLM, deployment, or public
+exposure work until Phase 5 passes its acceptance checks. Continue to preserve
 the deterministic D0 fallback and follow the ordered roadmap.
 
 ---
