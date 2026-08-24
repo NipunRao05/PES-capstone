@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from behavior_state import BehaviorStateStore
+from strategy_telemetry import StrategyTelemetryStore
 
 _RELATION = r'([A-Za-z_][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)?)'
 _TRAP_TABLES = {
@@ -151,6 +152,7 @@ class AuthoritativeStateStore:
         self._states: dict[str, AuthoritativeSessionState] = {}
         self._transaction_snapshots: dict[str, dict] = {}
         self._behavior = BehaviorStateStore(self.max_sessions)
+        self._telemetry = StrategyTelemetryStore(self.max_sessions * 20)
         self._lock = threading.RLock()
         self.ready = False
 
@@ -416,8 +418,27 @@ class AuthoritativeStateStore:
                     "risk_score": state.risk_score,
                 },
                 "query_count": state.query_count,
+                "failed_query_count": state.failed_query_count,
+                "observed_at": state.updated_at,
                 "closed": state.closed,
+                "closed_at": state.closed_at,
             }
+
+    def record_strategy_decision(self, snapshot: dict, response: dict, **costs) -> dict | None:
+        """Store telemetry only after set_next_strategy accepted the decision."""
+        return self._telemetry.record_decision(snapshot, response, **costs)
+
+    def observe_strategy_outcomes(self, snapshot: dict) -> int:
+        return self._telemetry.observe(snapshot)
+
+    def get_strategy_telemetry(self, decision_id: str) -> dict | None:
+        return self._telemetry.get(decision_id)
+
+    def get_session_strategy_telemetry(self, session_id: str) -> dict:
+        return self._telemetry.session(session_id)
+
+    def list_strategy_telemetry(self, limit: int = 100) -> list[dict]:
+        return self._telemetry.list(limit)
 
     def set_next_strategy(
         self, session_id: str, decision: dict, expected_query_count: int
@@ -428,9 +449,19 @@ class AuthoritativeStateStore:
         strategy_id = str(decision.get("strategy_id") or "").strip().upper()
         selector_type = str(decision.get("selector_type") or "").strip().lower()
         policy_version = str(decision.get("policy_version") or "").strip()
+        allowed_raw = decision.get("allowed_actions")
+        rule_default = str(decision.get("rule_default_action") or "").strip().upper()
         confidence = decision.get("confidence")
+        allowed = {
+            str(item or "").strip().upper() for item in allowed_raw
+        } if isinstance(allowed_raw, list) else set()
         if (
             strategy_id not in _APPROVED_STRATEGY_IDS
+            or rule_default not in _APPROVED_STRATEGY_IDS
+            or strategy_id != rule_default
+            or strategy_id not in allowed
+            or rule_default not in allowed
+            or not allowed.issubset(_APPROVED_STRATEGY_IDS)
             or selector_type != "rule"
             or policy_version != "rule-v1"
             or isinstance(confidence, bool)
@@ -494,6 +525,26 @@ class _StateAPIHandler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "invalid limit"})
                 return
             self._send(200, {"sessions": self.store.list_behavior(limit)})
+            return
+        if parsed.path == "/telemetry/decisions":
+            try:
+                limit = int(parse_qs(parsed.query).get("limit", ["100"])[0])
+            except ValueError:
+                self._send(400, {"error": "invalid limit"})
+                return
+            self._send(200, {"records": self.store.list_strategy_telemetry(limit)})
+            return
+        decision_prefix = "/telemetry/decision/"
+        if parsed.path.startswith(decision_prefix):
+            decision_id = unquote(parsed.path[len(decision_prefix):])
+            record = self.store.get_strategy_telemetry(decision_id)
+            self._send(200, record) if record else self._send(404, {"error": "decision not found"})
+            return
+        telemetry_session_prefix = "/telemetry/session/"
+        if parsed.path.startswith(telemetry_session_prefix):
+            session_id = unquote(parsed.path[len(telemetry_session_prefix):])
+            record = self.store.get_session_strategy_telemetry(session_id)
+            self._send(200, record) if record["records"] else self._send(404, {"error": "session not found"})
             return
         behavior_prefix = "/behavior/session/"
         if parsed.path.startswith(behavior_prefix):

@@ -1007,6 +1007,42 @@ memory_cost
 
 Every strategy decision can be linked to what happened afterward.
 
+### Phase 8 validation record (2026-08-24)
+
+```text
+Implementation: session_module/strategy_telemetry.py
+(strategy-telemetry-v1), integrated with the existing asynchronous selector and
+authoritative structured session projection.
+
+Accepted rule-v1 decisions record a bounded decision ID, event timestamp,
+minimized state_before, policy-approved allowed/default actions, selection,
+confidence, and policy version. Each decision ID has one linked evolving outcome
+covering subsequent query/duration/family/table/MITRE/trap/error/progression and
+disconnect evidence plus measured strategy-call latency, process CPU time, and
+serialized request/response bytes. Read-only loopback endpoints expose decision,
+session, and bounded recent telemetry. Raw SQL and fingerprints are not retained.
+
+Outcome observation remains on the asynchronous evidence path and is independent
+of adaptation-queue admission. Invalid, unapproved, stale, failed, or malformed
+selector responses cannot create accepted decision telemetry. No reward, learner,
+persistence, new topic/service/port, database connection, or deployment was added.
+
+Validation: focused deception decision/action-space 13/13; focused telemetry,
+adaptation, authoritative-state, and behavior 33/33; complete affected
+deception-engine 57/57; complete affected session-module 221/221. Full live
+synthetic Redpanda validation produced three accepted rule decisions for session
+phase8-final-0ca48d6c; every decision/outcome ID linked, all outcomes finalized on
+disconnect, and the first outcome recorded one later query, one new family, one
+new table, one new MITRE technique, and attacker progression. Raw SQL keys and
+fingerprints were absent from returned telemetry. A closing smoke against the
+exact final image (`phase8-closing-cf28afd1`) linked and finalized two decisions
+with disconnect evidence and the same raw-SQL/fingerprint-key exclusion.
+
+Runtime change: only deception-engine and session-module were rebuilt/recreated.
+Telemetry is deliberately bounded in memory until Phase 24; Phase 9 owns reward
+semantics and weights.
+```
+
 ---
 
 ## Phase 9 — Define the Deception Reward Model

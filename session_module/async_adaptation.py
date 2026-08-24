@@ -7,6 +7,7 @@ import logging
 import math
 import queue
 import threading
+import time
 from typing import Any, Callable
 from urllib.request import Request, urlopen
 
@@ -88,7 +89,10 @@ class AsyncStrategyAdapter:
 
     def _process(self, session_id: str) -> None:
         snapshot = self.state_store.get_adaptation_snapshot(session_id)
-        if not snapshot or snapshot.get("closed"):
+        if not snapshot:
+            return
+        self.state_store.observe_strategy_outcomes(snapshot)
+        if snapshot.get("closed"):
             return
         payload = {
             "session_state": snapshot["session_state"],
@@ -97,12 +101,34 @@ class AsyncStrategyAdapter:
             "operator_mode": self.operator_mode,
         }
         try:
+            wall_started = time.perf_counter()
+            cpu_started = time.process_time()
             decision = self._request_fn(payload, self.timeout_seconds)
+            latency_ms = (time.perf_counter() - wall_started) * 1000.0
+            cpu_cost_ms = (time.process_time() - cpu_started) * 1000.0
             if not isinstance(decision, dict):
                 raise ValueError("strategy response must be an object")
             applied = self.state_store.set_next_strategy(
                 session_id, decision, snapshot["query_count"]
             )
+            if applied:
+                memory_cost_bytes = len(json.dumps(
+                    payload, separators=(",", ":"), sort_keys=True
+                ).encode("utf-8")) + len(json.dumps(
+                    decision, separators=(",", ":"), sort_keys=True
+                ).encode("utf-8"))
+                recorded = self.state_store.record_strategy_decision(
+                    snapshot,
+                    decision,
+                    latency_ms=latency_ms,
+                    cpu_cost_ms=cpu_cost_ms,
+                    memory_cost_bytes=memory_cost_bytes,
+                )
+                if recorded is None:
+                    raise ValueError("accepted decision telemetry was rejected")
+                latest = self.state_store.get_adaptation_snapshot(session_id)
+                if latest:
+                    self.state_store.observe_strategy_outcomes(latest)
             with self._lock:
                 self._stats["completed" if applied else "stale"] += 1
         except Exception as exc:

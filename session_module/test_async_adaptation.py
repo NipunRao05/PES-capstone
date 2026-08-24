@@ -21,12 +21,15 @@ def query(session_id, sql="show databases", timestamp="2026-01-01T00:00:00Z"):
     }
 
 
-def rule_decision(strategy_id="D1"):
+def rule_decision(strategy_id="D1", allowed=None, default=None):
+    allowed = allowed or ["D0", strategy_id]
     return {
         "strategy_id": strategy_id,
         "confidence": 1.0,
         "selector_type": "rule",
         "policy_version": "rule-v1",
+        "allowed_actions": allowed,
+        "rule_default_action": default or strategy_id,
     }
 
 
@@ -62,6 +65,12 @@ class AsyncStrategyAdapterTests(unittest.TestCase):
             self.assertEqual(state["strategy_id"], "D0")
             self.assertEqual(state["next_strategy_id"], "D1")
             self.assertEqual(state["next_strategy_query_count"], 1)
+            telemetry = self.store.get_session_strategy_telemetry("success")
+            self.assertEqual(len(telemetry["records"]), 1)
+            record = telemetry["records"][0]
+            self.assertEqual(record["decision"]["selected_action"], "D1")
+            self.assertEqual(record["decision"]["allowed_actions"], ["D0", "D1"])
+            self.assertEqual(record["outcome"]["decision_id"], record["decision"]["decision_id"])
             encoded = str(captured)
             for forbidden in (
                 "query_normalized", "fingerprint", "client_ip", "source_ip", "raw_sql"
@@ -153,6 +162,49 @@ class AsyncStrategyAdapterTests(unittest.TestCase):
                 lambda: adapter.stats()["stale"] == 1
             ))
             self.assertFalse(self.store.get("invalid")["next_strategy_ready"])
+        finally:
+            adapter.stop()
+
+    def test_missing_action_space_evidence_is_rejected(self):
+        self.store.apply_proxy_event(query("missing-evidence"), "MySQL")
+        incomplete = rule_decision("D1")
+        incomplete.pop("allowed_actions")
+        adapter = AsyncStrategyAdapter(
+            self.store, "http://unused",
+            request_fn=lambda _payload, _timeout: incomplete,
+        )
+        try:
+            adapter.schedule("missing-evidence")
+            self.assertTrue(self.wait_until(
+                lambda: adapter.stats()["stale"] == 1
+            ))
+            self.assertFalse(
+                self.store.get("missing-evidence")["next_strategy_ready"]
+            )
+            self.assertEqual(
+                self.store.get_session_strategy_telemetry("missing-evidence")["records"],
+                [],
+            )
+        finally:
+            adapter.stop()
+
+    def test_rule_selection_must_equal_guard_default(self):
+        self.store.apply_proxy_event(query("forged-default"), "MySQL")
+        forged = rule_decision("D1", allowed=["D0", "D1"], default="D0")
+        adapter = AsyncStrategyAdapter(
+            self.store, "http://unused",
+            request_fn=lambda _payload, _timeout: forged,
+        )
+        try:
+            adapter.schedule("forged-default")
+            self.assertTrue(self.wait_until(
+                lambda: adapter.stats()["stale"] == 1
+            ))
+            self.assertFalse(self.store.get("forged-default")["next_strategy_ready"])
+            self.assertEqual(
+                self.store.get_session_strategy_telemetry("forged-default")["records"],
+                [],
+            )
         finally:
             adapter.stop()
 

@@ -249,10 +249,16 @@ def run_consumer(bootstrap: str, topic: str, label: str, storage: RedpandaSessio
                     try:
                         if label == "MITRE":
                             state_store.apply_mitre_event(raw)
+                            snapshot = state_store.get_adaptation_snapshot(raw.get("session_id"))
+                            if snapshot:
+                                state_store.observe_strategy_outcomes(snapshot)
                             adaptation.schedule(raw.get("session_id"))
                             continue
                         state_store.apply_proxy_event(raw, label)
-                        if str(raw.get("event_type") or "").lower() == "query":
+                        snapshot = state_store.get_adaptation_snapshot(raw.get("session_id"))
+                        if snapshot:
+                            state_store.observe_strategy_outcomes(snapshot)
+                        if str(raw.get("event_type") or "").lower() in {"query", "session_end"}:
                             adaptation.schedule(raw.get("session_id"))
                     except Exception as e:
                         events_failed_total.labels(stage="state_projection").inc()

@@ -574,9 +574,15 @@ async def next_strategy(body: dict = Body(...)) -> dict:
     if not session_ids or len(session_ids) != 1:
         raise HTTPException(status_code=400, detail="one consistent session_id is required")
     _sync_strategy_runtime()
-    return _strategy_agent.decide(
+    decision, action_space = _strategy_agent.decide_with_action_space(
         states[0], states[1], states[2], body.get("operator_mode", "STATIC")
-    ).to_dict()
+    )
+    result = decision.to_dict()
+    result.update({
+        "allowed_actions": list(action_space.allowed),
+        "rule_default_action": action_space.default,
+    })
+    return result
 
 @app.post("/decide", response_model=None)
 async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:

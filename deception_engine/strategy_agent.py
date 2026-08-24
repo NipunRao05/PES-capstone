@@ -49,10 +49,23 @@ class RuleOnlyStrategyAgent:
         mitre_state: Any = None,
         operator_mode: Any = "STATIC",
     ) -> StrategyDecision:
+        decision, _action_space = self.decide_with_action_space(
+            session_state, behavior_state, mitre_state, operator_mode
+        )
+        return decision
+
+    def decide_with_action_space(
+        self,
+        session_state: Any,
+        behavior_state: Any,
+        mitre_state: Any = None,
+        operator_mode: Any = "STATIC",
+    ) -> tuple[StrategyDecision, ActionSpace]:
+        """Return the rule decision plus the guard evidence used to select it."""
         action_space = self.policy_guard.evaluate(
             session_state, behavior_state, mitre_state, operator_mode
         )
-        return self.select(action_space)
+        return self.select(action_space), action_space
 
     def select_registered_rule(self, requested: Any) -> StrategyDecision:
         """Preserve an existing rule choice only when the guard approves it."""

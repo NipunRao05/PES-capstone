@@ -164,6 +164,8 @@ class NextStrategyEndpointTests(unittest.TestCase):
         self.assertEqual(result, {
             "strategy_id": "D2", "confidence": 1.0,
             "selector_type": "rule", "policy_version": "rule-v1",
+            "allowed_actions": ["D0", "D2"],
+            "rule_default_action": "D2",
         })
 
     def test_endpoint_rejects_raw_query_or_identity(self):
