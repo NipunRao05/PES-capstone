@@ -1,7 +1,7 @@
 """Bounded decision/outcome telemetry for asynchronous strategy selection.
 
-Only minimized structured state is retained. Persistence, rewards, and learned
-selection intentionally belong to later phases.
+Only minimized structured state and validated selection evidence are retained.
+Persistence intentionally belongs to Phase 24.
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
+from learned_selection import clean_selection_metadata, validate_executable_decision
+
 TELEMETRY_VERSION = "strategy-telemetry-v1"
-_APPROVED_STRATEGIES = {"D0", "D1", "D2", "D3", "D4", "D6"}
 _FORBIDDEN_INPUTS = {
     "query", "query_normalized", "fingerprint", "raw_sql", "source_ip",
     "client_ip", "prompt",
@@ -125,7 +126,7 @@ class StrategyTelemetryStore:
         memory_cost_bytes: int = 0,
         shadow_evaluation: dict | None = None,
     ) -> dict | None:
-        """Record one accepted rule decision and initialize its linked outcome."""
+        """Record one accepted rule/learned decision and its linked outcome."""
         if not isinstance(snapshot, dict) or not isinstance(response, dict):
             return None
         session_state = snapshot.get("session_state") or {}
@@ -141,20 +142,9 @@ class StrategyTelemetryStore:
             str(item or "").strip().upper() for item in allowed_raw
         ))
         confidence = response.get("confidence")
-        if (
-            not session_id
-            or selected not in _APPROVED_STRATEGIES
-            or default not in _APPROVED_STRATEGIES
-            or selected != default
-            or selected not in allowed
-            or default not in allowed
-            or any(item not in _APPROVED_STRATEGIES for item in allowed)
-            or selector != "rule"
-            or policy_version != "rule-v1"
-            or isinstance(confidence, bool)
-            or _nonnegative_number(confidence, -1.0) != 1.0
-        ):
+        if not session_id or not validate_executable_decision(response):
             return None
+        confidence = float(confidence)
 
         state_before = self._state_before(snapshot)
         baseline = self._baseline(snapshot)
@@ -188,9 +178,10 @@ class StrategyTelemetryStore:
                 "rule_default_action": default,
                 "selected_action": selected,
                 "selector_type": selector,
-                "confidence": 1.0,
+                "confidence": confidence,
                 "policy_version": policy_version,
             }
+            decision.update(clean_selection_metadata(response))
             cleaned_shadow = self._clean_shadow(
                 shadow_evaluation, session_id, selected, allowed
             )

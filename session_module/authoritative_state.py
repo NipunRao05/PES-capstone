@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from behavior_state import BehaviorStateStore
+from learned_selection import BoundedLearnedSelector, validate_executable_decision
 from reward_model import DeceptionRewardModel
 from shadow_bandit import ShadowLinUCB
 from strategy_telemetry import StrategyTelemetryStore
@@ -149,14 +150,24 @@ class AuthoritativeSessionState:
 class AuthoritativeStateStore:
     """Thread-safe bounded state projection; persistence is intentionally Phase 24."""
 
-    def __init__(self, max_sessions: int = 5000):
+    def __init__(
+        self,
+        max_sessions: int = 5000,
+        *,
+        shadow_bandit: ShadowLinUCB | None = None,
+        learned_confidence_threshold: float = 0.75,
+        learned_minimum_updates: int = 20,
+    ):
         self.max_sessions = min(max(1, max_sessions), 100_000)
         self._states: dict[str, AuthoritativeSessionState] = {}
         self._transaction_snapshots: dict[str, dict] = {}
         self._behavior = BehaviorStateStore(self.max_sessions)
         self._telemetry = StrategyTelemetryStore(self.max_sessions * 20)
         self._rewards = DeceptionRewardModel()
-        self._shadow_bandit = ShadowLinUCB()
+        self._shadow_bandit = shadow_bandit or ShadowLinUCB()
+        self._learned_selector = BoundedLearnedSelector(
+            learned_confidence_threshold, learned_minimum_updates
+        )
         self._lock = threading.RLock()
         self.ready = False
 
@@ -448,6 +459,30 @@ class AuthoritativeStateStore:
                 snapshot, rule_default, type(exc).__name__
             )
 
+    def select_bounded_strategy(
+        self,
+        snapshot: dict,
+        rule_decision: dict,
+        model_evaluation: dict,
+        operator_mode: str,
+    ) -> dict:
+        """Apply the local learned gate; every failure returns the rule default."""
+        try:
+            return self._learned_selector.select(
+                rule_decision,
+                model_evaluation,
+                operator_mode,
+                expected_session_id=str(
+                    (snapshot.get("session_state") or {}).get("session_id") or ""
+                ),
+            )
+        except Exception:
+            if isinstance(rule_decision, dict):
+                return self._learned_selector.select(
+                    rule_decision, None, "RULE_ADAPTIVE"
+                )
+            raise
+
     def observe_strategy_outcomes(self, snapshot: dict) -> int:
         return self._telemetry.observe(snapshot)
 
@@ -466,8 +501,15 @@ class AuthoritativeStateStore:
         violations += len(state.visible_tables & state.dropped_objects)
         if state.next_strategy_ready and (
             state.next_strategy_id not in _APPROVED_STRATEGY_IDS
-            or state.next_strategy_selector_type != "rule"
-            or state.next_strategy_policy_version != "rule-v1"
+            or (
+                state.next_strategy_selector_type == "rule"
+                and state.next_strategy_policy_version != "rule-v1"
+            )
+            or (
+                state.next_strategy_selector_type == "learned"
+                and state.next_strategy_policy_version != "bounded-learned-v1"
+            )
+            or state.next_strategy_selector_type not in {"rule", "learned"}
         ):
             violations += 1
         if (
@@ -541,38 +583,37 @@ class AuthoritativeStateStore:
     def get_shadow_model_stats(self) -> dict:
         return self._shadow_bandit.stats()
 
+    def get_learned_selection_policy(self) -> dict:
+        return {
+            **self._learned_selector.policy(),
+            "model": self._shadow_bandit.stats(),
+        }
+
     def set_next_strategy(
         self, session_id: str, decision: dict, expected_query_count: int
     ) -> bool:
-        """Commit a fresh, validated rule-v1 decision without changing current strategy."""
-        if not isinstance(decision, dict):
+        """Commit a fresh rule or bounded-learned decision for a future query."""
+        if not validate_executable_decision(
+            decision,
+            expected_confidence_threshold=self._learned_selector.confidence_threshold
+            if isinstance(decision, dict)
+            and str(decision.get("selector_type") or "").lower() == "learned"
+            else None,
+            expected_minimum_updates=self._learned_selector.minimum_updates
+            if isinstance(decision, dict)
+            and str(decision.get("selector_type") or "").lower() == "learned"
+            else None,
+        ):
             return False
         strategy_id = str(decision.get("strategy_id") or "").strip().upper()
         selector_type = str(decision.get("selector_type") or "").strip().lower()
         policy_version = str(decision.get("policy_version") or "").strip()
-        allowed_raw = decision.get("allowed_actions")
-        rule_default = str(decision.get("rule_default_action") or "").strip().upper()
         confidence = decision.get("confidence")
-        allowed = {
-            str(item or "").strip().upper() for item in allowed_raw
-        } if isinstance(allowed_raw, list) else set()
-        if (
-            strategy_id not in _APPROVED_STRATEGY_IDS
-            or rule_default not in _APPROVED_STRATEGY_IDS
-            or strategy_id != rule_default
-            or strategy_id not in allowed
-            or rule_default not in allowed
-            or not allowed.issubset(_APPROVED_STRATEGY_IDS)
-            or selector_type != "rule"
-            or policy_version != "rule-v1"
-            or isinstance(confidence, bool)
-        ):
-            return False
         try:
             confidence = float(confidence)
         except (TypeError, ValueError):
             return False
-        if not math.isfinite(confidence) or confidence != 1.0:
+        if not math.isfinite(confidence):
             return False
         with self._lock:
             state = self._states.get(session_id)
@@ -637,6 +678,9 @@ class _StateAPIHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/shadow/model":
             self._send(200, self.store.get_shadow_model_stats())
+            return
+        if parsed.path == "/selection/policy":
+            self._send(200, self.store.get_learned_selection_policy())
             return
         shadow_decision_prefix = "/shadow/decision/"
         if parsed.path.startswith(shadow_decision_prefix):

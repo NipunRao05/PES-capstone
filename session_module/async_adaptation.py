@@ -46,6 +46,7 @@ class AsyncStrategyAdapter:
         self._stats = {
             "scheduled": 0, "coalesced": 0, "dropped": 0,
             "completed": 0, "failed": 0, "stale": 0,
+            "learned_selected": 0, "rule_fallback": 0,
         }
         if autostart:
             self.start()
@@ -103,12 +104,20 @@ class AsyncStrategyAdapter:
         try:
             wall_started = time.perf_counter()
             cpu_started = time.process_time()
-            decision = self._request_fn(payload, self.timeout_seconds)
+            rule_decision = self._request_fn(payload, self.timeout_seconds)
             latency_ms = (time.perf_counter() - wall_started) * 1000.0
             cpu_cost_ms = (time.process_time() - cpu_started) * 1000.0
-            if not isinstance(decision, dict):
+            if not isinstance(rule_decision, dict):
                 raise ValueError("strategy response must be an object")
-            shadow_evaluation = self.state_store.evaluate_shadow(snapshot, decision)
+            model_evaluation = self.state_store.evaluate_shadow(snapshot, rule_decision)
+            try:
+                decision = self.state_store.select_bounded_strategy(
+                    snapshot, rule_decision, model_evaluation, self.operator_mode
+                )
+            except ValueError:
+                with self._lock:
+                    self._stats["stale"] += 1
+                return
             applied = self.state_store.set_next_strategy(
                 session_id, decision, snapshot["query_count"]
             )
@@ -124,13 +133,22 @@ class AsyncStrategyAdapter:
                     latency_ms=latency_ms,
                     cpu_cost_ms=cpu_cost_ms,
                     memory_cost_bytes=memory_cost_bytes,
-                    shadow_evaluation=shadow_evaluation,
+                    shadow_evaluation=model_evaluation
+                    if decision.get("selector_type") == "rule"
+                    else None,
                 )
                 if recorded is None:
                     raise ValueError("accepted decision telemetry was rejected")
                 latest = self.state_store.get_adaptation_snapshot(session_id)
                 if latest:
                     self.state_store.observe_strategy_outcomes(latest)
+                with self._lock:
+                    key = (
+                        "learned_selected"
+                        if decision.get("selector_type") == "learned"
+                        else "rule_fallback"
+                    )
+                    self._stats[key] += 1
             with self._lock:
                 self._stats["completed" if applied else "stale"] += 1
         except Exception as exc:

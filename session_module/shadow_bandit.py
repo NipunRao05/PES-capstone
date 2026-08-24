@@ -147,6 +147,7 @@ class ShadowLinUCB:
         self._pulls = {action: 0 for action in _APPROVED_ACTIONS}
         self._recommendations = 0
         self._updates = 0
+        self._reward_profile_version = ""
         self._lock = threading.RLock()
 
     @staticmethod
@@ -186,6 +187,7 @@ class ShadowLinUCB:
             )
             self._recommendations += 1
             model_pulls = dict(self._pulls)
+            reward_profile_version = self._reward_profile_version
         session_id = str(
             (snapshot.get("session_state") or {}).get("session_id") or ""
         ).strip()[:256]
@@ -217,6 +219,10 @@ class ShadowLinUCB:
             "scores": scores,
             "context_features": features,
             "training_updates": sum(model_pulls.values()),
+            "calibration_status": (
+                "CALIBRATED" if reward_profile_version else "UNCALIBRATED"
+            ),
+            "reward_profile_version": reward_profile_version,
         }
 
     def update(
@@ -240,6 +246,10 @@ class ShadowLinUCB:
             raise ValueError("reward must be finite and between -1 and 1")
         vector, _features = ContextEncoder.encode(snapshot)
         with self._lock:
+            profile = str(reward_profile_version).strip()[:128]
+            if self._reward_profile_version and profile != self._reward_profile_version:
+                raise ValueError("reward profile cannot change within a model instance")
+            self._reward_profile_version = profile
             inverse = self._inverse[action]
             transformed = _matvec(inverse, vector)
             denominator = 1.0 + _dot(vector, transformed)
@@ -277,6 +287,8 @@ class ShadowLinUCB:
             "scores": {},
             "context_features": {},
             "training_updates": self.stats()["updates"],
+            "calibration_status": "UNCALIBRATED",
+            "reward_profile_version": "",
             "reason": str(reason or "model_unavailable")[:64],
         }
 
@@ -294,4 +306,8 @@ class ShadowLinUCB:
                 "updates": self._updates,
                 "pulls": dict(self._pulls),
                 "calibrated_reward_required": True,
+                "calibration_status": (
+                    "CALIBRATED" if self._reward_profile_version else "UNCALIBRATED"
+                ),
+                "reward_profile_version": self._reward_profile_version,
             }

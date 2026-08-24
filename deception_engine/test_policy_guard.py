@@ -30,6 +30,18 @@ class PolicyGuardTests(unittest.TestCase):
         self.assertEqual(result.default, "D1")
         self.assertEqual(result.policy_version, POLICY_VERSION)
 
+    def test_hybrid_learned_mode_uses_the_same_deterministic_safe_action_space(self):
+        rule = self.guard.evaluate(
+            session(), {"backup_keyword_count": 1}, {}, "RULE_ADAPTIVE"
+        )
+        learned = self.guard.evaluate(
+            session(), {"backup_keyword_count": 1}, {},
+            "HYBRID_LEARNED_ADAPTIVE",
+        )
+        self.assertEqual(learned.allowed, rule.allowed)
+        self.assertEqual(learned.default, rule.default)
+        self.assertEqual(learned.policy_version, POLICY_VERSION)
+
     def test_overlapping_backup_and_credential_context_has_stable_default(self):
         result = self.guard.evaluate(session(), {
             "backup_keyword_count": 1,

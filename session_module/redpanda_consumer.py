@@ -317,7 +317,11 @@ if __name__ == "__main__":
 
     storage = RedpandaSessionStore()
     engine = SessionEngine(storage)
-    state_store = AuthoritativeStateStore(config.STATE_MAX_SESSIONS)
+    state_store = AuthoritativeStateStore(
+        config.STATE_MAX_SESSIONS,
+        learned_confidence_threshold=config.LEARNED_SELECTION_MIN_CONFIDENCE,
+        learned_minimum_updates=config.LEARNED_SELECTION_MIN_UPDATES,
+    )
     adaptation = AsyncStrategyAdapter(
         state_store,
         config.ADAPTATION_ENDPOINT,

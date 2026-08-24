@@ -6,9 +6,10 @@ import copy
 import math
 from typing import Any
 
+from learned_selection import validate_executable_decision
+
 REWARD_VERSION = "deception-reward-v1"
 CALIBRATION_STATUS = "REQUIRES_PHASE_10_CALIBRATION"
-_APPROVED_STRATEGIES = {"D0", "D1", "D2", "D3", "D4", "D6"}
 
 
 def _number(value: Any, field: str) -> float:
@@ -70,24 +71,10 @@ class DeceptionRewardModel:
         progression = outcome.get("attacker_progression")
         if not isinstance(progression, dict):
             raise ValueError("attacker_progression must be an object")
-        allowed = decision.get("allowed_actions")
         selected = decision.get("selected_action")
-        default = decision.get("rule_default_action")
-        allowed_set = set(allowed) if isinstance(allowed, list) else set()
-        safety_violations = 0 if (
-            isinstance(allowed, list)
-            and allowed_set
-            and allowed_set.issubset(_APPROVED_STRATEGIES)
-            and selected in _APPROVED_STRATEGIES
-            and default in _APPROVED_STRATEGIES
-            and selected in allowed_set
-            and default in allowed_set
-            and selected == default
-            and str(decision.get("selector_type") or "") == "rule"
-            and str(decision.get("policy_version") or "") == "rule-v1"
-            and not isinstance(decision.get("confidence"), bool)
-            and decision.get("confidence") == 1.0
-        ) else 1
+        executable = copy.deepcopy(decision)
+        executable["strategy_id"] = selected
+        safety_violations = 0 if validate_executable_decision(executable) else 1
 
         dimensions = {
             "engagement": {

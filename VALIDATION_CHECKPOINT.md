@@ -4,11 +4,11 @@ Checkpoint date: 2026-08-24
 
 Repository: `F:\b\Capstone-main`
 
-Branch / HEAD: main / b3a448b (phase 10 done)
+Branch / HEAD: main / 60f6230 (phase 11 done)
 
 ## Repository and runtime checkpoint
 
-- Worktree at Phase 11 handoff: Phase 11 implementation and validation artifacts are uncommitted for manual review/commit.
+- Worktree at Phase 12 handoff: Phase 12 implementation and validation artifacts are uncommitted for manual review/commit.
 - `docker compose -f docker-compose.yml config --services` succeeds and defines 26 services.
 - The existing stack was started with builds and pulls disabled. All 25 long-running services are up; one-shot `redpanda-init` exited `0` as designed.
 - Nineteen bounded health/readiness/metrics requests returned HTTP 200. Prometheus has 8/8 active targets up, both Redis services return `PONG`, and all 11 required Redpanda topics exist.
@@ -43,6 +43,11 @@ Branch / HEAD: main / b3a448b (phase 10 done)
 - Phase 11 adds `linucb-shadow-v1` over a deterministic structured 24-feature context. Recommendations are restricted to the policy action space, recorded beside rule/actual selections, and exposed through read-only model/decision/session evaluation endpoints.
 - Phase 11 validation passed: focused affected tests 38/38, complete session-module 236/236, and live session `phase11-live-fb5bfff9` recorded rule D1, model D0, actual D1, current D0, next rule D1, completed actual reward, zero runtime model updates, and no raw SQL/fingerprint evidence.
 - Only session-module was rebuilt/recreated for Phase 11. Shadow output has no execution authority; updates require a versioned calibrated scalar and runtime has none. No Phase 12 learned selection, persistence, new service/port/topic, database connection, load test, deployment, or GitHub push was performed.
+- Phase 12 adds `bounded-learned-selection-v1` only to the asynchronous next-strategy path. It can select a non-default action only when the model action is inside the exact deterministic policy action space and same-session, score, confidence, calibration-profile, minimum-update, and operator-mode evidence all validate.
+- Phase 12 validation passed: focused session tests 45/45, focused policy/strategy tests 26/26, complete session-module 243/243, complete deception-engine 58/58, and a deterministic calibrated integration changed next D0 to D2 while current remained D0 with zero safety penalty.
+- Live hybrid policy smoke returned allowed D0,D2/default D2. Live Redpanda session `phase12-live-a31b8227` remained rule-controlled (`current D0`, `next D0`, `learned_control=false`) because Compose defaults to RULE_ADAPTIVE and the runtime model is uncalibrated with zero updates. Raw SQL fields/text were absent; only the permitted structured object feature remained.
+- Post-Phase-12 frozen baseline `baseline-1787565357-1fceb4` passed 40/40, and the local predeployment security gate passed 17/17 with no deployment or public exposure.
+- Only deception-engine and session-module were rebuilt/recreated for Phase 12. No runtime training, persistence, new service/port/topic, database connection, proxy change, load test, deployment, or GitHub push was performed.
 
 ## Phase 0 component evidence
 
@@ -73,8 +78,9 @@ Branch / HEAD: main / b3a448b (phase 10 done)
 | 9 - Reward model | Required after Phase 8 | `session_module/reward_model.py`; ten deterministic decision dimensions; completed-session aggregation; read-only reward endpoints; focused, affected, and live validation | **VERIFIED:** completed decisions/sessions return reproducible reward vectors; incomplete outcomes remain pending; malformed/unsafe evidence fails closed; no uncalibrated weights or scalar were invented | Complete; preserve deception-reward-v1. Calibrate a weight profile only from Phase 10 evidence. |
 | 10 - Controlled workloads | Required after Phase 9 | `scripts/controlled_workloads.py`; all nine versioned profiles; strict offline safety validator; 1,000-session deterministic tests and matching JSONL artifacts | **VERIFIED:** thousands of repeatable synthetic local-decoy-only sessions can be generated without execution or real data; every required variation is present | Complete; preserve controlled-workload-v1. Use only bounded subsets for future live calibration. |
 | 11 - Contextual bandit shadow mode | Required after Phase 10 | `session_module/shadow_bandit.py`; deterministic LinUCB/context encoder; action-space restriction; linked rule/model/actual records; evaluation endpoints; focused, affected, and live validation | **VERIFIED:** model recommendations are evaluable against rule outcomes; actual/current strategy remains rule-controlled; uncalibrated runtime updates are zero; no counterfactual result is claimed | Complete; preserve linucb-shadow-v1 and controls_execution=false. Persistence remains Phase 24. |
-| 12 - Bounded learned selection | Pending | Shadow model and action-space evidence now exist; no model-confidence execution gate or learned control path exists | **PENDING / NEXT** | Start Phase 12 only; model may influence selection solely within policy-approved actions and must fall back on low confidence, unavailable/invalid model, or missing calibrated state. |
-| 13-17 - Learning, counterfactuals, proposals, review, validation | Pending | No `learning_agent/`, proposal/review workflow, or candidate-strategy pipeline | **PENDING** | Follow phase order after Phase 12. |
+| 12 - Bounded learned selection | Required after Phase 11 | `session_module/learned_selection.py`; hybrid-safe policy mode; redundant execution/telemetry/reward validation; confidence/calibration/update gates; focused, complete, deterministic learned-control, and live fallback validation | **VERIFIED:** a calibrated model can change only the future strategy inside the exact rule-approved action space; every unavailable, invalid, uncalibrated, low-confidence, stale, cross-session, expanding, or unapproved choice falls back/rejects | Complete; preserve bounded-learned-selection-v1. Runtime remains RULE_ADAPTIVE and uncalibrated until later evidence-backed training exists. |
+| 13 - Learning & Policy Improvement Agent | Pending | Phase 8-12 decision, outcome, reward, context, shadow, and bounded-selection evidence now exists; no retrospective `learning_agent/` implementation | **PENDING / NEXT** | Start Phase 13 only; analyze completed sessions offline without modifying live policy. |
+| 14-17 - Counterfactuals, proposals, review, validation | Pending | No similarity/counterfactual, proposal/review workflow, or candidate-strategy pipeline | **PENDING** | Follow phase order after Phase 13. |
 | 18-19 - Local CPU LLM / decoy generation | Pending | Existing `llm_agent/` is deterministic bounded reporting; no local model runtime or `decoy_generation_agent/` | **PENDING** | Benchmark a local runtime only after Phase 17; generation remains offline and reviewed. |
 | 20 - Evidence store | Claimed/verify | Service, APIs, Redis/Redpanda correlation, redaction and persistence tests | **IMPLEMENTED/PARTIAL:** historical scope verified; adaptive trace fields unavailable | Re-verify live later and extend after upstream adaptive telemetry exists. |
 | 21 - Replay Agent | Claimed/verify | Isolated disposable DBs, captured-evidence-only API, query policy, persistence, tests | **VERIFIED committed artifact; live unverified** | Preserve; smoke-test after Phase 0 service recovery. |
@@ -91,4 +97,4 @@ Branch / HEAD: main / b3a448b (phase 10 done)
 
 ## Checkpoint decision
 
-Phases 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, and 11 are complete. The exact next implementation phase is **Phase 12 - Enable Bounded Learned Strategy Selection**. Phase 12 has not been started.
+Phases 0 through 12 are complete. The exact next implementation phase is **Phase 13 - Build the Learning & Policy Improvement Agent**. Phase 13 has not been started.

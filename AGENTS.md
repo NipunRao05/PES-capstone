@@ -350,8 +350,9 @@ Behavior-state feature model             VERIFIED (Phase 4, 2026-08-24)
 Policy guard/action-space engine         VERIFIED (Phase 5, 2026-08-24)
 Strategy Agent                           VERIFIED rule-only v1 (Phase 6, 2026-08-24)
 Two-speed asynchronous adaptation        VERIFIED (Phase 7, 2026-08-24)
-Reward/outcome telemetry                 PENDING
-Contextual bandit                        PENDING
+Reward/outcome telemetry                 VERIFIED (Phases 8-9, 2026-08-24)
+Contextual bandit                        VERIFIED shadow v1 (Phase 11, 2026-08-24)
+Bounded learned strategy selection       VERIFIED (Phase 12, 2026-08-24)
 Learning & Policy Improvement Agent      PENDING
 Action-space gap proposals               PENDING
 Blue-team review workflow                PENDING
@@ -1298,6 +1299,40 @@ if model unavailable:
 ### Acceptance
 
 Learning can change strategy selection, but cannot expand the action space or violate rules.
+
+### Phase 12 validation record (2026-08-24)
+
+```text
+Implementation: session_module/learned_selection.py
+(bounded-learned-selection-v1), integrated only in the existing asynchronous
+next-strategy worker. The database proxy/query fast path is unchanged.
+
+The deterministic policy guard computes the same legal action space for
+RULE_ADAPTIVE and HYBRID_LEARNED_ADAPTIVE. Learned execution additionally
+requires an exact allowed-action match, same-session evidence, consistent model
+scores/recommendation/confidence, a versioned calibrated reward profile, at
+least 20 model updates, and confidence >= 0.75. Every condition is redundantly
+validated before next-strategy state, telemetry, and reward acceptance.
+
+Rule mode, unavailable/invalid/uncalibrated/low-confidence output, stale state,
+action-space expansion, unapproved strategies, cross-session evidence, and
+validation failure preserve the deterministic rule default. The Compose runtime
+remains RULE_ADAPTIVE by default; its model is UNCALIBRATED with zero updates.
+
+Validation: focused Phase 12/session regressions 45/45; focused policy/strategy
+regressions 26/26; complete session-module 243/243; complete deception-engine
+58/58. A calibrated deterministic fixture changed next strategy D0 -> D2 while
+current strategy remained D0 and produced zero safety penalty. Live hybrid policy
+smoke returned allowed D0,D2/default D2. Live Redpanda session
+phase12-live-a31b8227 retained current D0 and selected rule D0 with
+learned_control=false, model updates=0, and no raw SQL field/text in telemetry.
+Frozen baseline baseline-1787565357-1fceb4 passed 40/40; the local
+predeployment security gate passed 17/17 with no public exposure.
+
+Runtime change: only deception-engine and session-module were rebuilt/recreated.
+No runtime model training, persistence, new service/port/topic, database
+connection, proxy change, load test, deployment, or GitHub push was introduced.
+```
 
 ---
 
@@ -2606,13 +2641,18 @@ Phase 4 — Behavior-State Feature Model           VERIFIED
 Phase 5 — Policy Guard and Safe Action Space     VERIFIED
 Phase 6 — Rule-Only Strategy Agent               VERIFIED
 Phase 7 — Two-Speed Asynchronous Adaptation      VERIFIED
+Phase 8 — Decision and Outcome Telemetry         VERIFIED
+Phase 9 — Deception Reward Model                 VERIFIED
+Phase 10 — Controlled Attack Workloads           VERIFIED
+Phase 11 — Contextual Bandit Shadow Mode         VERIFIED
+Phase 12 — Bounded Learned Strategy Selection    VERIFIED
 ~~~
 
-Start **Phase 8 — Decision and Outcome Telemetry** only.
+Start **Phase 13 — Learning & Policy Improvement Agent** only.
 
-Do **not** start Phase 9 or any learning, local LLM, deployment, or public
-exposure work until Phase 8 passes its acceptance checks. Continue to preserve
-the deterministic D0 fallback and follow the ordered roadmap.
+Do **not** start Phase 14, any local LLM, deployment, or public exposure work
+until Phase 13 passes its acceptance checks. Continue to preserve the
+deterministic D0 fallback and ordered roadmap.
 
 ---
 

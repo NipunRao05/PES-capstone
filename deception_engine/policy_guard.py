@@ -10,7 +10,7 @@ from typing import Any
 from strategy_registry import Strategy, StrategyRegistry
 
 POLICY_VERSION = "policy-guard-v1"
-_ACTIVE_MODE = "RULE_ADAPTIVE"
+_ACTIVE_MODES = {"RULE_ADAPTIVE", "HYBRID_LEARNED_ADAPTIVE"}
 _PASSIVE_MODES = {"STATIC", "SAFE_MODE"}
 _DEFAULT_PRIORITY = ("D6", "D2", "D3", "D4", "D1", "D0")
 _FIELD_ALIASES = {
@@ -197,7 +197,7 @@ class PolicyGuard:
             return self._fallback(mode, "registry_degraded")
         if mode in _PASSIVE_MODES:
             return self._fallback(mode, "operator_mode_rules_only")
-        if mode != _ACTIVE_MODE:
+        if mode not in _ACTIVE_MODES:
             return self._fallback(mode, "operator_mode_unknown")
 
         _, raw_protocol = self._lookup("protocol", sources)
