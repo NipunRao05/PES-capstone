@@ -16,7 +16,10 @@
     "mitre_agent/rules/hmm_config.yaml",
     "scaling_agent/internal/scaler/scaler.go",
     "scaling_agent/internal/scorer/scorer.go",
+    "session_module/authoritative_state.py",
     "session_module/behavior_state.py",
+    "session_module/redpanda_consumer.py",
+    "session_module/async_adaptation.py",
     "deception_engine/policy_guard.py",
     "deception_engine/strategy_agent.py"
   ],

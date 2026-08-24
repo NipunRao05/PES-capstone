@@ -1,4 +1,9 @@
+import asyncio
 import unittest
+
+from fastapi import HTTPException
+
+import api
 
 from policy_guard import ActionSpace, POLICY_VERSION, PolicyGuard
 from strategy_agent import RULE_POLICY_VERSION, RuleOnlyStrategyAgent
@@ -137,6 +142,50 @@ class RuleOnlyStrategyAgentTests(unittest.TestCase):
         )
         self.assertEqual(clean, hostile)
 
+
+class NextStrategyEndpointTests(unittest.TestCase):
+    @staticmethod
+    def payload():
+        return {
+            "session_state": {
+                "session_id": "next-1", "protocol": "mysql",
+                "persona_id": "human_attacker", "database": "hr_production",
+                "session_depth": 3, "modified_objects": [],
+            },
+            "behavior_state": {
+                "session_id": "next-1", "backup_keyword_count": 1,
+            },
+            "mitre_state": {"session_id": "next-1", "phase": "data_discovery"},
+            "operator_mode": "RULE_ADAPTIVE",
+        }
+
+    def test_structured_endpoint_returns_rule_v1_decision(self):
+        result = asyncio.run(api.next_strategy(self.payload()))
+        self.assertEqual(result, {
+            "strategy_id": "D2", "confidence": 1.0,
+            "selector_type": "rule", "policy_version": "rule-v1",
+        })
+
+    def test_endpoint_rejects_raw_query_or_identity(self):
+        for key in ("query_normalized", "fingerprint", "source_ip"):
+            with self.subTest(key=key):
+                payload = self.payload()
+                payload["behavior_state"][key] = "hostile input"
+                with self.assertRaises(HTTPException) as raised:
+                    asyncio.run(api.next_strategy(payload))
+                self.assertEqual(raised.exception.status_code, 400)
+
+    def test_endpoint_rejects_mismatched_sessions_and_extra_fields(self):
+        payload = self.payload()
+        payload["mitre_state"]["session_id"] = "other"
+        with self.assertRaises(HTTPException) as mismatch:
+            asyncio.run(api.next_strategy(payload))
+        self.assertEqual(mismatch.exception.status_code, 400)
+        payload = self.payload()
+        payload["raw"] = "not allowed"
+        with self.assertRaises(HTTPException) as extra:
+            asyncio.run(api.next_strategy(payload))
+        self.assertEqual(extra.exception.status_code, 400)
 
 if __name__ == "__main__":
     unittest.main()

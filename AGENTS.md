@@ -349,6 +349,7 @@ Strategy registry                        VERIFIED (Phase 3, 2026-08-24)
 Behavior-state feature model             VERIFIED (Phase 4, 2026-08-24)
 Policy guard/action-space engine         VERIFIED (Phase 5, 2026-08-24)
 Strategy Agent                           VERIFIED rule-only v1 (Phase 6, 2026-08-24)
+Two-speed asynchronous adaptation        VERIFIED (Phase 7, 2026-08-24)
 Reward/outcome telemetry                 PENDING
 Contextual bandit                        PENDING
 Learning & Policy Improvement Agent      PENDING
@@ -935,6 +936,32 @@ continue current/default strategy
 ### Acceptance
 
 Adaptive processing never blocks the current SQL response.
+
+### Phase 7 validation record (2026-08-24)
+
+```text
+Implementation: session_module/async_adaptation.py (async-adaptation-v1),
+structured-only POST /strategy/next in deception_engine/api.py, and validated
+next-strategy fields in the authoritative session projection.
+
+Fast path: proxy /decide behavior and current strategy are unchanged.
+Slow path: Redpanda query/MITRE projection performs only a nonblocking bounded
+enqueue. One dedicated worker reads a minimized structured snapshot, calls the
+rule-v1 selector with a 0.5 second timeout, rejects stale/invalid/unapproved
+results, and stores a ready next strategy without changing current strategy.
+Queue overflow, timeout, endpoint failure, closed session, or stale state leaves
+the current deterministic D0/rule behavior unchanged.
+
+Validation: focused deception endpoint/selector/guard 25/25; focused async,
+authoritative-state, and behavior 27/27; complete affected deception-engine
+57/57; complete affected session-module 215/215; live Redpanda query event
+projected current=D0 and next=D1 with selector=rule and policy=rule-v1.
+
+Runtime change: only deception-engine and session-module were rebuilt/recreated.
+No proxy fast-path change, persistence, decision/outcome telemetry, ML, new
+service, port, database connection, load test, deployment, or GitHub push was
+introduced.
+```
 
 ---
 
@@ -2434,12 +2461,13 @@ Phase 3 — Strategy Registry                      VERIFIED
 Phase 4 — Behavior-State Feature Model           VERIFIED
 Phase 5 — Policy Guard and Safe Action Space     VERIFIED
 Phase 6 — Rule-Only Strategy Agent               VERIFIED
+Phase 7 — Two-Speed Asynchronous Adaptation      VERIFIED
 ~~~
 
-Start **Phase 7 — Two-Speed Asynchronous Adaptation** only.
+Start **Phase 8 — Decision and Outcome Telemetry** only.
 
-Do **not** start Phase 8 or any learning, local LLM, deployment, or public
-exposure work until Phase 7 passes its acceptance checks. Continue to preserve
+Do **not** start Phase 9 or any learning, local LLM, deployment, or public
+exposure work until Phase 8 passes its acceptance checks. Continue to preserve
 the deterministic D0 fallback and follow the ordered roadmap.
 
 ---

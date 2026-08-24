@@ -26,6 +26,7 @@ _TRAP_TABLES = {
 _MAX_SQL_CHARS = 65536
 _MAX_METADATA_CHARS = 256
 _MAX_OBJECTS_PER_SET = 512
+_APPROVED_STRATEGY_IDS = {"D0", "D1", "D2", "D3", "D4", "D6"}
 _STATE_SET_FIELDS = (
     "permissions", "visible_databases", "visible_tables", "visible_columns",
     "created_objects", "modified_objects", "dropped_objects",
@@ -116,6 +117,13 @@ class AuthoritativeSessionState:
     query_count: int = 0
     session_depth: int = 0
     strategy_history: list[str] = field(default_factory=lambda: ["D0"])
+    next_strategy_id: str = ""
+    next_strategy_ready: bool = False
+    next_strategy_confidence: float = 0.0
+    next_strategy_selector_type: str = ""
+    next_strategy_policy_version: str = ""
+    next_strategy_query_count: int = 0
+    next_strategy_updated_at: str = ""
     outcome_verified_count: int = 0
     unverified_query_count: int = 0
     failed_query_count: int = 0
@@ -376,6 +384,82 @@ class AuthoritativeStateStore:
         return self._behavior.list(limit)
 
 
+    def get_adaptation_snapshot(self, session_id: str) -> dict | None:
+        """Return only structured fields required by the asynchronous selector."""
+        with self._lock:
+            state = self._states.get(session_id)
+            if state is None:
+                return None
+            behavior = self._behavior.get(session_id) or {}
+            persona = state.persona_id
+            if persona == "deterministic-baseline":
+                persona = "unknown"
+            return {
+                "session_state": {
+                    "session_id": state.session_id,
+                    "protocol": state.protocol,
+                    "persona_id": persona,
+                    "database": state.database,
+                    "user": state.user,
+                    "role": state.role,
+                    "permissions": sorted(state.permissions),
+                    "modified_objects": sorted(state.modified_objects),
+                    "discovered_objects": sorted(state.discovered_objects),
+                    "triggered_traps": sorted(state.triggered_traps),
+                    "session_depth": state.session_depth,
+                    "strategy_id": state.strategy_id,
+                },
+                "behavior_state": behavior,
+                "mitre_state": {
+                    "session_id": state.session_id,
+                    "phase": state.mitre_stage,
+                    "risk_score": state.risk_score,
+                },
+                "query_count": state.query_count,
+                "closed": state.closed,
+            }
+
+    def set_next_strategy(
+        self, session_id: str, decision: dict, expected_query_count: int
+    ) -> bool:
+        """Commit a fresh, validated rule-v1 decision without changing current strategy."""
+        if not isinstance(decision, dict):
+            return False
+        strategy_id = str(decision.get("strategy_id") or "").strip().upper()
+        selector_type = str(decision.get("selector_type") or "").strip().lower()
+        policy_version = str(decision.get("policy_version") or "").strip()
+        confidence = decision.get("confidence")
+        if (
+            strategy_id not in _APPROVED_STRATEGY_IDS
+            or selector_type != "rule"
+            or policy_version != "rule-v1"
+            or isinstance(confidence, bool)
+        ):
+            return False
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(confidence) or confidence != 1.0:
+            return False
+        with self._lock:
+            state = self._states.get(session_id)
+            if (
+                state is None
+                or state.closed
+                or state.query_count != expected_query_count
+            ):
+                return False
+            state.next_strategy_id = strategy_id
+            state.next_strategy_ready = True
+            state.next_strategy_confidence = confidence
+            state.next_strategy_selector_type = selector_type
+            state.next_strategy_policy_version = policy_version
+            state.next_strategy_query_count = expected_query_count
+            state.next_strategy_updated_at = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            )
+            return True
 class _StateAPIHandler(BaseHTTPRequestHandler):
     store: AuthoritativeStateStore
 

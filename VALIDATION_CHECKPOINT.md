@@ -4,11 +4,11 @@ Checkpoint date: 2026-08-24
 
 Repository: `F:\b\Capstone-main`
 
-Branch / HEAD: main / 3416e46 (phase 5 done)
+Branch / HEAD: main / 06f2f85 (phase 6 done)
 
 ## Repository and runtime checkpoint
 
-- Worktree at Phase 6 handoff: Phase 6 implementation and validation artifacts are uncommitted for manual review/commit.
+- Worktree at Phase 7 handoff: Phase 7 implementation and validation artifacts are uncommitted for manual review/commit.
 - `docker compose -f docker-compose.yml config --services` succeeds and defines 26 services.
 - The existing stack was started with builds and pulls disabled. All 25 long-running services are up; one-shot `redpanda-init` exited `0` as designed.
 - Nineteen bounded health/readiness/metrics requests returned HTTP 200. Prometheus has 8/8 active targets up, both Redis services return `PONG`, and all 11 required Redpanda topics exist.
@@ -28,7 +28,9 @@ Branch / HEAD: main / 3416e46 (phase 5 done)
 - The scheduled Phase 5 full regression passed: deception-engine 44/44, session/state 207/207, MITRE 32/32, evidence 8/8, replay/hardening 15/15, LLM Agent v2 9/9, AI v1 4/4, all three Go suites plus vet, live PostgreSQL 19 and MySQL 13 authoritative outcomes, frozen baseline baseline-1787559435-403780 40/40, and local security gate 17/17.
 - Phase 6 adds `rule-v1`, an in-process rule-only selector that consumes policy-guard-v1 allowed/default output, emits the required deterministic four-field decision, and revalidates every selected strategy at the existing response boundary.
 - Phase 6 validation passed: focused selector/guard/registry/readiness 36/36, deception-engine 54/54, live D0/D1/D2/D3/D4/D6 rule-equivalence 6/6, and frozen baseline baseline-1787559912-137cbc 40/40.
-- Only deception-engine was rebuilt/recreated for Phase 6 runtime validation. No asynchronous processing, ML, whole-stack rebuild, load test, deployment, or GitHub push was performed.
+- Phase 7 adds `async-adaptation-v1`: query/MITRE consumers perform only bounded nonblocking enqueue; a dedicated worker sends minimized structured snapshots to internal `/strategy/next`, validates freshness and rule-v1 output, and stores `next_strategy_*` without changing the current strategy.
+- Phase 7 validation passed: focused deception 25/25, focused session/adaptation/state 27/27, deception-engine 57/57, session-module 215/215, and a live Redpanda event completed `current D0 -> next D1` while preserving the current fast-path strategy.
+- Only deception-engine and session-module were rebuilt/recreated for Phase 7 runtime validation. No proxy fast-path change, persistence, telemetry, ML, whole-stack rebuild, load test, deployment, or GitHub push was performed.
 
 ## Phase 0 component evidence
 
@@ -54,8 +56,8 @@ Branch / HEAD: main / 3416e46 (phase 5 done)
 | 4 - Behavior-state feature model | Required after Phase 3 | `session_module/behavior_state.py`; authoritative-state integration; read-only loopback endpoints; deterministic and redaction tests | **VERIFIED:** session/state 207/207; reordered events produce identical normalized state; live PostgreSQL/MySQL behavior-v1 output; all regressions and gates pass | Complete; preserve behavior-v1 and raw-SQL/identity minimization. |
 | 5 - Policy guard/action space | Required after Phase 4 | `deception_engine/policy_guard.py`; structured-state activation gates; versioned allowed/default output; attacker-facing enforcement; focused and full-regression tests | **VERIFIED:** only approved and explicitly legal strategies enter the action space; invalid, unapproved, degraded, unsupported, and unknown-mode choices fail to D0; all milestone regressions pass | Complete; preserve policy-guard-v1 and structured-input boundary. |
 | 6 - Rule-only Strategy Agent | Required after Phase 5 | `deception_engine/strategy_agent.py`; exact rule-v1 decision contract; guard-bounded selector; response-boundary integration; focused, affected, live-equivalence, and baseline tests | **VERIFIED:** selects only the deterministic guard default with confidence 1.0; invalid/forged/unapproved inputs fail to D0; current D0-D6 behavior remains equivalent | Complete; preserve rule-v1 and no-ML boundary. |
-| 7 - Two-speed adaptation | Pending | Redpanda async baseline and verified rule selector exist; no current/next strategy asynchronous loop | **PENDING / NEXT** | Start Phase 7 only; update future strategy state asynchronously without blocking current SQL. |
-| 8 - Decision/outcome telemetry | Pending | General session/MITRE/scaling evidence exists; required strategy decision/outcome records do not | **PENDING** | Do not start before Phase 7 passes. |
+| 7 - Two-speed adaptation | Required after Phase 6 | `session_module/async_adaptation.py`; nonblocking consumer enqueue; structured `/strategy/next`; stale-safe validated next-strategy session state; focused/full affected tests and live Redpanda validation | **VERIFIED:** current strategy remains deterministic; next rule strategy is prepared asynchronously; queue/timeout/failure/stale cases preserve fallback | Complete; preserve async-adaptation-v1 and fast-path isolation. |
+| 8 - Decision/outcome telemetry | Pending | General session/MITRE/scaling evidence and async strategy state exist; required linked strategy decision/outcome records do not | **PENDING / NEXT** | Start Phase 8 only; record linkable decisions and subsequent outcomes without adding learning. |
 | 9 - Reward model | Pending | No reproducible deception reward implementation | **PENDING** | Do not start before Phase 8 passes. |
 | 10 - Controlled workloads | Pending | `scripts/controlled_calibration.ps1` and a 13-case bounded report exist | **IMPLEMENTED/PARTIAL:** not the required nine profiles or hundreds/thousands of sessions | Extend only after Phase 9; keep workloads synthetic and bounded. |
 | 11-12 - Shadow bandit / bounded learned selection | Pending | No bandit, shadow recommendation, confidence gate, or learned selector | **PENDING** | Do not start before Phase 10 passes. |
@@ -76,4 +78,4 @@ Branch / HEAD: main / 3416e46 (phase 5 done)
 
 ## Checkpoint decision
 
-Phases 0, 1, 2, 3, 4, 5, and 6 are complete. The exact next implementation phase is **Phase 7 - Add Two-Speed Asynchronous Adaptation**. Phase 7 has not been started.
+Phases 0, 1, 2, 3, 4, 5, 6, and 7 are complete. The exact next implementation phase is **Phase 8 - Build Decision and Outcome Telemetry**. Phase 8 has not been started.

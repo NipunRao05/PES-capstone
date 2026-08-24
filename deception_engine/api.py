@@ -15,6 +15,7 @@ across multiple queries in the same session (consistency probes pass).
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import math
 import os
@@ -537,6 +538,46 @@ async def get_strategy(strategy_id: str) -> dict:
     return strategy.to_dict()
 
 
+def _sync_strategy_runtime() -> None:
+    global _policy_guard, _strategy_agent
+    if _policy_guard.registry is not _strategy_registry:
+        _policy_guard = PolicyGuard(_strategy_registry)
+    if _strategy_agent.policy_guard is not _policy_guard:
+        _strategy_agent = RuleOnlyStrategyAgent(_policy_guard)
+
+
+@app.post("/strategy/next")
+async def next_strategy(body: dict = Body(...)) -> dict:
+    """Internal slow-path rule decision from structured evidence only."""
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="request must be an object")
+    if len(json.dumps(body, separators=(",", ":"))) > 131_072:
+        raise HTTPException(status_code=413, detail="request too large")
+    allowed = {"session_state", "behavior_state", "mitre_state", "operator_mode"}
+    if set(body) - allowed:
+        raise HTTPException(status_code=400, detail="unexpected request fields")
+    states = tuple(body.get(name, {}) for name in (
+        "session_state", "behavior_state", "mitre_state"
+    ))
+    if any(not isinstance(state, dict) for state in states):
+        raise HTTPException(status_code=400, detail="state inputs must be objects")
+    forbidden = {
+        "query", "query_normalized", "fingerprint", "client_ip", "source_ip",
+        "raw_sql", "prompt",
+    }
+    if any(key in forbidden for state in states for key in state):
+        raise HTTPException(status_code=400, detail="raw or identifying input is forbidden")
+    session_ids = {
+        str(state.get("session_id") or "").strip()
+        for state in states if state.get("session_id")
+    }
+    if not session_ids or len(session_ids) != 1:
+        raise HTTPException(status_code=400, detail="one consistent session_id is required")
+    _sync_strategy_runtime()
+    return _strategy_agent.decide(
+        states[0], states[1], states[2], body.get("operator_mode", "STATIC")
+    ).to_dict()
+
 @app.post("/decide", response_model=None)
 async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
     """
@@ -886,11 +927,7 @@ def _strategy_id_for_table(schema_name: str, table_name: str) -> str:
 
 def _json_response(resp: DecisionResponse) -> JSONResponse:
     import dataclasses
-    global _policy_guard, _strategy_agent
-    if _policy_guard.registry is not _strategy_registry:
-        _policy_guard = PolicyGuard(_strategy_registry)
-    if _strategy_agent.policy_guard is not _policy_guard:
-        _strategy_agent = RuleOnlyStrategyAgent(_policy_guard)
+    _sync_strategy_runtime()
     resp.strategy_id = _strategy_agent.select_registered_rule(
         resp.strategy_id
     ).strategy_id

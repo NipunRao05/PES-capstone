@@ -28,6 +28,7 @@ from session_engine import SessionEngine
 from storage import RedpandaSessionStore
 from clustering_worker import ClusteringWorker
 from authoritative_state import AuthoritativeStateStore, start_state_api
+from async_adaptation import AsyncStrategyAdapter
 import config
 
 from prometheus_client import start_http_server
@@ -217,7 +218,7 @@ def decode_json_message(storage: RedpandaSessionStore, message, service: str, st
 # Generic Redpanda consumer — one per proxy
 # ─────────────────────────────────────────────────────────────────────
 
-def run_consumer(bootstrap: str, topic: str, label: str, storage: RedpandaSessionStore, state_store: AuthoritativeStateStore):
+def run_consumer(bootstrap: str, topic: str, label: str, storage: RedpandaSessionStore, state_store: AuthoritativeStateStore, adaptation: AsyncStrategyAdapter):
     logger.info(f"[{label}] Connecting to {bootstrap}, topic={topic}")
     group_id = f"{config.CONSUMER_GROUP}-{label.lower()}"
 
@@ -248,8 +249,11 @@ def run_consumer(bootstrap: str, topic: str, label: str, storage: RedpandaSessio
                     try:
                         if label == "MITRE":
                             state_store.apply_mitre_event(raw)
+                            adaptation.schedule(raw.get("session_id"))
                             continue
                         state_store.apply_proxy_event(raw, label)
+                        if str(raw.get("event_type") or "").lower() == "query":
+                            adaptation.schedule(raw.get("session_id"))
                     except Exception as e:
                         events_failed_total.labels(stage="state_projection").inc()
                         logger.error("[%s] State projection failed: %s", label, e, exc_info=True)
@@ -308,6 +312,13 @@ if __name__ == "__main__":
     storage = RedpandaSessionStore()
     engine = SessionEngine(storage)
     state_store = AuthoritativeStateStore(config.STATE_MAX_SESSIONS)
+    adaptation = AsyncStrategyAdapter(
+        state_store,
+        config.ADAPTATION_ENDPOINT,
+        config.ADAPTATION_OPERATOR_MODE,
+        config.ADAPTATION_TIMEOUT_SECONDS,
+        config.ADAPTATION_QUEUE_SIZE,
+    )
     state_api = start_state_api(state_store, config.STATE_API_HOST, config.STATE_API_PORT)
     logger.info(f"Authoritative state API at http://{config.STATE_API_HOST}:{config.STATE_API_PORT}")
 
@@ -319,35 +330,35 @@ if __name__ == "__main__":
 
     mysql_thread = threading.Thread(
         target=run_consumer,
-        args=(config.MYSQL_REDPANDA_BOOTSTRAP, config.TOPIC_MYSQL_INPUT, "MySQL", storage, state_store),
+        args=(config.MYSQL_REDPANDA_BOOTSTRAP, config.TOPIC_MYSQL_INPUT, "MySQL", storage, state_store, adaptation),
         daemon=True,
     )
     mysql_thread.start()
 
     pg_thread = threading.Thread(
         target=run_consumer,
-        args=(config.PG_REDPANDA_BOOTSTRAP, config.TOPIC_PG_INPUT, "PG", storage, state_store),
+        args=(config.PG_REDPANDA_BOOTSTRAP, config.TOPIC_PG_INPUT, "PG", storage, state_store, adaptation),
         daemon=True,
     )
     pg_thread.start()
 
     mysql_session_thread = threading.Thread(
         target=run_consumer,
-        args=(config.MYSQL_REDPANDA_BOOTSTRAP, config.TOPIC_MYSQL_SESSION, "MySQL-Session", storage, state_store),
+        args=(config.MYSQL_REDPANDA_BOOTSTRAP, config.TOPIC_MYSQL_SESSION, "MySQL-Session", storage, state_store, adaptation),
         daemon=True,
     )
     mysql_session_thread.start()
 
     pg_session_thread = threading.Thread(
         target=run_consumer,
-        args=(config.PG_REDPANDA_BOOTSTRAP, config.TOPIC_PG_SESSION, "PG-Session", storage, state_store),
+        args=(config.PG_REDPANDA_BOOTSTRAP, config.TOPIC_PG_SESSION, "PG-Session", storage, state_store, adaptation),
         daemon=True,
     )
     pg_session_thread.start()
 
     mitre_thread = threading.Thread(
         target=run_consumer,
-        args=(config.OWN_REDPANDA_BOOTSTRAP, config.TOPIC_MITRE_EVENTS, "MITRE", storage, state_store),
+        args=(config.OWN_REDPANDA_BOOTSTRAP, config.TOPIC_MITRE_EVENTS, "MITRE", storage, state_store, adaptation),
         daemon=True,
     )
     mitre_thread.start()
@@ -367,6 +378,8 @@ if __name__ == "__main__":
         # consumer_timeout_ms and re-check shutdown_event.
         for thread in (mysql_thread, pg_thread, mysql_session_thread, pg_session_thread, mitre_thread):
             thread.join(timeout=5)
+
+        adaptation.stop()
 
         clustering.stop()
         clustering.join(timeout=10)

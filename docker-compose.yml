@@ -427,6 +427,10 @@ services:
       STATE_API_HOST: "0.0.0.0"
       STATE_API_PORT: "8003"
       STATE_MAX_SESSIONS: "5000"
+      ADAPTATION_ENDPOINT: "http://deception-engine:8001/strategy/next"
+      ADAPTATION_OPERATOR_MODE: "RULE_ADAPTIVE"
+      ADAPTATION_TIMEOUT_SECONDS: "0.5"
+      ADAPTATION_QUEUE_SIZE: "2048"
       PYTHONUNBUFFERED: "1"
     depends_on:
       redpanda-init:

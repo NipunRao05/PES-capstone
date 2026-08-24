@@ -67,6 +67,10 @@ METRICS_PORT             = int(os.getenv("METRICS_PORT", 8000))
 STATE_API_HOST           = os.getenv("STATE_API_HOST", "0.0.0.0")
 STATE_API_PORT           = int(os.getenv("STATE_API_PORT", 8003))
 STATE_MAX_SESSIONS       = int(os.getenv("STATE_MAX_SESSIONS", 5000))
+ADAPTATION_ENDPOINT      = os.getenv("ADAPTATION_ENDPOINT", "http://deception-engine:8001/strategy/next")
+ADAPTATION_OPERATOR_MODE = os.getenv("ADAPTATION_OPERATOR_MODE", "RULE_ADAPTIVE")
+ADAPTATION_TIMEOUT_SECONDS = float(os.getenv("ADAPTATION_TIMEOUT_SECONDS", "0.5"))
+ADAPTATION_QUEUE_SIZE    = int(os.getenv("ADAPTATION_QUEUE_SIZE", "2048"))
 
 # Kafka producer ack wait for low-volume session/profile outputs.
 PRODUCER_ACK_TIMEOUT_SECONDS = float(os.getenv("PRODUCER_ACK_TIMEOUT_SECONDS", "10"))
