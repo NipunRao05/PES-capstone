@@ -358,7 +358,7 @@ Similar-session counterfactual analysis VERIFIED observational v1 (Phase 14, 202
 Action-space gap proposals               VERIFIED recommendation v1 (Phase 15, 2026-08-24)
 Blue-team review workflow                VERIFIED bounded v1 (Phase 16, 2026-08-25)
 Candidate-strategy validation pipeline   VERIFIED deterministic v1 (Phase 17, 2026-08-25)
-Local CPU LLM runtime                    PENDING
+Local CPU LLM runtime                    VERIFIED bounded CPU v1 (Phase 18, 2026-08-25)
 Decoy Generation Agent                   PENDING
 Analyst Agent v2                         PENDING
 Final adaptive Grafana dashboards        PENDING
@@ -1776,6 +1776,43 @@ Do not load/unload the model for every incident.
 
 LLM failure has zero impact on attacker-facing honeypot availability.
 
+### Phase 18 validation record (2026-08-25)
+
+```text
+Implementation: one optional Ollama 0.32.5 service plus local_llm/config.py and
+local_llm/client.py (local-llm-client-v1). No attacker-facing service depends on
+the local-ai profile. The service has no host/public port, GPU device, production
+credential, Docker/Kubernetes socket, or registry/policy/state authority. Its only
+network is internal=true; cloud features are disabled. The pre-provisioned named
+model volume is mounted read-only at runtime.
+
+Model: qwen2.5:1.5b-instruct-q4_K_M, Qwen2 family, 1.5B parameter class,
+Q4_K_M GGUF, 986,061,892 bytes, Apache-2.0 source metadata. Only this one model
+was downloaded. The runtime is limited to 4 CPUs/4 GiB, one loaded model, one
+parallel inference, queue depth 2, 2K context, persistent keep-alive, bounded
+prompt/output/response sizes, 30-second default client timeout, and no retries.
+
+Validation: 9/9 focused tests passed configuration, disabled mode, health,
+readiness/model metadata, bounded generation, oversized/invalid input rejection,
+timeout/unavailable/invalid-output handling, queue/concurrency admission, and
+read-only authority. Compose validation proved zero dependents, zero host ports,
+and internal-only networking.
+
+Live CPU benchmark: four harmless synthetic requests completed. The recorded
+three-request benchmark had first latency 6,086.400 ms, warm median 1,592.850 ms,
+and 94 generated tokens; the CPU-observation request completed in 1,526.643 ms.
+Container memory was 11.56 MiB before model load and 1.066 GiB loaded/idle.
+Observed inference CPU peaked at 327.38% under the 4-CPU cap. Ollama reported the
+model resident Forever and 100% CPU.
+
+Failure isolation: after local-llm was stopped, the client returned bounded
+UNAVAILABLE; deception-engine and session-module stayed ready, and a synthetic
+SHOW DATABASES decision still returned the deterministic fake D1 response.
+The optional runtime remains stopped after validation while the model volume
+persists. No Phase 19 agent, generation workflow, deployment, or GitHub push was
+introduced.
+```
+
 ---
 
 ## Phase 19 — Build the Decoy Generation Agent
@@ -2833,11 +2870,12 @@ Phase 14 - Similar-Session Counterfactuals        VERIFIED
 Phase 15 - Action-Space Gap Detection             VERIFIED
 Phase 16 - Blue-Team Review Workflow              VERIFIED
 Phase 17 - Candidate-Strategy Validation          VERIFIED
+Phase 18 - Local CPU LLM Runtime                   VERIFIED
 ~~~
 
-The next pending phase is **Phase 18 - Local CPU LLM Runtime**.
+The next pending phase is **Phase 19 - Decoy Generation Agent**.
 
-Phase 18 was not started in the Phase 17 checkpoint. Continue to preserve the
+Phase 19 was not started in the Phase 18 checkpoint. Continue to preserve the
 deterministic D0 fallback and ordered roadmap; do not start deployment or public
 exposure work out of order.
 

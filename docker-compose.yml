@@ -643,6 +643,43 @@ services:
       - loki
     restart: unless-stopped
 
+  local-llm:
+    image: ollama/ollama:0.32.5
+    container_name: capstone-local-llm
+    profiles: ["local-ai"]
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_KEEP_ALIVE: "-1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "${LOCAL_LLM_MAX_CONCURRENCY:-1}"
+      OLLAMA_MAX_QUEUE: "${LOCAL_LLM_MAX_QUEUE_DEPTH:-2}"
+      OLLAMA_CONTEXT_LENGTH: "2048"
+      OLLAMA_DEBUG: "0"
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_NOHISTORY: "1"
+      OLLAMA_NOPRUNE: "1"
+    volumes:
+      - local_llm_models:/root/.ollama:ro
+    networks:
+      - local-llm-internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 4g
+    cpus: 4.0
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
 volumes:
   pgdata:
   mysqldata:
@@ -652,10 +689,15 @@ volumes:
   prometheusdata:
   lokidata:
   grafanadata:
+  local_llm_models:
+    name: capstone-main_local_llm_models
+    external: true
 
 networks:
   default:
   control-internal:
     internal: true
   sandbox-internal:
+    internal: true
+  local-llm-internal:
     internal: true
