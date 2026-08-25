@@ -356,8 +356,8 @@ Bounded learned strategy selection       VERIFIED (Phase 12, 2026-08-24)
 Learning & Policy Improvement Agent      VERIFIED retrospective v1 (Phase 13, 2026-08-24)
 Similar-session counterfactual analysis VERIFIED observational v1 (Phase 14, 2026-08-24)
 Action-space gap proposals               VERIFIED recommendation v1 (Phase 15, 2026-08-24)
-Blue-team review workflow                PENDING
-Candidate-strategy validation pipeline   PENDING
+Blue-team review workflow                VERIFIED bounded v1 (Phase 16, 2026-08-25)
+Candidate-strategy validation pipeline   VERIFIED deterministic v1 (Phase 17, 2026-08-25)
 Local CPU LLM runtime                    PENDING
 Decoy Generation Agent                   PENDING
 Analyst Agent v2                         PENDING
@@ -1599,6 +1599,48 @@ Blue-team feedback should later become learning data.
 
 No new strategy can reach `APPROVED` state without explicit review.
 
+### Phase 16 validation record (2026-08-25)
+
+```text
+Implementation: learning_agent/review.py (blue-team-review-v1 and bounded-review-
+store-v1) plus review_main.py. The explicit state machine maps APPROVE, REJECT,
+MODIFY, and REQUEST_MORE_EVIDENCE from REQUIRES_REVIEW to
+APPROVED_FOR_VALIDATION, REJECTED, MODIFICATION_REQUESTED, and
+MORE_EVIDENCE_REQUIRED respectively. A different second transition is rejected;
+an identical repeat is idempotent.
+
+Input boundary: only complete strategy-gap-proposal-v1 ACTION_SPACE_GAP proposals
+in REQUIRES_REVIEW state with bounded confidence, supporting session/decision
+references, non-deployable human-review authority, and the exact structured schema
+are accepted. NO_GAP_DETECTED and INSUFFICIENT_EVIDENCE are not reviewable.
+Malformed, forged, oversized, nonfinite, executable-field, missing-reviewer, and
+Learning-Agent self-review inputs fail closed.
+
+Audit/authority: the bounded in-memory store preserves an immutable original
+proposal snapshot, proposal digest, reviewer, timestamp, decision, reason,
+modifications/evidence requests, deterministic review ID, and validation handoff.
+APPROVE means only APPROVED_FOR_VALIDATION: deployable=false,
+strategy_registry_approved=false, requires_phase_17_validation=true, and
+validation_started=false. No registry, policy, rules, live strategy, asset,
+infrastructure, or database write authority exists. Durable persistence remains
+Phase 24.
+
+Validation: 12/12 focused Phase 16 tests and 43/43 complete learning-agent tests
+passed. Deterministic Phase 15 fixture smoke produced APPROVED_FOR_VALIDATION as
+RV-090dd92b0c24c20e8017aedd for P-72e05e173839e626f79389bc while remaining
+non-deployable and registry-unapproved. NO_GAP contract smoke returned
+NOT_REVIEWABLE with review_created=false. The previously verified live NO_GAP
+session was unavailable after session-module restart and current telemetry was
+empty, consistent with the documented Phase 24 persistence boundary; no live gap
+or review item was manufactured. Registry and policy-guard files remained
+byte-identical during authority testing.
+
+Runtime change: none. No service/image was rebuilt or recreated. No new database,
+Redis schema, Kafka topic, persistence service, authentication system, LLM,
+deployment, registry/policy mutation, or GitHub push was introduced. Phase 17 was
+not started.
+```
+
 ---
 
 ## Phase 17 — Build the Candidate-Strategy Validation Pipeline
@@ -1644,6 +1686,39 @@ unsafe unsupported operations
 ### Acceptance
 
 Only fully validated strategies may move to the live approved registry.
+
+### Phase 17 validation record (2026-08-25)
+
+```text
+Implementation: learning_agent/candidate_validation.py
+(candidate-validation-v1) and JSON-stdin validation_main.py.
+
+The validator accepts only an intact Phase 16 APPROVED_FOR_VALIDATION review and
+runs twelve ordered, deterministic, fail-closed checks: proposal/review linkage,
+registry-compatible metadata, read-only registry collisions, bounded CREATE TABLE
+assets, PK/FK/index schema consistency, secret/PII patterns, network/egress,
+protocol declarations, authoritative-state contradictions, record-only traps,
+resource limits, and sandbox applicability. Invalid required checks are REJECTED.
+
+Metadata-only candidates may be VALIDATED with sandbox NOT_APPLICABLE. Database
+asset candidates are VALIDATION_INCOMPLETE because the existing captured-evidence
+sandbox has no candidate-import contract; no SQL or fake sandbox evidence is
+created. VALIDATED remains non-deployable, registry-unapproved, inactive, and
+requires a future registry-promotion workflow.
+
+Validation: 12/12 focused Phase 17 tests and 55/55 complete learning-agent tests.
+Deterministic fixture smoke against live read-only strategy-registry-v1 produced
+VALIDATED result VAL-a9f989a91768c45ff48dcaa0 for D8 with all eleven required
+pre-sandbox stages passing and sandbox NOT_APPLICABLE. Direct in-network sandbox
+readiness passed with captured_evidence_only=true and both disposable databases
+ready. Registry, policy guard, and authoritative-state files stayed byte-identical.
+
+Runtime change: only the existing sandbox-replay-api Nginx container was restarted
+after its cached upstream address returned 502; localhost readiness then passed.
+No service/image rebuild, database write, SQL execution, Compose/port/topic change,
+registry/policy mutation, activation, deployment, LLM runtime, model download,
+Phase 18 work, or GitHub push occurred.
+```
 
 ---
 
@@ -2756,13 +2831,15 @@ Phase 12 - Bounded Learned Strategy Selection    VERIFIED
 Phase 13 - Learning & Policy Improvement Agent   VERIFIED
 Phase 14 - Similar-Session Counterfactuals        VERIFIED
 Phase 15 - Action-Space Gap Detection             VERIFIED
+Phase 16 - Blue-Team Review Workflow              VERIFIED
+Phase 17 - Candidate-Strategy Validation          VERIFIED
 ~~~
 
-The next pending phase is **Phase 16 - Blue-Team Review Workflow**.
+The next pending phase is **Phase 18 - Local CPU LLM Runtime**.
 
-Phase 16 was not started in the Phase 15 checkpoint. Continue to preserve the
-deterministic D0 fallback and ordered roadmap; do not start local LLM, deployment,
-or public exposure work out of order.
+Phase 18 was not started in the Phase 17 checkpoint. Continue to preserve the
+deterministic D0 fallback and ordered roadmap; do not start deployment or public
+exposure work out of order.
 
 ---
 

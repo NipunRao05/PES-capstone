@@ -4,11 +4,11 @@ Checkpoint date: 2026-08-24
 
 Repository: `F:\b\Capstone-main`
 
-Branch / HEAD: main / 5cdead6 (phase 14 done)
+Branch / HEAD: main / dbfcf2c (phase 15 done)
 
 ## Repository and runtime checkpoint
 
-- Worktree at Phase 15 handoff: Phase 15 implementation and validation artifacts are uncommitted for manual review/commit.
+- Worktree at Phase 16 handoff: Phase 16 implementation and validation artifacts are uncommitted for manual review/commit.
 - `docker compose -f docker-compose.yml config --services` succeeds and defines 26 services.
 - The existing stack was started with builds and pulls disabled. All 25 long-running services are up; one-shot `redpanda-init` exited `0` as designed.
 - Nineteen bounded health/readiness/metrics requests returned HTTP 200. Prometheus has 8/8 active targets up, both Redis services return `PONG`, and all 11 required Redpanda topics exist.
@@ -58,6 +58,9 @@ Branch / HEAD: main / 5cdead6 (phase 14 done)
 - Phase 15 adds offline `action-space-gap-v1` classification and `strategy-gap-proposal-v1`. It distinguishes `ACTION_SPACE_GAP`, `NO_GAP_DETECTED`, and `INSUFFICIENT_EVIDENCE`; only recurring coherent unmodeled behavior plus completed similar weak outcomes across multiple existing strategies can create a proposal.
 - Phase 15 validation passed 10/10 focused gap tests and 31/31 complete learning-agent tests. Positive proposals are deterministic, structured, evidence-linked, confidence-capped, non-deployable, and `REQUIRES_REVIEW`; incomplete history is excluded; malformed target/history fails closed; Phase 14 tests remain green; Phase 16 review behavior is absent.
 - Live Phase 15 target `2b0de47f-b6d6-48d2-9c69-a22efdfaaaea` returned `NO_GAP_DETECTED` twice as `GD-63f2162c0ec0088673dc4d98`: 2 decisions, 7 completed historical sessions, 1 incomplete session excluded, and 0 proposals. Missing target evidence was rejected cleanly. No runtime service was rebuilt or modified.
+- Phase 16 adds bounded in-memory `blue-team-review-v1` with explicit APPROVE/REJECT/MODIFY/REQUEST_MORE_EVIDENCE transitions, immutable proposal snapshots, deterministic idempotent review identities, bounded human reviewer/reason/change/evidence fields, and an auditable Phase 17 handoff that never starts validation.
+- Phase 16 validation passed 12/12 focused review tests and 43/43 complete learning-agent tests. Valid proposal approval produces only `APPROVED_FOR_VALIDATION`; forged/non-gap/self-review inputs fail closed; modification and evidence requests preserve the original proposal; registry and policy files remain unchanged.
+- Positive fixture smoke produced review `RV-090dd92b0c24c20e8017aedd` for proposal `P-72e05e173839e626f79389bc`, with deployable/registry-approved/validation-started all false. NO_GAP contract smoke created no review. The prior live in-memory NO_GAP session was unavailable after restart and current telemetry contained zero records; no replacement live gap was manufactured. Durable restart persistence remains Phase 24.
 
 ## Phase 0 component evidence
 
@@ -92,7 +95,8 @@ Branch / HEAD: main / 5cdead6 (phase 14 done)
 | 13 - Learning & Policy Improvement Agent | Required after Phase 12 | `learning_agent/retrospective.py`; bounded internal client/CLI; strict linkage/reward/action-space validation; deterministic session/decision evaluation; approved-only evidence ranking; focused and live validation | **VERIFIED:** completed sessions produce reproducible evidence-backed evaluations without modifying live policy/model/registry/infrastructure; uncalibrated evidence cannot produce a performance or counterfactual claim | Complete; preserve retrospective-learning-v1 and offline/read-only authority. Persistence remains Phase 24. |
 | 14 - Similar-session retrieval and counterfactual evaluation | Required after Phase 13 | `learning_agent/similarity.py`; bounded history client/CLI; deterministic normalized context; same-protocol nearest neighbors; observational dimension estimates with uncertainty/confidence/support IDs; focused and live validation | **VERIFIED:** 21/21 tests pass; repeated live analysis ID is identical; incomplete/malformed/missing evidence is filtered or rejected; output is read-only and creates no Phase 15 proposal | Complete; preserve counterfactual-estimate-v1 and non-causal/uncalibrated wording. Persistence remains Phase 24. |
 | 15 - Action-space gap detection | Required after Phase 14 | `learning_agent/gap_detection.py`; bounded CLI; explicit three-way classification; evidence-linked deterministic proposal schema; focused, affected, and live validation | **VERIFIED:** 10/10 focused and 31/31 learning-agent tests pass; live evidence returns stable NO_GAP with incomplete history excluded; proposals cannot deploy, mutate, approve, or execute | Complete; preserve action-space-gap-v1 and recommendation-only authority. |
-| 16-17 - Blue-team review and candidate validation | Pending | No review workflow, approval-state transition, review queue, or candidate-strategy validation pipeline | **PENDING** | Start Phase 16 only after manual Phase 15 commit; do not treat a proposal as approved. |
+| 16 - Blue-team review workflow | Required after Phase 15 | `learning_agent/review.py`; JSON-stdin CLI; explicit review state machine; bounded immutable in-memory audit store; deterministic IDs; focused, affected, and smoke validation | **VERIFIED:** 12/12 focused and 43/43 learning-agent tests pass; APPROVE is validation-only; all four actions pass; non-gap/forged/self-review inputs fail closed; registry/policy remain unchanged | Complete; preserve blue-team-review-v1 and restart-persistence boundary. |
+| 17 - Candidate-strategy validation | Required after Phase 16 | `learning_agent/candidate_validation.py`; ordered 12-stage validator; read-only registry client/CLI; bounded SQL/schema/data/network/protocol/state/trap/resource checks; explicit sandbox applicability; focused, complete, and fixture smoke validation | **VERIFIED:** 12/12 focused and 55/55 learning-agent tests pass; fixture smoke returned deterministic VALIDATED `VAL-a9f989a91768c45ff48dcaa0`; database-asset candidates remain VALIDATION_INCOMPLETE without candidate-import support; registry/policy/state files unchanged | Complete; preserve candidate-validation-v1 and non-live authority. |
 | 18-19 - Local CPU LLM / decoy generation | Pending | Existing `llm_agent/` is deterministic bounded reporting; no local model runtime or `decoy_generation_agent/` | **PENDING** | Benchmark a local runtime only after Phase 17; generation remains offline and reviewed. |
 | 20 - Evidence store | Claimed/verify | Service, APIs, Redis/Redpanda correlation, redaction and persistence tests | **IMPLEMENTED/PARTIAL:** historical scope verified; adaptive trace fields unavailable | Re-verify live later and extend after upstream adaptive telemetry exists. |
 | 21 - Replay Agent | Claimed/verify | Isolated disposable DBs, captured-evidence-only API, query policy, persistence, tests | **VERIFIED committed artifact; live unverified** | Preserve; smoke-test after Phase 0 service recovery. |
@@ -109,4 +113,4 @@ Branch / HEAD: main / 5cdead6 (phase 14 done)
 
 ## Checkpoint decision
 
-Phases 0 through 15 are complete. The exact next implementation phase is **Phase 16 - Build the Blue-Team Review Workflow**. Phase 16 has not been started.
+Phases 0 through 17 are complete. The exact next implementation phase is **Phase 18 - Add a Local CPU LLM Runtime**. Phase 18 has not been started.

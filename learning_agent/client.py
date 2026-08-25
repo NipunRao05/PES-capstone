@@ -93,6 +93,10 @@ class SafeInternalEvidenceClient:
         registry = self._get(f"{self.registry_base_url}/strategies")
         return telemetry, reward, registry
 
+    def load_registry(self) -> dict:
+        """Load the current strategy registry through the fixed read-only endpoint."""
+        return self._get(f"{self.registry_base_url}/strategies")
+
     @staticmethod
     def _validated_session_id(session_id: str) -> str:
         session_id = str(session_id or "").strip()
