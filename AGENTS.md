@@ -359,7 +359,7 @@ Action-space gap proposals               VERIFIED recommendation v1 (Phase 15, 2
 Blue-team review workflow                VERIFIED bounded v1 (Phase 16, 2026-08-25)
 Candidate-strategy validation pipeline   VERIFIED deterministic v1 (Phase 17, 2026-08-25)
 Local CPU LLM runtime                    VERIFIED bounded CPU v1 (Phase 18, 2026-08-25)
-Decoy Generation Agent                   PENDING
+Decoy Generation Agent                   VERIFIED offline candidate v1 (Phase 19, 2026-08-25)
 Analyst Agent v2                         PENDING
 Final adaptive Grafana dashboards        PENDING
 Comparative research experiments         PENDING
@@ -1867,6 +1867,45 @@ LLM
 
 Generated content is never live until deterministic validation succeeds.
 
+### Phase 19 validation record (2026-08-25)
+
+```text
+Implementation: decoy_generation_agent/ (decoy-generation-agent-v1), a local
+CLI/library that reuses local_llm/client.py. It accepts only an intact Phase 15
+proposal, Phase 16 APPROVED_FOR_VALIDATION review, fictional persona, bounded
+strategy requirements, one supported protocol, a synthetic schema summary, and
+explicit requested asset types. The deterministic prompt marks all context as
+untrusted data and never includes raw SQL, source addresses, credentials, or
+fingerprints.
+
+Output is exact-schema JSON with at most 5 tables, 12 columns/table, 20
+rows/table, bounded backup/migration/audit metadata, stable content IDs/digests,
+model/runtime/settings evidence, and fixed nondeployable authority. Generated
+SQL is not accepted from the model; safe CREATE TABLE candidate text is rendered
+deterministically only after metadata validation. Secret/PII, external network,
+unsafe operation, schema/type/PK/FK/index, duplicate, asset-scope, and resource
+checks fail closed. One initial inference plus at most one fresh structural
+repair is permitted; invalid output is never inserted into the repair prompt.
+
+Every request passes a Phase 17 approval/registry preflight before inference.
+Accepted metadata-only output reaches Phase 17 VALIDATED. Candidate database
+assets retain the existing Phase 17 VALIDATION_INCOMPLETE sandbox-import boundary
+and are never executed. Registry, policy, strategy selection, session state,
+database state, containers, and attacker-facing services remain outside agent
+authority.
+
+Validation: Phase 19 focused tests 15/15; directly relevant Phase 17 tests
+12/12. The pinned Ollama 0.32.5 / Qwen2.5 1.5B Instruct Q4_K_M live smoke made
+exactly three generator requests (schema, backup/migration, audit): 0 first-pass
+successes, 3 bounded repairs, 0 candidates ready, and 3 deterministic safe
+rejections; median request latency was 48,356.184 ms. Invalid live model output
+was not manually repaired and no database asset was executed.
+
+The local-llm container was stopped after the smoke. Deception-engine and
+session-module readiness remained true. No attacker-facing rebuild, service,
+port, registry/policy change, Phase 20 work, deployment, or GitHub push occurred.
+```
+
 ---
 
 ## Phase 20 — Verify/Complete the Evidence Store
@@ -2871,11 +2910,12 @@ Phase 15 - Action-Space Gap Detection             VERIFIED
 Phase 16 - Blue-Team Review Workflow              VERIFIED
 Phase 17 - Candidate-Strategy Validation          VERIFIED
 Phase 18 - Local CPU LLM Runtime                   VERIFIED
+Phase 19 - Decoy Generation Agent                  VERIFIED
 ~~~
 
-The next pending phase is **Phase 19 - Decoy Generation Agent**.
+The next pending phase is **Phase 20 - Verify/Complete the Evidence Store**.
 
-Phase 19 was not started in the Phase 18 checkpoint. Continue to preserve the
+Phase 20 was not started in the Phase 19 checkpoint. Continue to preserve the
 deterministic D0 fallback and ordered roadmap; do not start deployment or public
 exposure work out of order.
 

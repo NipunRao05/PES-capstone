@@ -243,6 +243,15 @@ def _secret_findings(value: Any, path: str = "candidate") -> list[str]:
     return findings
 
 
+def candidate_safety_findings(value: Any) -> dict[str, list[str]]:
+    """Expose the Phase 17 deterministic secret/PII and egress scanners read-only."""
+    _walk(value, "candidate")
+    return {
+        "sensitive": sorted(set(_secret_findings(value))),
+        "network": sorted(set(_network_findings(value))),
+    }
+
+
 class CandidateValidationPipeline:
     """Run the ordered fail-closed Phase 17 validation stages."""
 
