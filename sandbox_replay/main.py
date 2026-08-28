@@ -113,6 +113,33 @@ def bounded(value: Any, limit: int = 16384) -> str:
     return str(value).replace("\x00", "")[:limit]
 
 
+def link_evidence_artifact(
+    session_id: Any, artifact_type: str, artifact_id: Any, payload: dict[str, Any]
+) -> bool:
+    """Best-effort internal evidence link; replay safety never depends on it."""
+    session = bounded(session_id, 512).strip()
+    identity = bounded(artifact_id, 128).strip()
+    if not session or not identity:
+        return False
+    try:
+        response = requests.post(
+            f"{EVIDENCE_STORE_URL}/evidence/artifact",
+            json={
+                "session_id": session,
+                "artifact_type": artifact_type,
+                "artifact_id": identity,
+                "timestamp": payload.get("completed_at") or payload.get("generated_at") or utc_now(),
+                "payload": payload,
+            },
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.json().get("stored") in {True, False}
+    except Exception as exc:
+        log.warning("Evidence artifact link failed: type=%s id=%s error=%s", artifact_type, identity, exc)
+        return False
+
+
 def normalize_protocol(value: Any) -> str:
     protocol = bounded(value, 32).strip().lower()
     if protocol in {"pg", "postgresql"} or protocol.startswith("postgres"):
@@ -675,6 +702,9 @@ class ReplayEngine:
             "verification": None,
         }
         self.store.save_hardening(report)
+        link_evidence_artifact(
+            report.get("session_id"), "hardening_finding", report["hardening_report_id"], report
+        )
         return report
 
     def verify_hardening_report(self, report_id: str) -> dict[str, Any]:
@@ -797,6 +827,12 @@ class ReplayEngine:
                 "results": verification_results,
             }
             self.store.save_hardening(report)
+            link_evidence_artifact(
+                report.get("session_id"),
+                "hardening_finding",
+                report["hardening_report_id"],
+                report,
+            )
             return report
         finally:
             self.hardening_lock.release()
@@ -880,6 +916,7 @@ class ReplayEngine:
 
             result["completed_at"] = utc_now()
             self.store.save(result)
+            link_evidence_artifact(session_id, "replay_result", replay_id, result)
             return result
         finally:
             self.replay_slots.release()

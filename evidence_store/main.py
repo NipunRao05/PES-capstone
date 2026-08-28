@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -43,12 +44,15 @@ REDIS_HOST = os.getenv("REDIS_HOST", "redis-mitre")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 SCALING_AGENT_URL = os.getenv("SCALING_AGENT_URL", "http://scaling-agent:8080")
+SESSION_MODULE_URL = os.getenv("SESSION_MODULE_URL", "http://session-module:8003")
 POLL_TIMEOUT_SECONDS = float(os.getenv("POLL_TIMEOUT_SECONDS", "2"))
 SCALE_POLL_INTERVAL_SECONDS = float(os.getenv("SCALE_POLL_INTERVAL_SECONDS", "2"))
+ADAPTIVE_POLL_INTERVAL_SECONDS = float(os.getenv("ADAPTIVE_POLL_INTERVAL_SECONDS", "2"))
 EVIDENCE_TTL_SECONDS = int(os.getenv("EVIDENCE_TTL_SECONDS", str(30 * 24 * 60 * 60)))
 MAX_QUERY_EVENTS = int(os.getenv("MAX_QUERY_EVENTS", "500"))
 MAX_STAGE_EVENTS = int(os.getenv("MAX_STAGE_EVENTS", "100"))
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "16384"))
+MAX_ARTIFACT_BYTES = int(os.getenv("MAX_ARTIFACT_BYTES", str(256 * 1024)))
 
 SESSION_PREFIX = "evidence:session:"
 SESSION_INDEX = "evidence:sessions"
@@ -62,9 +66,43 @@ _IDENTIFIED_BY = re.compile(r"(?i)(\bidentified\s+by\s+)([^\s;]+)")
 _HEX_LITERAL = re.compile(r"(?i)\b0x[0-9a-f]{8,}\b")
 _LONG_NUMBER = re.compile(r"\b\d{4,}\b")
 
+ARTIFACT_COLLECTIONS = {
+    "session_state": "session_states",
+    "strategy_decision": "strategy_decisions",
+    "strategy_reward": "strategy_rewards",
+    "replay_result": "replay_results",
+    "hardening_finding": "hardening_findings",
+    "learning_analysis": "learning_analyses",
+    "proposal": "proposals",
+    "analyst_report": "analyst_reports",
+}
+_SENSITIVE_ARTIFACT_KEYS = {
+    "client_ip", "source_ip", "password", "passwd", "pwd", "secret", "token",
+    "api_key", "api-key", "credential", "credentials", "raw_payload",
+}
+_QUERY_ARTIFACT_KEYS = {"query", "query_raw", "query_normalized", "sql"}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def timestamp_score(value: Any) -> float:
+    """Convert bounded event time to a safe Redis index score."""
+    now = time.time()
+    text = bounded_text(value, 128).strip()
+    if not text:
+        return now
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        score = parsed.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return now
+    if not math.isfinite(score) or score < 0:
+        return now
+    return min(score, now + 300.0)
 
 
 def bounded_text(value: Any, limit: int = MAX_TEXT_LENGTH) -> str:
@@ -111,6 +149,13 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def safe_nonnegative_int(value: Any, default: int = 0) -> int:
+    number = safe_float(value, float(default))
+    if not math.isfinite(number) or number < 0:
+        return default
+    return int(number)
+
+
 def safe_json(value: str | None, default: Any) -> Any:
     if not value:
         return default
@@ -120,9 +165,92 @@ def safe_json(value: str | None, default: Any) -> Any:
         return default
 
 
+def sanitize_artifact(value: Any, *, key: str = "", depth: int = 0) -> Any:
+    """Bound internal structured evidence and remove secret/source material."""
+    if depth > 8:
+        raise ValueError("artifact nesting exceeds the evidence boundary")
+    normalized_key = key.strip().lower()
+    sensitive_key = (
+        normalized_key in _SENSITIVE_ARTIFACT_KEYS
+        or any(
+            marker in normalized_key
+            for marker in (
+                "password", "passwd", "credential", "secret", "token",
+                "api_key", "apikey", "source_ip", "client_ip", "source_address",
+            )
+        )
+    )
+    if sensitive_key:
+        return "[REDACTED]"
+    if value is None or isinstance(value, bool) or isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("artifact contains a non-finite number")
+        return value
+    if isinstance(value, str):
+        return redact_query(value) if normalized_key in _QUERY_ARTIFACT_KEYS else bounded_text(value)
+    if isinstance(value, list):
+        if len(value) > 500:
+            raise ValueError("artifact list exceeds the evidence boundary")
+        return [sanitize_artifact(item, key=key, depth=depth + 1) for item in value]
+    if isinstance(value, dict):
+        if len(value) > 256:
+            raise ValueError("artifact object exceeds the evidence boundary")
+        result: dict[str, Any] = {}
+        for raw_key, item in value.items():
+            item_key = bounded_text(raw_key, 128).strip()
+            if not item_key:
+                raise ValueError("artifact keys must be nonempty")
+            result[item_key] = sanitize_artifact(item, key=item_key, depth=depth + 1)
+        return result
+    raise ValueError("artifact contains an unsupported value type")
+
+
+def validate_artifact_link(
+    session_id: Any,
+    artifact_type: Any,
+    artifact_id: Any,
+    payload: Any,
+) -> tuple[str, str, str, dict[str, Any]]:
+    session = bounded_text(session_id, 512).strip()
+    kind = bounded_text(artifact_type, 64).strip().lower()
+    identity = bounded_text(artifact_id, 128).strip()
+    if not session or not identity or kind not in ARTIFACT_COLLECTIONS:
+        raise ValueError("valid session_id, artifact_type, and artifact_id are required")
+    if not isinstance(payload, dict):
+        raise ValueError("artifact payload must be an object")
+    sanitized = sanitize_artifact(payload)
+    encoded = json.dumps(
+        sanitized, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    if len(encoded) > MAX_ARTIFACT_BYTES:
+        raise ValueError("artifact payload exceeds the evidence boundary")
+    linked_sessions: set[str] = set()
+
+    def collect_session_ids(item: Any) -> None:
+        if isinstance(item, dict):
+            for item_key, child in item.items():
+                if item_key.strip().lower() == "session_id":
+                    linked = bounded_text(child, 512).strip()
+                    if linked:
+                        linked_sessions.add(linked)
+                else:
+                    collect_session_ids(child)
+        elif isinstance(item, list):
+            for child in item:
+                collect_session_ids(child)
+
+    collect_session_ids(sanitized)
+    if any(linked != session for linked in linked_sessions):
+        raise ValueError("cross-session artifact linkage is forbidden")
+    return session, kind, identity, sanitized
+
+
 class EvidenceRepository:
     def __init__(self, client: redis.Redis):
         self.client = client
+        self._touch_lock = threading.Lock()
         configured_salt = os.getenv("EVIDENCE_IP_HASH_SALT", "").encode("utf-8")
         if configured_salt:
             self.ip_hash_salt = configured_salt
@@ -154,24 +282,40 @@ class EvidenceRepository:
             self._child_key(session_id, "queries"),
             self._child_key(session_id, "session_events"),
             self._child_key(session_id, "mitre_events"),
+            self._child_key(session_id, "trap_events"),
             self._child_key(session_id, "scaling_events"),
             self._child_key(session_id, "ai_reports"),
             self._child_key(session_id, "event_ids"),
         ]
+        keys.extend(
+            self._child_key(session_id, collection)
+            for collection in ARTIFACT_COLLECTIONS.values()
+        )
         pipe = self.client.pipeline(transaction=False)
         for key in keys:
             pipe.expire(key, EVIDENCE_TTL_SECONDS)
         pipe.execute()
 
     def _touch(self, session_id: str, payload: dict[str, Any], timestamp: str) -> None:
+        with self._touch_lock:
+            self._touch_locked(session_id, payload, timestamp)
+
+    def _touch_locked(self, session_id: str, payload: dict[str, Any], timestamp: str) -> None:
         key = self._record_key(session_id)
+        event_score = timestamp_score(timestamp)
+        current_first_seen = self.client.hget(key, "first_seen")
+        current_last_seen = self.client.hget(key, "last_seen")
         source_ip = payload.get("client_ip") or payload.get("source_ip")
         protocol = bounded_text(payload.get("protocol"), 32).lower()
         mapping = {
-            "schema_version": "1",
+            "schema_version": "2",
             "session_id": session_id,
-            "last_seen": timestamp,
+            "trace_id": "TR-" + stable_id("evidence-trace-v2", session_id)[:24],
         }
+        if not current_first_seen or event_score < timestamp_score(current_first_seen):
+            mapping["first_seen"] = timestamp
+        if not current_last_seen or event_score >= timestamp_score(current_last_seen):
+            mapping["last_seen"] = timestamp
         optional = {
             "source_ip_hash": self.hash_source_ip(source_ip),
             "fingerprint": bounded_text(payload.get("fingerprint"), 512),
@@ -183,8 +327,9 @@ class EvidenceRepository:
 
         pipe = self.client.pipeline(transaction=False)
         pipe.hset(key, mapping=mapping)
-        pipe.hsetnx(key, "first_seen", timestamp)
-        pipe.zadd(SESSION_INDEX, {session_id: time.time()})
+        prior_score = self.client.zscore(SESSION_INDEX, session_id)
+        score = max(float(prior_score or 0.0), event_score)
+        pipe.zadd(SESSION_INDEX, {session_id: score})
         pipe.expire(key, EVIDENCE_TTL_SECONDS)
         pipe.execute()
 
@@ -237,6 +382,14 @@ class EvidenceRepository:
         self._touch(session_id, payload, timestamp)
 
         if topic in {"mysql-query-events", "pg-query-events"}:
+            response = {
+                "outcome_verified": payload.get("outcome_verified") is True,
+                "success": payload.get("success") is True,
+                "authority": bounded_text(payload.get("authority"), 32).lower(),
+                "transaction_state": bounded_text(payload.get("transaction_state"), 64),
+                "error_code": bounded_text(payload.get("error_code"), 64),
+                "bytes_out": safe_nonnegative_int(payload.get("bytes_out")),
+            }
             query = {
                 "event_id": event_id,
                 "timestamp": timestamp,
@@ -245,6 +398,8 @@ class EvidenceRepository:
                 "fingerprint": bounded_text(payload.get("fingerprint"), 512),
                 "query_raw": redact_query(payload.get("query_raw")),
                 "query_normalized": redact_query(payload.get("query_normalized")),
+                "response": response,
+                "strategy_id": bounded_text(payload.get("strategy_id"), 32).upper(),
                 "source_topic": topic,
                 "source_partition": partition,
                 "source_offset": offset,
@@ -306,6 +461,20 @@ class EvidenceRepository:
                 for match in payload.get("techniques_matched", []):
                     if isinstance(match, dict):
                         self._merge_technique(session_id, bounded_text(match.get("technique_id"), 64))
+                if event["trap_triggered"]:
+                    self._append_once(
+                        session_id,
+                        "trap_events",
+                        f"trap:{event_id}",
+                        {
+                            "trap_event_id": f"trap:{event_id}",
+                            "timestamp": timestamp,
+                            "technique_id": technique_id,
+                            "risk_score": event["risk_score"],
+                            "source_event_id": event_id,
+                        },
+                        MAX_STAGE_EVENTS,
+                    )
 
         self._expire_session_keys(session_id)
         return True
@@ -359,6 +528,42 @@ class EvidenceRepository:
         self._expire_session_keys(session_id)
         return True
 
+    def ingest_artifact(
+        self,
+        session_id: Any,
+        artifact_type: Any,
+        artifact_id: Any,
+        payload: Any,
+        timestamp: Any = "",
+    ) -> bool:
+        session, kind, identity, sanitized = validate_artifact_link(
+            session_id, artifact_type, artifact_id, payload
+        )
+        observed_at = bounded_text(timestamp, 128).strip() or utc_now()
+        record = {
+            "artifact_type": kind,
+            "artifact_id": identity,
+            "session_id": session,
+            "timestamp": observed_at,
+            "payload": sanitized,
+        }
+        collection = ARTIFACT_COLLECTIONS[kind]
+        event_id = "artifact:" + stable_id(
+            kind,
+            identity,
+            json.dumps(sanitized, sort_keys=True, separators=(",", ":"), allow_nan=False),
+        )
+        self._touch(session, {}, observed_at)
+        appended = self._append_once(
+            session, collection, event_id, record, MAX_STAGE_EVENTS
+        )
+        if appended:
+            self.client.hset(
+                self._record_key(session), f"latest_{kind}_id", identity
+            )
+        self._expire_session_keys(session)
+        return appended
+
     def _load_list(self, session_id: str, suffix: str) -> list[dict[str, Any]]:
         values = self.client.lrange(self._child_key(session_id, suffix), 0, -1)
         return [item for item in (safe_json(value, None) for value in values) if isinstance(item, dict)]
@@ -370,13 +575,19 @@ class EvidenceRepository:
         queries = self._load_list(session_id, "queries")
         session_events = self._load_list(session_id, "session_events")
         mitre_events = self._load_list(session_id, "mitre_events")
+        trap_events = self._load_list(session_id, "trap_events")
         scaling_events = self._load_list(session_id, "scaling_events")
         ai_reports = self._load_list(session_id, "ai_reports")
+        artifacts = {
+            kind: self._load_list(session_id, collection)
+            for kind, collection in ARTIFACT_COLLECTIONS.items()
+        }
         latest_query = queries[-1] if queries else {}
         techniques = safe_json(record.get("mitre_techniques"), [])
         result = {
             "schema_version": int(record.get("schema_version", "1")),
             "session_id": record.get("session_id", session_id),
+            "trace_id": record.get("trace_id", ""),
             "source_ip_hash": record.get("source_ip_hash", ""),
             "fingerprint": record.get("fingerprint", latest_query.get("fingerprint", "")),
             "protocol": record.get("protocol", ""),
@@ -394,20 +605,52 @@ class EvidenceRepository:
             "scale_event_id": record.get("scale_event_id"),
             "ai_report_id": record.get("ai_report_id"),
             "queries": queries,
+            "responses": [item.get("response", {}) for item in queries],
             "connection_events": session_events,
             "mitre_events": mitre_events,
+            "trap_events": trap_events,
             "scaling_events": scaling_events,
             "ai_reports": ai_reports,
+            "session_states": artifacts["session_state"],
+            "strategy_decisions": artifacts["strategy_decision"],
+            "strategy_rewards": artifacts["strategy_reward"],
+            "replay_results": artifacts["replay_result"],
+            "hardening_findings": artifacts["hardening_finding"],
+            "learning_analyses": artifacts["learning_analysis"],
+            "proposals": artifacts["proposal"],
+            "proposal_ids": [item["artifact_id"] for item in artifacts["proposal"]],
+            "analyst_reports": artifacts["analyst_report"],
+            "analyst_report_ids": [
+                item["artifact_id"] for item in artifacts["analyst_report"]
+            ],
         }
-        result["trace"] = {
+        stages = {
             "connection": bool(session_events),
             "query": bool(queries),
+            "response": bool(queries) and all(bool(item.get("response")) for item in queries),
+            "session_state": bool(artifacts["session_state"]),
             "mitre": bool(mitre_events),
+            "trap": bool(trap_events),
+            "strategy_decision": bool(artifacts["strategy_decision"]),
+            "strategy_reward": bool(artifacts["strategy_reward"]),
             "scaling": bool(scaling_events),
             "ai_report": bool(ai_reports),
-            "complete": all(
-                [session_events, queries, mitre_events, scaling_events, ai_reports]
-            ),
+            "replay": bool(artifacts["replay_result"]),
+            "hardening": bool(artifacts["hardening_finding"]),
+            "learning_analysis": bool(artifacts["learning_analysis"]),
+            "proposal": bool(artifacts["proposal"]),
+            "analyst_report": bool(artifacts["analyst_report"]),
+        }
+        core = (
+            "connection", "query", "response", "session_state", "mitre",
+            "strategy_decision", "strategy_reward", "scaling", "ai_report",
+            "replay", "hardening",
+        )
+        result["trace"] = {
+            **stages,
+            "core_complete": all(stages[name] for name in core),
+            "complete": all(stages.values()),
+            "missing": [name for name, available in stages.items() if not available],
         }
         return result
 
@@ -521,6 +764,102 @@ class ScalingEventPoller(threading.Thread):
             self.stop_event.wait(SCALE_POLL_INTERVAL_SECONDS)
 
 
+class AdaptiveEvidencePoller(threading.Thread):
+    """Persist bounded adaptive state without entering the SQL response path."""
+
+    def __init__(self, repository: EvidenceRepository, stop_event: threading.Event):
+        super().__init__(name="evidence-adaptive-poller", daemon=True)
+        self.repository = repository
+        self.stop_event = stop_event
+        self.available = False
+        self.last_error = ""
+
+    @staticmethod
+    def _get(path: str) -> dict[str, Any]:
+        response = requests.get(
+            f"{SESSION_MODULE_URL}{path}", timeout=POLL_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("session-module evidence response must be an object")
+        return value
+
+    def collect_once(self) -> None:
+        states = self._get("/state/sessions?limit=100").get("sessions", [])
+        if not isinstance(states, list):
+            raise ValueError("session-module state listing is invalid")
+        for state in states:
+            if not isinstance(state, dict):
+                continue
+            session_id = bounded_text(state.get("session_id"), 512).strip()
+            if not session_id:
+                continue
+            state_digest = stable_id(
+                "session-state",
+                json.dumps(state, sort_keys=True, separators=(",", ":"), default=str),
+            )
+            self.repository.ingest_artifact(
+                session_id,
+                "session_state",
+                f"SS-{state_digest[:24]}",
+                state,
+                state.get("updated_at") or state.get("last_seen"),
+            )
+
+        telemetry = self._get("/telemetry/decisions?limit=100").get("records", [])
+        if not isinstance(telemetry, list):
+            raise ValueError("session-module telemetry listing is invalid")
+        for linked in telemetry:
+            if not isinstance(linked, dict) or not isinstance(linked.get("decision"), dict):
+                continue
+            decision = linked["decision"]
+            session_id = bounded_text(decision.get("session_id"), 512).strip()
+            decision_id = bounded_text(decision.get("decision_id"), 128).strip()
+            if not session_id or not decision_id:
+                continue
+            self.repository.ingest_artifact(
+                session_id,
+                "strategy_decision",
+                decision_id,
+                decision,
+                decision.get("timestamp"),
+            )
+            reward_response = requests.get(
+                f"{SESSION_MODULE_URL}/reward/decision/{decision_id}",
+                timeout=POLL_TIMEOUT_SECONDS,
+            )
+            if reward_response.status_code == 404:
+                continue
+            reward_response.raise_for_status()
+            reward = reward_response.json()
+            if not isinstance(reward, dict):
+                continue
+            reward_digest = stable_id(
+                "strategy-reward",
+                json.dumps(reward, sort_keys=True, separators=(",", ":"), default=str),
+            )
+            self.repository.ingest_artifact(
+                session_id,
+                "strategy_reward",
+                f"RW-{reward_digest[:24]}",
+                reward,
+                decision.get("timestamp"),
+            )
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self.collect_once()
+                self.available = True
+                self.last_error = ""
+            except Exception as exc:
+                self.available = False
+                self.last_error = str(exc)
+                log.warning("Adaptive evidence poll failed: %s", exc)
+            self.stop_event.wait(ADAPTIVE_POLL_INTERVAL_SECONDS)
+
+
 class Runtime:
     def __init__(self):
         self.redis = redis.Redis(
@@ -536,16 +875,19 @@ class Runtime:
         self.stop_event = threading.Event()
         self.consumer = EvidenceConsumer(self.repository, self.stop_event)
         self.poller = ScalingEventPoller(self.repository, self.stop_event)
+        self.adaptive_poller = AdaptiveEvidencePoller(self.repository, self.stop_event)
 
     def start(self) -> None:
         self.consumer.start()
         self.poller.start()
+        self.adaptive_poller.start()
 
     def close(self) -> None:
         self.stop_event.set()
         self.consumer.close()
         self.consumer.join(timeout=3)
         self.poller.join(timeout=3)
+        self.adaptive_poller.join(timeout=3)
         self.redis.close()
 
 
@@ -555,6 +897,14 @@ class AIReportLink(BaseModel):
     generated_at: str = ""
     risk_level: str = ""
     summary: str = ""
+
+
+class EvidenceArtifactLink(BaseModel):
+    session_id: str = Field(min_length=1, max_length=512)
+    artifact_type: str = Field(min_length=1, max_length=64)
+    artifact_id: str = Field(min_length=1, max_length=128)
+    timestamp: str = Field(default="", max_length=128)
+    payload: dict[str, Any]
 
 
 runtime: Runtime | None = None
@@ -593,7 +943,12 @@ def readyz() -> dict[str, Any]:
         redis_ok = bool(active.redis.ping())
     except Exception:
         redis_ok = False
-    ready = redis_ok and active.consumer.connected and active.poller.available
+    ready = (
+        redis_ok
+        and active.consumer.connected
+        and active.poller.available
+        and active.adaptive_poller.available
+    )
     return {
         "ready": ready,
         "timestamp": utc_now(),
@@ -601,6 +956,11 @@ def readyz() -> dict[str, Any]:
             "redis": "ok" if redis_ok else "unavailable",
             "redpanda": "ok" if active.consumer.connected else active.consumer.last_error or "connecting",
             "scaling_agent": "ok" if active.poller.available else active.poller.last_error or "connecting",
+            "session_module": (
+                "ok"
+                if active.adaptive_poller.available
+                else active.adaptive_poller.last_error or "connecting"
+            ),
         },
     }
 
@@ -626,4 +986,24 @@ def link_ai_report(report: AIReportLink) -> dict[str, Any]:
         "stored": stored,
         "report_id": report.report_id,
         "session_id": report.session_id,
+    }
+
+
+@app.post("/evidence/artifact", status_code=201)
+def link_evidence_artifact(link: EvidenceArtifactLink) -> dict[str, Any]:
+    try:
+        stored = require_runtime().repository.ingest_artifact(
+            link.session_id,
+            link.artifact_type,
+            link.artifact_id,
+            link.payload,
+            link.timestamp,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "stored": stored,
+        "artifact_type": link.artifact_type,
+        "artifact_id": link.artifact_id,
+        "session_id": link.session_id,
     }

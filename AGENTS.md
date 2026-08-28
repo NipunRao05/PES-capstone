@@ -336,7 +336,7 @@ AI Agent v1                              VERIFIED historically
 KEDA/HPA structural validation           VERIFIED historically
 
 Full physical KEDA scaling               CLAIMED/VERIFY
-Evidence store                           CLAIMED/VERIFY
+Evidence store                           VERIFIED live v2 (Phase 20, 2026-08-28)
 Sandbox replay engine                    CLAIMED/VERIFY
 Hardening recommendation engine          CLAIMED/VERIFY
 Persistent scaling/adaptation state      CLAIMED/VERIFY
@@ -1943,6 +1943,60 @@ analyst report IDs
 
 One session can be traced from connection to deception decision to replay/hardening/report.
 
+### Phase 20 validation record (2026-08-28)
+
+```text
+Implementation: evidence_store/main.py evidence-schema-v2 plus asynchronous
+adaptive evidence collection from the session-module control API and bounded
+structured linkage from sandbox replay/hardening.
+
+Every session receives a stable trace_id and may retain connection/session
+events, redacted queries, confirmed response metadata, authoritative state,
+MITRE/risk/trap evidence, strategy decisions and rewards, scaling events, AI v1
+reports, replay results, hardening findings, learning analyses, proposal IDs,
+and analyst-report IDs. The trace block reports every stage, core completeness,
+full completeness, and explicit missing stages.
+
+Structured artifacts are recursively bounded and redacted. Nonfinite values,
+oversized/deep artifacts, unsupported types, and cross-session linkage fail
+closed. Exact replays are idempotent; changed status payloads retain a bounded
+new version. Collection is internal/asynchronous and does not enter the SQL path.
+
+Validation: evidence-store focused tests 15/15 PASS in the rebuilt image with
+networking disabled, including a complete synthetic trace, adaptive poller,
+immutable-decision, event-time ordering, and monotonic first/last-seen contracts;
+replay/hardening tests
+15/15 PASS in the rebuilt network-disabled image; directly
+relevant session/adaptation tests 55/55 PASS; learning-agent tests 55/55 PASS;
+modified Python modules compile; Compose resolves all 26 services; and git diff
+--check passes.
+
+Live acceptance: evidence-store and sandbox-replay-engine were rebuilt/recreated
+without dependencies or models. Evidence and replay readiness were true with all
+declared dependencies healthy. Synthetic MySQL session
+db3b26d6-0ba1-4ab0-8368-265314277411 produced trace
+TR-a8437684e8ca48ec82886e12 with 4 queries, 4 confirmed response outcomes,
+3 bounded state versions, 4 MITRE events, 2 trap events, exactly 1 immutable
+strategy decision, completed reward history, 4 scaling events, 1 AI v1 report,
+1 replay result (4 executed, 0 blocked/failed), and 1 hardening report with 2
+recommendations. core_complete=true; only later-phase learning/proposal/analyst
+artifacts were absent. Plaintext source IP was absent and the source HMAC present.
+
+Live negative checks passed: exact artifact replay returned stored=false,
+cross-session linkage returned HTTP 422, and source/password/query secrets were
+redacted. Polling no longer duplicates immutable decisions, promotes old sessions
+in the recency index, or regresses first/last-seen timestamps; these issues were
+found and fixed during live QA. Repository timestamp updates use a process-local
+critical section so concurrent collector/API threads cannot interleave the
+compare-and-write sequence. Two reads across multiple poll cycles kept one
+decision and the same last_seen value while core_complete remained true.
+
+Runtime/model change: only evidence-store, sandbox-replay-engine, and the replay
+nginx proxy were rebuilt/recreated. No LLM/model process, database, public port,
+registry/policy change, deployment, load test, or GitHub push occurred. The
+operator AI deferral boundary is recorded in AI_INTEGRATION_DEFERRED.md.
+```
+
 ---
 
 ## Phase 21 — Verify/Build the Replay Agent
@@ -2911,11 +2965,12 @@ Phase 16 - Blue-Team Review Workflow              VERIFIED
 Phase 17 - Candidate-Strategy Validation          VERIFIED
 Phase 18 - Local CPU LLM Runtime                   VERIFIED
 Phase 19 - Decoy Generation Agent                  VERIFIED
+Phase 20 - Evidence Store v2                        VERIFIED live
 ~~~
 
-The next pending phase is **Phase 20 - Verify/Complete the Evidence Store**.
+The next pending phase is **Phase 21 - Verify/Build the Replay Agent**.
 
-Phase 20 was not started in the Phase 19 checkpoint. Continue to preserve the
+Phase 20 was completed without invoking a model. Continue to preserve the
 deterministic D0 fallback and ordered roadmap; do not start deployment or public
 exposure work out of order.
 
