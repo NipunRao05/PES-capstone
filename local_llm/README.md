@@ -38,3 +38,33 @@ docker run --rm --network capstone-main_local-llm-internal --mount "type=bind,so
 Do not send raw attacker SQL, source addresses, credentials, fingerprints,
 database usernames, or production-like secrets. Phase 19 generation and Phase 23
 reporting integrations are intentionally not present.
+
+## Phase 19.1 Ornith prototype
+
+The Phase 18 Qwen client, volume, and validation record above remain unchanged.
+Phase 19.1 adds a separate `local-llm-semantic-client-v1` contract for
+`ornith-1.5:9b` and a Compose override. The model is an offline Prototype v1
+candidate, not a final model selection.
+
+The current Docker data disk is backed by C:, so the Ornith package must not be
+pulled into `capstone-main_local_llm_models`. Provision the model into the
+preflight-approved H:-backed directory, then run it read-only and internal-only:
+
+~~~powershell
+$env:ORNITH_MODELS_DIR = "H:\Capstone-main-data\ollama-ornith-1.5"
+
+docker run --rm -d --name capstone-ornith-provision --cpus 4 --memory 9g `
+  --mount "type=bind,source=$env:ORNITH_MODELS_DIR,target=/root/.ollama" `
+  ollama/ollama:0.32.5 serve
+docker exec capstone-ornith-provision ollama pull ornith-1.5:9b
+docker stop capstone-ornith-provision
+
+docker compose -f docker-compose.yml -f docker-compose.ornith.yml `
+  --profile local-ai up -d local-llm
+~~~
+
+The override enforces 4 logical CPUs, 9 GiB memory, one parallel inference,
+queue depth 2, 4096 context, five-minute keep-alive, no host port, internal-only
+networking, and a read-only model mount. The semantic client fixes output at 512
+tokens initially, uses a 300-second hard timeout, sends an exact JSON Schema,
+requests no reasoning, and persists neither prompts nor reasoning text.

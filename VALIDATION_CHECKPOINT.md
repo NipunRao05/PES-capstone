@@ -1,13 +1,20 @@
 # Validation Checkpoint
 
-Checkpoint date: 2026-08-25
+Checkpoint date: 2026-08-27
 
 Repository: `F:\b\Capstone-main`
 
-Branch / HEAD: main / 60b7c94 (phases 16-18 committed; Phase 19 uncommitted)
+Branch / HEAD: main / 1c938e47b52ef133c6f4f26fc4449673f41ff2dc (Phase 18 committed; Phase 19 and the updated handoff are present as later repository/user work)
 
 ## Repository and runtime checkpoint
 
+- Phase 19.0 resource/storage/runtime preflight is VERIFIED. Current measurements are 31.89 GiB installed RAM, 16.36 GiB free host RAM, 8 logical/4 physical CPU cores, a 15.56-GiB/8-CPU Docker ceiling, approximately 2.102 GiB current container use, and approximately 13.46 GiB Docker headroom. The full record is in `PHASE_19_0_PREFLIGHT.md`.
+- Phase 19.1 is **INCOMPLETE / INTERRUPTED**, not PASS, FAIL, or an Ornith failure. Local provisioning, runtime isolation, focused tests (18/18), and preliminary CPU/RAM feasibility are verified. The ten-case benchmark attempted 3 cases, completed 2 invocations, and interrupted case 3; cases 4-10 were not attempted. No aggregate quality result was produced. See `PHASE_19_1_INTERRUPTED_CHECKPOINT.md`.
+- All twelve bounded HTTP readiness checks returned 200; both Redis services returned `PONG`; MySQL was alive; PostgreSQL accepted connections; Redpanda reported healthy with no down nodes, leaderless partitions, or under-replicated partitions. Container startup alone was not treated as verification.
+- The existing `capstone-main_local_llm_models` volume is backed by `C:\Users\ISFCR\AppData\Local\Docker\wsl\disk\docker_data.vhdx`; C: had only 6.29 GiB free. No Ornith pull was attempted. A read-only/network-isolated inspection found only the preserved 941-MiB Qwen2.5 baseline. Phase 19.1 must use an explicit H:-backed bind path, where 893.77 GiB was free at this checkpoint.
+- The bounded Phase 19.1 starting profile is 4 logical CPUs, 9 GiB memory, one parallel inference, queue depth 2, 4096-token context, 512-token initial output, five-minute configurable keep-alive, and a 300-second prototype timeout. No Docker/WSL limit was changed.
+- Current focused regression evidence passed: local-LLM 9/9, decoy generation 15/15, and candidate-validation compatibility 12/12. Compose validation passed, no service depends on local-llm, and the optional runtime remained stopped/internal/no-host-port.
+- Worktree at this checkpoint began with user-owned instruction-file changes: `AGENTS_UPDATED.md` deleted and `UPDATED_AGENTS.md` untracked. They were preserved; no commit or push was performed.
 - Worktree at Phase 19 handoff: Phase 19 implementation and validation artifacts are uncommitted for manual review/commit.
 - `docker compose -f docker-compose.yml config --services` succeeds and defines 26 services.
 - The existing stack was started with builds and pulls disabled. All 25 long-running services are up; one-shot `redpanda-init` exited `0` as designed.
@@ -101,6 +108,8 @@ Branch / HEAD: main / 60b7c94 (phases 16-18 committed; Phase 19 uncommitted)
 | 17 - Candidate-strategy validation | Required after Phase 16 | `learning_agent/candidate_validation.py`; ordered 12-stage validator; read-only registry client/CLI; bounded SQL/schema/data/network/protocol/state/trap/resource checks; explicit sandbox applicability; focused, complete, and fixture smoke validation | **VERIFIED:** 12/12 focused and 55/55 learning-agent tests pass; fixture smoke returned deterministic VALIDATED `VAL-a9f989a91768c45ff48dcaa0`; database-asset candidates remain VALIDATION_INCOMPLETE without candidate-import support; registry/policy/state files unchanged | Complete; preserve candidate-validation-v1 and non-live authority. |
 | 18 - Local CPU LLM runtime | Required after Phase 17 | Optional internal-only Ollama 0.32.5 profile; `local_llm/` strict client/config/benchmark; Qwen2.5 1.5B Instruct Q4_K_M GGUF in an external named volume; no dependent services or host port | **VERIFIED:** 9/9 focused tests; readiness/model metadata valid; four bounded synthetic requests pass; 11.56 MiB unloaded and 1.066 GiB loaded/idle; 6.086 s first, 1.593 s warm median, 327.38% peak CPU under 4-core cap; stopped-runtime isolation passed | Complete; preserve local-llm-client-v1, internal-only network, CPU/resource bounds, untrusted outputs, and disabled-by-default client mode. |
 | 19 - Decoy Generation Agent | Required after Phase 18 | `decoy_generation_agent/`; bounded request/output schemas; deterministic prompt/validator/CREATE renderer; Phase 18 client reuse; Phase 17 preflight/handoff; CLI, focused tests, and exact three-request live smoke | **VERIFIED:** 15/15 focused and 12/12 Phase 17 compatibility tests; metadata candidate VALIDATED; DB candidate VALIDATION_INCOMPLETE/unexecuted; three live invalid outputs rejected safely; stopped-model isolation passed | Complete; preserve decoy-generation-agent-v1, untrusted/nondeployable authority, one-repair bound, and Phase 17 sandbox boundary. |
+| 19.0 - Hardware/storage/runtime preflight | Required before Phase 19.1 | `PHASE_19_0_PREFLIGHT.md`; current host/Docker/disk measurements; per-container memory; readiness probes; model-volume inspection; focused regressions | **VERIFIED:** resource/headroom and core health gates pass; C:-backed model storage is correctly rejected for Ornith; no pull/limit change occurred; H:-backed storage is an explicit Phase 19.1 precondition | Complete; remeasure H:/RAM immediately before pull and preserve the existing Qwen volume. |
+| 19.1 - Ornith semantic proposal | Required before Phase 20 completion claim | Versioned semantic client/contract/agent; isolated H:-backed runtime; focused tests; fixed ten-case benchmark | **INCOMPLETE / INTERRUPTED:** provisioning, isolation, 18/18 focused tests, and preliminary 4-CPU/9-GiB feasibility verified; 3 cases attempted, 2 completed, case 3 interrupted, cases 4-10 not attempted; no aggregate quality result | Resume the fixed benchmark later. Do not claim Phase 19.1 acceptance until all mandatory integration evidence is recorded. |
 | 20 - Evidence store | Claimed/verify | Service, APIs, Redis/Redpanda correlation, redaction and persistence tests | **IMPLEMENTED/PARTIAL:** historical scope verified; adaptive trace fields unavailable | Re-verify live later and extend after upstream adaptive telemetry exists. |
 | 21 - Replay Agent | Claimed/verify | Isolated disposable DBs, captured-evidence-only API, query policy, persistence, tests | **VERIFIED committed artifact; live unverified** | Preserve; smoke-test after Phase 0 service recovery. |
 | 22 - Hardening Agent | Claimed/verify | Deterministic findings, allowlisted sandbox-only fixes, same-query before/after validation | **VERIFIED committed artifact; live unverified** | Preserve; smoke-test after Phase 0 service recovery. |
@@ -116,4 +125,4 @@ Branch / HEAD: main / 60b7c94 (phases 16-18 committed; Phase 19 uncommitted)
 
 ## Checkpoint decision
 
-Phases 0 through 19 are complete. The exact next implementation phase is **Phase 20 - Verify/Complete the Evidence Store**. Phase 20 has not been started.
+Phases 0 through 19.0 are complete under the updated Prototype v1 handoff. Phase 19.1 has started but is **INCOMPLETE / INTERRUPTED**: provisioning, isolation, focused tests, and preliminary resource feasibility are verified, while the fixed ten-case quality benchmark and overall acceptance remain incomplete. The exact next work is to resume Phase 19.1; Phase 20 has not been started.
