@@ -10,6 +10,27 @@ The target system is:
 
 > **A state-grounded hybrid adaptive and evolving database honeypot that preserves deterministic rule-based safety and protocol correctness, adapts deception strategies to attacker behavior, learns from historical outcomes, proposes new deception capabilities for human review, safely validates new decoys, scales under attack pressure, replays captured behavior in a sandbox, generates hardening recommendations, and produces evidence-grounded blue-team/research reports.**
 
+The approved next-generation dynamic design is documented in:
+
+```text
+TWO_STAGE_DYNAMIC_HONEYPOT_PLAN.md
+```
+
+That design adds two distinct bounded adaptive stages:
+
+```text
+STEERING
+= select a still-unobserved, rule-approved attack path from structured behavior
+
+INTERVENTION
+= after committed progress, apply one explicit safe defender transition and
+  measure the attacker's fallback behavior
+```
+
+The document is an implementation plan, not a verification record. Do not claim
+that steering, path commitments, interventions, or the associated factorial
+experiment exist until their acceptance tests pass.
+
 The current observed development root is:
 
 ```powershell
@@ -44,6 +65,14 @@ STATE
 
 STRATEGY AGENT
 = selects the best currently approved deception strategy
+
+PATH STEERING AGENT
+= selects only among still-unobserved rule-approved attack paths; it cannot
+rewrite committed facts or create attacker-facing content
+
+INTERVENTION AGENT
+= selects only among explicit rule-approved defender state transitions after
+attacker progress; it cannot change the chosen path or rewrite history
 
 LEARNING & POLICY IMPROVEMENT AGENT
 = evaluates previous decisions, ranks alternatives, detects policy/action-space gaps, and proposes improvements
@@ -114,6 +143,39 @@ Session state
 The current attacker query must **not wait** for the AI/learning layer.
 
 If the adaptive decision is unavailable, continue with the existing deterministic rule strategy.
+
+## 2.2.1 Two-stage dynamic extension (planned)
+
+```text
+Fixed base database + identical diagnostic clues
+   ↓
+Structured behavior and MITRE evidence
+   ↓
+Rule-approved still-unobserved path set
+   ↓
+Rule/shadow/learned steering decision
+   ↓
+Atomic path commitment for a future query
+   ↓
+Attacker establishes progress
+   ↓
+Rule-approved intervention set
+   ↓
+Explicit defensive state transition
+   ↓
+Fallback-behavior outcome
+```
+
+Preserve these boundaries:
+
+```text
+content strategies (D0-D6) ≠ path plans (P0-P4) ≠ interventions (I0-I3)
+```
+
+Static mode fixes path outcomes before the session. Adaptive mode may resolve
+only outcomes that have not been directly or indirectly observed. A later
+difference is legal only as a timestamped defender event such as RESTRICTED,
+REVOKED, or RECOVERED.
 
 ## 2.3 Slow learning/evolution loop
 
@@ -360,6 +422,12 @@ Blue-team review workflow                VERIFIED bounded v1 (Phase 16, 2026-08-
 Candidate-strategy validation pipeline   VERIFIED deterministic v1 (Phase 17, 2026-08-25)
 Local CPU LLM runtime                    VERIFIED bounded CPU v1 (Phase 18, 2026-08-25)
 Decoy Generation Agent                   VERIFIED offline candidate v1 (Phase 19, 2026-08-25)
+Two-stage dynamic design                 APPROVED PLAN (2026-08-31; not implemented)
+Persistent experiment assignment         PENDING
+Commitment/world ledger                  PENDING
+Attack-path registry and steering        PENDING
+Post-success intervention registry       PENDING
+Four-arm factorial experiment            PENDING
 Analyst Agent v2                         PENDING
 Final adaptive Grafana dashboards        PENDING
 Comparative research experiments         PENDING
@@ -2185,12 +2253,18 @@ Consumer restarts/replayed events remain idempotent.
 ### Required modes
 
 ```text
-STATIC
-RULE_ADAPTIVE
+STATIC_FIXED
+ADAPTIVE_STEERING
+STATIC_INTERVENTION
+ADAPTIVE_STEERING_INTERVENTION
+STATIC_SATURATED
 HYBRID_SHADOW
-HYBRID_ACTIVE
 SAFE_MODE
 ```
+
+Legacy `RULE_ADAPTIVE` and `HYBRID_LEARNED_ADAPTIVE` values must be migrated
+explicitly or retained as documented compatibility aliases. Do not silently map
+them to a mode with broader live authority.
 
 ### Behavior
 
@@ -2330,39 +2404,46 @@ timestamps
 
 ## Phase 29 — Comparative Research Experiments
 
-Run four configurations.
+Run the primary factorial mechanism experiment from
+`TWO_STAGE_DYNAMIC_HONEYPOT_PLAN.md`. All arms use one deployment.
 
-### Experiment A — Static
-
-```text
-fixed deception persona
-no strategy adaptation
-```
-
-### Experiment B — Rule-Adaptive
+### Experiment A — Static fixed
 
 ```text
-existing deterministic rule-based adaptation
+path fixed before session
+no intervention
 ```
 
-### Experiment C — Hybrid Learned-Adaptive
+### Experiment B — Adaptive steering
 
 ```text
-rules define safe options
-learner selects among them
+path selected after diagnostic evidence
+no intervention
 ```
 
-### Experiment D — Evolving
+### Experiment C — Static path plus intervention
 
 ```text
-hybrid adaptive
-+
-human-approved new strategies derived from observed gaps
+path fixed before session
+rule intervention after committed progress
 ```
+
+### Experiment D — Adaptive steering plus intervention
+
+```text
+path selected after diagnostic evidence
+rule intervention after committed progress
+```
+
+`STATIC_SATURATED` is an optional fifth ablation. Learned and evolving policies
+are evaluated in later frozen epochs and are not mixed into the first mechanism
+experiment.
 
 ### Compare
 
 ```text
+selected path traversal
+novel fallback path observation
 session duration
 queries/session
 unique SQL operations
@@ -2968,11 +3049,21 @@ Phase 19 - Decoy Generation Agent                  VERIFIED
 Phase 20 - Evidence Store v2                        VERIFIED live
 ~~~
 
-The next pending phase is **Phase 21 - Verify/Build the Replay Agent**.
+The approved dynamic roadmap is `TWO_STAGE_DYNAMIC_HONEYPOT_PLAN.md`.
+
+The next dynamic phase is **D0 - Re-verify and freeze the dynamic baseline**.
+It must prove and document the current boundary that asynchronous next-strategy
+selection does not yet control future attacker-facing `/decide` behavior. Do not
+implement steering in the same checkpoint.
+
+After D0, implement **D1 - Persistent experiment assignment and idempotency**
+before any path can receive live authority. The existing Phase 21 replay,
+Phase 22 hardening, and Phase 23 analyst work remain required and are integrated
+into dynamic Phase D7 before learning/evolution or public exposure.
 
 Phase 20 was completed without invoking a model. Continue to preserve the
-deterministic D0 fallback and ordered roadmap; do not start deployment or public
-exposure work out of order.
+deterministic D0 fallback. Do not start AWS deployment, learned steering, active
+intervention, or public exposure out of order.
 
 ---
 
@@ -2989,6 +3080,13 @@ The project is complete for research purposes when all of the following are demo
 [ ] Behavior state is derived deterministically.
 [ ] Policy guard defines a safe action space.
 [ ] Strategy Agent adapts future interactions asynchronously.
+[ ] Static path outcomes are fixed before attacker behavior is processed.
+[ ] Adaptive steering resolves only still-unobserved path outcomes.
+[ ] Diagnostic clues are identical across primary static/adaptive arms.
+[ ] World commitments are persistent, monotonic, and idempotent.
+[ ] A selected path changes a future attacker-visible database outcome.
+[ ] Post-success intervention is an explicit defender event, not rewritten history.
+[ ] Steering and intervention have separate telemetry and reward vectors.
 [ ] Current SQL responses do not wait for AI.
 [ ] Strategy decisions and outcomes are recorded.
 [ ] Reward is reproducible.
@@ -3008,10 +3106,11 @@ The project is complete for research purposes when all of the following are demo
 [ ] Analyst Agent produces evidence-grounded reports.
 [ ] Adaptive policy state survives restart.
 [ ] Duplicate events are idempotent.
-[ ] Operator can force STATIC/RULE/HYBRID/SAFE modes.
+[ ] Operator can force STATIC/STEERING/INTERVENTION/SHADOW/SAFE modes.
 [ ] Grafana shows adaptation and learning behavior.
 [ ] Kubernetes/KEDA physically scales under pressure.
-[ ] Static vs rule-adaptive vs learned-adaptive vs evolving experiments are complete.
+[ ] The four-arm steering/intervention factorial experiment is complete.
+[ ] Learned and evolving epochs are separately evaluated.
 [ ] CPU/RAM/resource feasibility is documented.
 [ ] Public deployment passes security gate.
 [ ] Real-world sessions are anonymized and safely collected.
