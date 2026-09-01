@@ -4,3 +4,4 @@ numpy
 scikit-learn
 prometheus-client
 pytest
+redis==5.0.1

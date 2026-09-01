@@ -3,8 +3,9 @@
 ## Document status
 
 ```text
-Status: APPROVED DESIGN / NOT YET IMPLEMENTED
+Status: APPROVED DESIGN / D0-D1 VERIFIED / D2 NEXT
 Created: 2026-08-31
+Latest checkpoint: 2026-09-01
 Primary implementation order: PostgreSQL first, MySQL parity second
 Live AI requirement: none
 Local hardware target: Intel i7-7700, 32 GB RAM, no GPU
@@ -479,6 +480,13 @@ does not confuse the mechanism with the learner.
 
 Acceptance: a current, reproducible starting record exists.
 
+Checkpoint result (2026-09-01): **VERIFIED**. The dependency-accurate
+regressions, frozen 40-assertion live baseline, authoritative-state validation,
+and local predeployment security gate passed. Source, test, and live-session
+evidence confirms that `next_strategy_id` remains open-loop: it is stored but is
+not consumed by either proxy or by a later attacker-facing response. See
+`DYNAMIC_D0_BASELINE.md`. No dynamic execution behavior was added.
+
 ### D1 — Persistent experiment assignment and idempotency
 
 - Implement versioned session assignment and global operator overrides.
@@ -486,6 +494,16 @@ Acceptance: a current, reproducible starting record exists.
 - Add restart and duplicate-event tests before path steering.
 
 Acceptance: one session retains one arm across restarts and event replays.
+
+Checkpoint result (2026-09-01): **VERIFIED**. Versioned A-D HMAC cohort
+assignment, Redis-backed safe mode/forced-arm controls, monotonic world
+revisions, bounded processed-event identities, duplicate/stale rejection, and
+fail-closed arm-A behavior are implemented. A live assignment, safe mode,
+revision, and duplicate identity survived session-module restart. The exact
+final image passed the 254-test session suite, all affected regressions, frozen
+baseline 40/40, authoritative-state validation, and the enhanced security gate
+19/19. See `DYNAMIC_D1_IMPLEMENTATION.md`. Steering/intervention authority is
+still disabled.
 
 ### D2 — Attack graph, path registry, and ledger
 

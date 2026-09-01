@@ -131,6 +131,34 @@ if ($originalSafeMode) {
 }
 Add-Check "operator-kill-switch" $killSwitchPassed "safe mode enabled and original state restored"
 
+$dynamicBefore = Invoke-RestMethod 'http://127.0.0.1:8003/experiment/status'
+$dynamicBoundaryPassed = `
+  $dynamicBefore.persistence_available -eq $true -and `
+  $dynamicBefore.dynamic_execution_enabled -eq $false -and `
+  $dynamicBefore.steering_authority -eq $false -and `
+  $dynamicBefore.intervention_authority -eq $false
+Add-Check "dynamic-experiment-persistence-and-authority-boundary" $dynamicBoundaryPassed `
+  "persistent assignment ready; steering/intervention execution remains disabled"
+
+$originalDynamicSafeMode = [bool]$dynamicBefore.safe_mode
+$dynamicKillSwitchPassed = $false
+if ($originalDynamicSafeMode) {
+  $dynamicKillSwitchPassed = $true
+} else {
+  Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8003/experiment/control/safe-mode' -ContentType 'application/json' `
+    -Body '{"enabled":true,"actor":"predeploy-security-gate","reason":"bounded dynamic kill-switch validation"}' | Out-Null
+  $dynamicEnabled = Invoke-RestMethod 'http://127.0.0.1:8003/experiment/status'
+  Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8003/experiment/control/safe-mode' -ContentType 'application/json' `
+    -Body '{"enabled":false,"actor":"predeploy-security-gate","reason":"restore dynamic local baseline"}' | Out-Null
+  $dynamicRestored = Invoke-RestMethod 'http://127.0.0.1:8003/experiment/status'
+  $dynamicKillSwitchPassed = `
+    $dynamicEnabled.safe_mode -eq $true -and `
+    $dynamicRestored.safe_mode -eq $false -and `
+    $dynamicRestored.dynamic_execution_enabled -eq $false
+}
+Add-Check "dynamic-experiment-kill-switch" $dynamicKillSwitchPassed `
+  "dynamic safe mode enabled and original state restored without granting execution authority"
+
 $rules = Invoke-RestMethod 'http://127.0.0.1:9096/api/v1/rules?type=alert'
 $ruleNames = @($rules.data.groups.rules.name)
 $requiredAlerts = @('CapstoneReplicasAtMaxBudget', 'CapstoneAIAgentDown', 'CapstoneLLMAgentDown', 'CapstoneDLQIncreasing')

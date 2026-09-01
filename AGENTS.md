@@ -423,7 +423,8 @@ Candidate-strategy validation pipeline   VERIFIED deterministic v1 (Phase 17, 20
 Local CPU LLM runtime                    VERIFIED bounded CPU v1 (Phase 18, 2026-08-25)
 Decoy Generation Agent                   VERIFIED offline candidate v1 (Phase 19, 2026-08-25)
 Two-stage dynamic design                 APPROVED PLAN (2026-08-31; not implemented)
-Persistent experiment assignment         PENDING
+Dynamic D0 baseline verification         VERIFIED (2026-09-01; open-loop)
+Persistent experiment assignment         VERIFIED D1 (2026-09-01)
 Commitment/world ledger                  PENDING
 Attack-path registry and steering        PENDING
 Post-success intervention registry       PENDING
@@ -3047,17 +3048,25 @@ Phase 17 - Candidate-Strategy Validation          VERIFIED
 Phase 18 - Local CPU LLM Runtime                   VERIFIED
 Phase 19 - Decoy Generation Agent                  VERIFIED
 Phase 20 - Evidence Store v2                        VERIFIED live
+Dynamic D0 - Open-loop baseline                     VERIFIED
+Dynamic D1 - Assignment and idempotency              VERIFIED
 ~~~
 
 The approved dynamic roadmap is `TWO_STAGE_DYNAMIC_HONEYPOT_PLAN.md`.
 
-The next dynamic phase is **D0 - Re-verify and freeze the dynamic baseline**.
-It must prove and document the current boundary that asynchronous next-strategy
-selection does not yet control future attacker-facing `/decide` behavior. Do not
-implement steering in the same checkpoint.
+Dynamic Phase **D0 - Re-verify and freeze the dynamic baseline** is VERIFIED as
+of 2026-09-01. `DYNAMIC_D0_BASELINE.md` records the full regression, live,
+security, and open-loop evidence. In particular, asynchronous next-strategy
+selection still does not control future attacker-facing `/decide` behavior.
 
-After D0, implement **D1 - Persistent experiment assignment and idempotency**
-before any path can receive live authority. The existing Phase 21 replay,
+Dynamic Phase **D1 - Persistent experiment assignment and idempotency** is
+VERIFIED as of 2026-09-01. `DYNAMIC_D1_IMPLEMENTATION.md` records the contracts,
+restart/idempotency evidence, regressions, exact-final-image baseline, and
+security gate. Dynamic execution authority remains disabled.
+
+The next dynamic phase is **D2 - Attack graph, path registry, and commitment
+ledger**. It must remain non-attacker-facing until its consistency acceptance
+tests pass. The existing Phase 21 replay,
 Phase 22 hardening, and Phase 23 analyst work remain required and are integrated
 into dynamic Phase D7 before learning/evolution or public exposure.
 

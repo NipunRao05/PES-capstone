@@ -436,10 +436,20 @@ services:
       ADAPTATION_QUEUE_SIZE: "2048"
       LEARNED_SELECTION_MIN_CONFIDENCE: "0.75"
       LEARNED_SELECTION_MIN_UPDATES: "20"
+      EXPERIMENT_REDIS_HOST: "redis-mitre"
+      EXPERIMENT_REDIS_PORT: "6379"
+      EXPERIMENT_REDIS_DB: "0"
+      EXPERIMENT_REDIS_KEY_PREFIX: "capstone:dynamic-experiment:v1"
+      EXPERIMENT_REDIS_TIMEOUT_SECONDS: "1.0"
+      EXPERIMENT_PERSISTENCE_REQUIRED: "true"
+      EXPERIMENT_ASSIGNMENT_SECRET: "${EXPERIMENT_ASSIGNMENT_SECRET:-}"
+      EXPERIMENT_MAX_PROCESSED_EVENTS: "10000"
       PYTHONUNBUFFERED: "1"
     depends_on:
       redpanda-init:
         condition: service_completed_successfully
+      redis-mitre:
+        condition: service_started
     restart: unless-stopped
 
   deception-engine:

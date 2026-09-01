@@ -29,6 +29,10 @@ from storage import RedpandaSessionStore
 from clustering_worker import ClusteringWorker
 from authoritative_state import AuthoritativeStateStore, start_state_api
 from async_adaptation import AsyncStrategyAdapter
+from experiment_assignment import (
+    ExperimentAssignmentController,
+    RedisExperimentPersistence,
+)
 import config
 
 from prometheus_client import start_http_server
@@ -317,10 +321,29 @@ if __name__ == "__main__":
 
     storage = RedpandaSessionStore()
     engine = SessionEngine(storage)
+    experiment_persistence = None
+    try:
+        experiment_persistence = RedisExperimentPersistence(
+            config.EXPERIMENT_REDIS_HOST,
+            config.EXPERIMENT_REDIS_PORT,
+            config.EXPERIMENT_REDIS_DB,
+            config.EXPERIMENT_REDIS_KEY_PREFIX,
+            config.EXPERIMENT_REDIS_TIMEOUT_SECONDS,
+            config.EXPERIMENT_REDIS_PASSWORD,
+        )
+    except Exception as exc:
+        logger.error("Experiment persistence initialization failed closed: %s", exc)
+    experiment_controller = ExperimentAssignmentController(
+        experiment_persistence,
+        explicit_secret=config.EXPERIMENT_ASSIGNMENT_SECRET,
+        persistence_required=config.EXPERIMENT_PERSISTENCE_REQUIRED,
+        max_processed_events=config.EXPERIMENT_MAX_PROCESSED_EVENTS,
+    )
     state_store = AuthoritativeStateStore(
         config.STATE_MAX_SESSIONS,
         learned_confidence_threshold=config.LEARNED_SELECTION_MIN_CONFIDENCE,
         learned_minimum_updates=config.LEARNED_SELECTION_MIN_UPDATES,
+        experiment_controller=experiment_controller,
     )
     adaptation = AsyncStrategyAdapter(
         state_store,
@@ -405,5 +428,6 @@ if __name__ == "__main__":
         state_api.shutdown()
         state_api.server_close()
         engine.shutdown()
+        experiment_controller.close()
         storage.close()
         logger.info("Goodbye.")

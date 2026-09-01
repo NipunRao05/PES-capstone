@@ -1,10 +1,72 @@
 # Validation Checkpoint
 
-Checkpoint date: 2026-08-28
+Checkpoint date: 2026-09-01
 
 Repository: `F:\b\Capstone-main`
 
-Branch / HEAD at turn start: main / 0c0b9d8 (Phase 19.1 Ornith test checkpoint)
+Latest checkpoint start: main / 50617e8 (Dynamic D0 verification)
+
+## Dynamic D1 checkpoint — 2026-09-01
+
+- Dynamic Phase D1 is **VERIFIED**. The full implementation, contracts, API,
+  failure boundaries, and evidence record are in `DYNAMIC_D1_IMPLEMENTATION.md`.
+- `experiment-assignment-v1` assigns sticky A-D research arms using HMAC-SHA256
+  over bounded cohort identity and normalized protocol. Only the cohort HMAC is
+  persisted; MITRE-first events cannot preempt proxy-grounded assignment.
+- `experiment-control-v1` persistently stores safe mode, a new-session
+  forced-arm override, monotonic revision, and a bounded audited operator
+  history. Rollback enables safe mode and forces new assignments to arm A
+  without rewriting existing assignments.
+- Atomic Redis Lua operations implement first assignment and bounded processed
+  event/world-revision updates. Live session
+  `e7c72a42-ed49-4c58-a2b6-809ef8795d94` retained arm C, its HMAC, safe mode,
+  world revision 1, and the processed identity across restart. The replay was
+  `DUPLICATE`; a new commit while safe was `SAFE_MODE`.
+- D1 focused tests passed 11/11. Complete regression results: session module
+  254/254 plus 10 subtests, deception engine 58/58, MITRE 32/32, learning agent
+  55/55, evidence store 15/15, replay/hardening 15/15, AI Agent v1 4/4, LLM
+  Agent v2 9/9, and all MySQL/PostgreSQL/scaling Go tests plus `go vet`.
+- Exact-final-image frozen baseline `baseline-1788244003-262e53` passed 40/40.
+  Authoritative state passed with PostgreSQL session
+  `17225353-84d0-40af-8cdc-7dc5cec75f2a` (19 outcomes) and MySQL session
+  `7cddfc9a-0a37-404a-a71e-c34030b23a1f` (13 outcomes).
+- The enhanced local predeployment security gate passed 19/19, including the
+  persistent dynamic-state authority boundary and dynamic kill switch.
+- Only session-module was rebuilt/recreated. No proxy, deception-engine,
+  database, public listener, cloud deployment, or LLM runtime changed.
+- `dynamic_execution_enabled`, `steering_authority`, and
+  `intervention_authority` remain false. D1 does not implement steering.
+- The next permitted dynamic phase is **D2 — Attack graph, path registry, and
+  commitment ledger**.
+
+## Dynamic D0 checkpoint — 2026-09-01
+
+- Dynamic Phase D0 is **VERIFIED**. The complete evidence record is
+  `DYNAMIC_D0_BASELINE.md`.
+- The worktree was clean at `50617e8` before verification. This checkpoint
+  changed documentation only and did not rebuild images, change Compose
+  configuration, implement steering/intervention behavior, deploy, or push.
+- Dependency-accurate regressions passed: deception engine 58/58, session
+  module 243/243, MITRE 32/32, learning agent 55/55, evidence store 15/15,
+  replay/hardening 15/15, AI Agent v1 4/4, LLM Agent v2 9/9, controlled
+  workloads 7/7, local-LLM contracts 17/17, decoy generation 25/25, and all
+  MySQL proxy, PostgreSQL proxy, and scaling-agent Go tests plus `go vet`.
+- Frozen baseline `baseline-1788241784-560f72` passed 40/40. Authoritative-state
+  validation passed with 19 PostgreSQL and 13 MySQL confirmed outcomes. The
+  local predeployment security gate passed 17/17.
+- Live session `67b88200-dc29-49a9-a3a8-9f7d544491c0` had current strategy
+  `D0`, history `[D0]`, and a ready rule-selected next strategy `D1`. Proxy
+  events did not carry a strategy selection and attacker-facing catalog behavior
+  remained the existing deterministic result.
+- Source inspection confirms both proxy request contracts omit strategy, path,
+  world, experiment-arm, and intervention fields. The response engine continues
+  to derive behavior from the current query/schema rules. Therefore the current
+  adaptive selection is open-loop and is not attack-path steering.
+- Persistent experiment assignment, restart-safe dynamic state, new dynamic
+  event idempotency, the commitment/world ledger, path steering, interventions,
+  and the factorial experiment remain **PENDING**.
+- The next permitted dynamic phase is **D1 — Persistent experiment assignment
+  and idempotency**. No path may receive attacker-facing authority in D1.
 
 ## Repository and runtime checkpoint
 

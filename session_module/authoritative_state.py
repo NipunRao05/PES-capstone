@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from behavior_state import BehaviorStateStore
+from experiment_assignment import ExperimentAssignmentController, normalize_protocol
 from learned_selection import BoundedLearnedSelector, validate_executable_decision
 from reward_model import DeceptionRewardModel
 from shadow_bandit import ShadowLinUCB
@@ -36,6 +37,10 @@ _STATE_SET_FIELDS = (
     "created_objects", "modified_objects", "dropped_objects",
     "discovered_objects", "triggered_traps",
 )
+
+
+def _bounded_experiment_identity(value) -> str:
+    return str(value or "").replace("\x00", "").strip()[:512]
 
 
 def _clean_identifier(value: str) -> str:
@@ -139,6 +144,13 @@ class AuthoritativeSessionState:
     closed: bool = False
     closed_at: str = ""
     expected_query_count: int = 0
+    experiment_id: str = ""
+    experiment_arm: str = ""
+    experiment_mode: str = ""
+    experiment_assignment_version: str = ""
+    experiment_cohort_hmac: str = ""
+    world_revision: int = 0
+    experiment_persisted: bool = False
 
     def to_dict(self) -> dict:
         payload = {}
@@ -157,6 +169,7 @@ class AuthoritativeStateStore:
         shadow_bandit: ShadowLinUCB | None = None,
         learned_confidence_threshold: float = 0.75,
         learned_minimum_updates: int = 20,
+        experiment_controller: ExperimentAssignmentController | None = None,
     ):
         self.max_sessions = min(max(1, max_sessions), 100_000)
         self._states: dict[str, AuthoritativeSessionState] = {}
@@ -168,6 +181,7 @@ class AuthoritativeStateStore:
         self._learned_selector = BoundedLearnedSelector(
             learned_confidence_threshold, learned_minimum_updates
         )
+        self._experiment = experiment_controller
         self._lock = threading.RLock()
         self.ready = False
 
@@ -189,7 +203,32 @@ class AuthoritativeStateStore:
                 protocol = "postgres"
             state = AuthoritativeSessionState(session_id=session_id, protocol=protocol)
             self._states[session_id] = state
+        self._ensure_experiment_assignment(state, raw, source_label)
         return state
+
+    def _ensure_experiment_assignment(
+        self, state: AuthoritativeSessionState, raw: dict, source_label: str
+    ) -> None:
+        if self._experiment is None or state.experiment_arm:
+            return
+        protocol = normalize_protocol(raw.get("protocol") or state.protocol or source_label)
+        cohort_key = _bounded_experiment_identity(
+            raw.get("client_ip") or raw.get("source_ip")
+        )
+        # MITRE or legacy events without a source identity must not lock a
+        # session to a session-ID cohort before its proxy event arrives.
+        if protocol == "unknown" or not cohort_key:
+            return
+        assignment = self._experiment.assign(state.session_id, protocol, cohort_key)
+        state.experiment_id = str(assignment.get("experiment_id") or "")
+        state.experiment_arm = str(assignment.get("assigned_arm") or "")
+        state.experiment_mode = str(assignment.get("effective_mode") or "")
+        state.experiment_assignment_version = str(
+            assignment.get("assignment_version") or ""
+        )
+        state.experiment_cohort_hmac = str(assignment.get("cohort_hmac") or "")
+        state.world_revision = int(assignment.get("world_revision") or 0)
+        state.experiment_persisted = assignment.get("persisted") is True
 
     @staticmethod
     def _refresh_metadata(state: AuthoritativeSessionState, raw: dict) -> None:
@@ -384,13 +423,28 @@ class AuthoritativeStateStore:
     def get(self, session_id: str) -> dict | None:
         with self._lock:
             state = self._states.get(session_id)
+            if state is not None:
+                self._refresh_experiment_state(state)
             return state.to_dict() if state else None
 
     def list(self, limit: int = 100) -> list[dict]:
         limit = max(1, min(limit, 250))
         with self._lock:
             states = sorted(self._states.values(), key=lambda item: item.updated_at, reverse=True)
+            for state in states[:limit]:
+                self._refresh_experiment_state(state)
             return [state.to_dict() for state in states[:limit]]
+
+    def _refresh_experiment_state(self, state: AuthoritativeSessionState) -> None:
+        if self._experiment is None:
+            return
+        assignment = self._experiment.get_assignment(state.session_id)
+        if assignment is None:
+            return
+        state.experiment_arm = str(assignment.get("assigned_arm") or state.experiment_arm)
+        state.experiment_mode = str(assignment.get("effective_mode") or state.experiment_mode)
+        state.world_revision = int(assignment.get("world_revision") or 0)
+        state.experiment_persisted = assignment.get("persisted") is True
 
     def get_behavior(self, session_id: str) -> dict | None:
         """Return normalized behavior features without raw SQL or identities."""
@@ -589,6 +643,39 @@ class AuthoritativeStateStore:
             "model": self._shadow_bandit.stats(),
         }
 
+    def experiment_status(self) -> dict | None:
+        return self._experiment.status() if self._experiment is not None else None
+
+    def experiment_assignment(self, session_id: str) -> dict | None:
+        return (
+            self._experiment.get_assignment(session_id)
+            if self._experiment is not None else None
+        )
+
+    def experiment_assignments(self, limit: int = 100) -> list[dict]:
+        return (
+            self._experiment.list_assignments(limit)
+            if self._experiment is not None else []
+        )
+
+    def experiment_ready(self) -> bool:
+        return self._experiment is None or self._experiment.readiness_ok()
+
+    def set_experiment_safe_mode(self, enabled, actor, reason) -> dict:
+        if self._experiment is None:
+            raise RuntimeError("experiment controller unavailable")
+        return self._experiment.set_safe_mode(enabled, actor, reason)
+
+    def set_experiment_forced_arm(self, arm, actor, reason) -> dict:
+        if self._experiment is None:
+            raise RuntimeError("experiment controller unavailable")
+        return self._experiment.set_forced_arm(arm, actor, reason)
+
+    def rollback_experiment_safe(self, actor, reason) -> dict:
+        if self._experiment is None:
+            raise RuntimeError("experiment controller unavailable")
+        return self._experiment.rollback_safe(actor, reason)
+
     def set_next_strategy(
         self, session_id: str, decision: dict, expected_query_count: int
     ) -> bool:
@@ -650,7 +737,24 @@ class _StateAPIHandler(BaseHTTPRequestHandler):
             self._send(200, {"status": "ok"})
             return
         if parsed.path == "/readyz":
-            self._send(200 if self.store.ready else 503, {"ready": self.store.ready})
+            ready = self.store.ready and self.store.experiment_ready()
+            payload = {"ready": ready}
+            experiment = self.store.experiment_status()
+            if experiment is not None:
+                payload["experiment"] = experiment
+            self._send(200 if ready else 503, payload)
+            return
+        if parsed.path == "/experiment/status":
+            status = self.store.experiment_status()
+            self._send(200, status) if status else self._send(503, {"error": "experiment controller unavailable"})
+            return
+        if parsed.path == "/experiment/assignments":
+            try:
+                limit = int(parse_qs(parsed.query).get("limit", ["100"])[0])
+            except ValueError:
+                self._send(400, {"error": "invalid limit"})
+                return
+            self._send(200, {"assignments": self.store.experiment_assignments(limit)})
             return
         if parsed.path == "/state/sessions":
             try:
@@ -730,7 +834,60 @@ class _StateAPIHandler(BaseHTTPRequestHandler):
             state = self.store.get(session_id)
             self._send(200, state) if state else self._send(404, {"error": "session not found"})
             return
+        assignment_prefix = "/experiment/assignment/"
+        if parsed.path.startswith(assignment_prefix):
+            session_id = unquote(parsed.path[len(assignment_prefix):])
+            assignment = self.store.experiment_assignment(session_id)
+            self._send(200, assignment) if assignment else self._send(404, {"error": "assignment not found"})
+            return
         self._send(404, {"error": "not found"})
+
+    def _read_json(self, allowed: set[str]) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("invalid content length") from exc
+        if length <= 0 or length > 8192:
+            raise ValueError("request body must be 1..8192 bytes")
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid JSON body") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("JSON body must be an object")
+        unknown = set(payload) - allowed
+        if unknown:
+            raise ValueError("unknown fields: " + ", ".join(sorted(unknown)))
+        return payload
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path == "/experiment/control/safe-mode":
+                payload = self._read_json({"enabled", "actor", "reason"})
+                result = self.store.set_experiment_safe_mode(
+                    payload.get("enabled"), payload.get("actor"), payload.get("reason")
+                )
+            elif parsed.path == "/experiment/control/forced-arm":
+                payload = self._read_json({"arm", "actor", "reason"})
+                result = self.store.set_experiment_forced_arm(
+                    payload.get("arm", ""), payload.get("actor"), payload.get("reason")
+                )
+            elif parsed.path == "/experiment/control/rollback":
+                payload = self._read_json({"actor", "reason"})
+                result = self.store.rollback_experiment_safe(
+                    payload.get("actor"), payload.get("reason")
+                )
+            else:
+                self._send(404, {"error": "not found"})
+                return
+        except ValueError as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        except RuntimeError as exc:
+            self._send(503, {"error": str(exc)})
+            return
+        self._send(200, result)
 
     def log_message(self, _format: str, *_args) -> None:
         return

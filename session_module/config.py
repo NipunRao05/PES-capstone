@@ -78,5 +78,28 @@ LEARNED_SELECTION_MIN_UPDATES = int(
     os.getenv("LEARNED_SELECTION_MIN_UPDATES", "20")
 )
 
+# ------------------------------------------------------------------
+# Dynamic Phase D1 experiment assignment and control persistence
+# ------------------------------------------------------------------
+EXPERIMENT_REDIS_HOST = os.getenv("EXPERIMENT_REDIS_HOST", "redis-mitre")
+EXPERIMENT_REDIS_PORT = int(os.getenv("EXPERIMENT_REDIS_PORT", "6379"))
+EXPERIMENT_REDIS_DB = int(os.getenv("EXPERIMENT_REDIS_DB", "0"))
+EXPERIMENT_REDIS_PASSWORD = os.getenv("EXPERIMENT_REDIS_PASSWORD", "")
+EXPERIMENT_REDIS_KEY_PREFIX = os.getenv(
+    "EXPERIMENT_REDIS_KEY_PREFIX", "capstone:dynamic-experiment:v1"
+)
+EXPERIMENT_REDIS_TIMEOUT_SECONDS = float(
+    os.getenv("EXPERIMENT_REDIS_TIMEOUT_SECONDS", "1.0")
+)
+EXPERIMENT_PERSISTENCE_REQUIRED = os.getenv(
+    "EXPERIMENT_PERSISTENCE_REQUIRED", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+# In local development an unexported key is generated once and kept in the
+# private Redis volume. Production can inject a Secret Manager value here.
+EXPERIMENT_ASSIGNMENT_SECRET = os.getenv("EXPERIMENT_ASSIGNMENT_SECRET", "")
+EXPERIMENT_MAX_PROCESSED_EVENTS = int(
+    os.getenv("EXPERIMENT_MAX_PROCESSED_EVENTS", "10000")
+)
+
 # Kafka producer ack wait for low-volume session/profile outputs.
 PRODUCER_ACK_TIMEOUT_SECONDS = float(os.getenv("PRODUCER_ACK_TIMEOUT_SECONDS", "10"))
