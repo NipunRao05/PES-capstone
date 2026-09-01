@@ -35,6 +35,23 @@ DATABASE_TO_SCHEMA = {
 
 DEFAULT_SCHEMA = "hr"
 
+# PostgreSQL information_schema data_type values derived from the same YAML
+# column types that drive row generation.  A column may override this with an
+# explicit sql_type when it needs a more precise schema contract.
+SQL_TYPE_BY_GENERATOR_TYPE = {
+    "pk_int": "integer",
+    "fk": "integer",
+    "int_range": "integer",
+    "float_range": "double precision",
+    "money": "numeric",
+    "bool": "boolean",
+    "past_date": "date",
+    "future_date": "date",
+    "past_datetime": "timestamp without time zone",
+    "uuid": "uuid",
+    "json_blob": "jsonb",
+}
+
 
 class SchemaLoader:
     """
@@ -118,3 +135,45 @@ class SchemaLoader:
     def get_schema_names(self) -> list[str]:
         """Return all loaded schema names."""
         return list(self._schemas.keys())
+
+    def get_metadata_tables(
+        self, schema_name: str, max_depth: int, table_schema: str = "public"
+    ) -> list[dict]:
+        """Render information_schema.tables rows from the canonical YAML."""
+        return [
+            {
+                "table_catalog": schema_name,
+                "table_schema": table_schema,
+                "table_name": table_name,
+                "table_type": "BASE TABLE",
+            }
+            for table_name in self.get_tables_at_depth(schema_name, max_depth)
+        ]
+
+    def get_metadata_columns(
+        self, schema_name: str, max_depth: int, table_schema: str = "public"
+    ) -> list[dict]:
+        """Render information_schema.columns rows from the canonical YAML."""
+        rows: list[dict] = []
+        for table_name in self.get_tables_at_depth(schema_name, max_depth):
+            for ordinal, column in enumerate(self.get_columns(schema_name, table_name), start=1):
+                generator_type = column.get("type", "sentence")
+                row = {
+                    "table_catalog": schema_name,
+                    "table_schema": table_schema,
+                    "table_name": table_name,
+                    "column_name": column["name"],
+                    "ordinal_position": ordinal,
+                    "column_default": None,
+                    "is_nullable": "YES" if column.get("nullable", False) else "NO",
+                    "data_type": column.get(
+                        "sql_type",
+                        SQL_TYPE_BY_GENERATOR_TYPE.get(generator_type, "character varying"),
+                    ),
+                }
+                if "numeric_precision" in column:
+                    row["numeric_precision"] = int(column["numeric_precision"])
+                if "numeric_scale" in column:
+                    row["numeric_scale"] = int(column["numeric_scale"])
+                rows.append(row)
+        return rows

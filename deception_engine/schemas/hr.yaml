@@ -18,10 +18,11 @@ tables:
       - {name: id,             type: pk_int}
       - {name: full_name,      type: name}
       - {name: email,          type: email,        domain: "@company.internal"}
-      - {name: department,     type: choice,        choices: [Engineering, Finance, HR, Sales, Legal, Operations]}
-      - {name: job_title,      type: job_title}
+      - {name: department,     type: choice,        choices: [Engineering, Finance, HR, Sales, Legal, Operations, IT, Executive]}
+      - {name: job_title,      type: choice}
+      - {name: seniority_level,type: int_range,     min: 1, max: 6}
       - {name: hire_date,      type: past_date,     years_back: 10}
-      - {name: salary,         type: int_range,     min: 45000, max: 180000}
+      - {name: salary,         type: int_range,     min: 47000, max: 300000}
       - {name: manager_id,     type: fk,            ref: employees.id, nullable: true}
       - {name: is_active,      type: bool,           true_ratio: 0.92}
       - {name: password_hash,  type: bcrypt}         # honeytoken
@@ -32,8 +33,8 @@ tables:
     columns:
       - {name: id,             type: pk_int}
       - {name: name,           type: choice,        choices: [Engineering, Finance, HR, Sales, Legal, Operations, IT, Executive]}
-      - {name: head_count,     type: int_range,     min: 5, max: 200}
-      - {name: budget_usd,     type: int_range,     min: 100000, max: 5000000}
+      - {name: head_count,     type: int_range,     min: 1, max: 1000}
+      - {name: budget_usd,     type: money,         min: 100000.00, max: 99999999.99, sql_type: "numeric", numeric_precision: 12, numeric_scale: 2}
       - {name: manager_id,     type: fk,            ref: employees.id}
 
   sessions:

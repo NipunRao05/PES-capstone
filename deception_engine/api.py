@@ -663,33 +663,41 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
             strategy_id="D1",
         ))
 
-    # 3. Table enumeration — progressive exposure. Support common MySQL and
-    # PostgreSQL catalog queries.
+    # 3. PostgreSQL information_schema metadata.  Tables and columns are
+    # rendered from the same YAML that drives fake rows, then filtered by the
+    # bounded predicates used by common reconnaissance queries.
+    if (
+        " from information_schema.tables" in fp
+        or " from information_schema.columns" in fp
+    ):
+        return await _handle_information_schema(req, schema_name, fp)
+
+    # 4. Table enumeration — progressive exposure. Support common MySQL and
+    # PostgreSQL pg_tables catalog queries.
     if (
         "show tables" in fp
         or "show full tables" in fp
         or " from pg_tables" in fp
-        or " from information_schema.tables" in fp
     ):
         return await _handle_show_tables(req, schema_name)
 
-    # 4. COUNT(*) query
+    # 5. COUNT(*) query
     if _is_count_query(fp):
         return await _handle_count(req, fp, schema_name)
 
     table = req.table or _extract_table(fp)
 
-    # 5. Managed mutations must be classified before generic table reads.
+    # 6. Managed mutations must be classified before generic table reads.
     # The handlers already existed, but the earlier branch order made them
     # unreachable for known fake tables and returned SELECT-shaped rows instead.
     if _is_mutation(fp):
         return await _handle_mutation(req, fp, table, schema_name)
 
-    # 6. SELECT from a known fake table
+    # 7. SELECT from a known fake table
     if table and _schema_loader.get_table(schema_name, table):
         return await _handle_select(req, table, schema_name)
 
-    # 7. SELECT from unknown table — passthrough to real backend
+    # 8. SELECT from unknown table — passthrough to real backend
     return _json_response(DecisionResponse(
         mode="passthrough",
         explanation="Table not in fake schema — forwarding to backend",
@@ -697,6 +705,104 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
 
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
+
+_INFORMATION_SCHEMA_TABLE_COLUMNS = [
+    "table_catalog", "table_schema", "table_name", "table_type",
+]
+_INFORMATION_SCHEMA_COLUMN_COLUMNS = [
+    "table_catalog", "table_schema", "table_name", "column_name",
+    "ordinal_position", "column_default", "is_nullable", "data_type",
+    "numeric_precision", "numeric_scale",
+]
+_SUPPORTED_METADATA_FILTERS = {"table_schema", "table_name", "column_name"}
+
+
+async def _handle_information_schema(
+    req: DecisionRequest, schema_name: str, fp: str
+) -> JSONResponse:
+    """Serve a bounded, query-aware PostgreSQL metadata catalog."""
+    depth = _exposure.get_depth(req.session_id)
+    is_columns = " from information_schema.columns" in fp
+    if is_columns:
+        available = _INFORMATION_SCHEMA_COLUMN_COLUMNS
+        rows = _schema_loader.get_metadata_columns(schema_name, depth)
+    else:
+        available = _INFORMATION_SCHEMA_TABLE_COLUMNS
+        rows = _schema_loader.get_metadata_tables(schema_name, depth)
+
+    rows = _filter_metadata_rows(rows, fp)
+    columns = _metadata_projection(fp, available)
+    projected = [{column: row.get(column) for column in columns} for row in rows]
+    visible_tables = list(dict.fromkeys(row["table_name"] for row in rows))
+    trap_tables = set(_schema_loader.get_trap_tables(schema_name))
+
+    return _json_response(DecisionResponse(
+        mode="fake",
+        tables=visible_tables if not is_columns else [],
+        rows=projected,
+        columns=columns,
+        latency_ms=_latency(req.deception_level, base=35),
+        profile="fake_schema",
+        is_trap=bool(trap_tables.intersection(visible_tables)),
+        explanation=(
+            f"Filtered information_schema.{'columns' if is_columns else 'tables'} "
+            f"depth={depth}, {len(projected)} rows"
+        ),
+        strategy_id="D1",
+    ))
+
+
+def _metadata_projection(query: str, available: list[str]) -> list[str]:
+    """Extract only simple supported SELECT-list identifiers."""
+    match = re.search(r"\bselect\s+(.*?)\s+from\s+information_schema\.", query, re.I)
+    if not match:
+        return list(available)
+    select_list = re.sub(r"^distinct\s+", "", match.group(1).strip(), flags=re.I)
+    if select_list == "*":
+        return list(available)
+
+    projected: list[str] = []
+    for expression in select_list.split(",")[:len(available)]:
+        expression = expression.strip()
+        expression = re.sub(r"\s+as\s+\w+$", "", expression, flags=re.I)
+        identifier = expression.split(".")[-1].strip(' "')
+        if identifier in available and identifier not in projected:
+            projected.append(identifier)
+    return projected or list(available)
+
+
+def _filter_metadata_rows(rows: list[dict], query: str) -> list[dict]:
+    """Apply literal =/LIKE/ILIKE predicates for three metadata fields."""
+    where = query.split(" where ", 1)[1] if " where " in query else ""
+    predicate_pattern = re.compile(
+        r"(?:(?:\b\w+)\.)?(table_schema|table_name|column_name)\s*"
+        r"(=|like|ilike)\s*'((?:''|[^'])*)'",
+        re.I,
+    )
+    predicates = [
+        (match.group(1).lower(), match.group(2).lower(), match.group(3).replace("''", "'"))
+        for match in predicate_pattern.finditer(where)
+        if match.group(1).lower() in _SUPPORTED_METADATA_FILTERS
+    ]
+    if not predicates:
+        return rows
+
+    def matches(row: dict) -> bool:
+        for field, operator, expected in predicates:
+            actual = str(row.get(field, ""))
+            if operator == "=" and actual != expected:
+                return False
+            if operator in {"like", "ilike"}:
+                pattern = "".join(
+                    ".*" if char == "%" else "." if char == "_" else re.escape(char)
+                    for char in expected
+                )
+                flags = re.I if operator == "ilike" else 0
+                if re.fullmatch(pattern, actual, flags=flags) is None:
+                    return False
+        return True
+
+    return [row for row in rows if matches(row)]
 
 async def _handle_show_tables(
     req: DecisionRequest, schema_name: str
@@ -789,14 +895,31 @@ async def _handle_select(
     # Cap rows — never return more than 100 regardless of LIMIT
     effective_limit = min(limit, 100)
 
-    rows = _generator.generate_rows(
-        columns=columns_def,
-        row_count=row_count,
-        session_id=req.session_id,
-        table_name=table,
-        limit=effective_limit,
-        offset=offset,
-    )
+    if schema_name == "hr" and table in {"employees", "departments"}:
+        schema_tables = _schema_loader.get_all_tables(schema_name)
+        employee_def = schema_tables.get("employees", {})
+        employee_count = _generator.generate_count(
+            employee_def.get("row_count", 0), req.session_id, "employees"
+        )
+        available_limit = min(effective_limit, max(0, row_count - offset))
+        rows = _generator.generate_organization_rows(
+            schema_name=schema_name,
+            table_name=table,
+            schema_tables=schema_tables,
+            employee_count=employee_count,
+            session_id=req.session_id,
+            limit=available_limit,
+            offset=offset,
+        )
+    else:
+        rows = _generator.generate_rows(
+            columns=columns_def,
+            row_count=row_count,
+            session_id=req.session_id,
+            table_name=table,
+            limit=effective_limit,
+            offset=offset,
+        )
 
     # Prepend any inserted rows (mutation store)
     inserted = _mutations.get_inserted_rows(req.session_id, table)
@@ -881,6 +1004,7 @@ async def session_end(body: dict) -> dict:
     if session_id:
         _exposure.cleanup_session(session_id)
         _mutations.cleanup_session(session_id)
+        _generator.cleanup_session(session_id)
     return {"status": "ok"}
 
 
