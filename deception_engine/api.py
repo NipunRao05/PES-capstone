@@ -361,6 +361,10 @@ def _prepare_decide_request_payload(payload: dict) -> dict:
     except (TypeError, ValueError):
         errors.append("invalid risk_score")
 
+    transaction_state = str(data.get("transaction_state") or "idle").strip().lower()
+    if transaction_state not in {"idle", "in_transaction", "failed_transaction"}:
+        errors.append("invalid transaction_state")
+
     if errors:
         log.warning(
             "Rejected /decide request: errors=%s session=%s protocol=%s query_preview=%s",
@@ -391,6 +395,7 @@ def _prepare_decide_request_payload(payload: dict) -> dict:
     data["table"] = str(data.get("table") or "")
     data["deception_level"] = deception_level
     data["risk_score"] = risk_score
+    data["transaction_state"] = transaction_state
 
     # The /decide handler intentionally uses SimpleNamespace instead of
     # constructing DecisionRequest, because this project has used both dataclass
@@ -885,12 +890,11 @@ async def _handle_select(
     base_count = _generator.generate_count(
         table_def.get("row_count", 100), req.session_id, table
     )
-    # DELETE/INSERT mutations should affect SELECT pagination as well as
-    # COUNT(*). Inserted rows are prepended below when offset=0; row_count still
-    # needs the same adjusted total so high-offset probes do not reveal a
-    # mismatch after mutations.
-    row_count = max(0, base_count + _mutations.get_count_delta(req.session_id, table))
     limit, offset = _parse_limit_offset(req.query_normalized)
+    row_id = _parse_id_predicate(req.query_normalized)
+    if row_id is not None:
+        offset = max(0, row_id - 1)
+        limit = 1
 
     # Cap rows — never return more than 100 regardless of LIMIT
     effective_limit = min(limit, 100)
@@ -901,7 +905,7 @@ async def _handle_select(
         employee_count = _generator.generate_count(
             employee_def.get("row_count", 0), req.session_id, "employees"
         )
-        available_limit = min(effective_limit, max(0, row_count - offset))
+        available_limit = min(effective_limit, max(0, base_count - offset))
         rows = _generator.generate_organization_rows(
             schema_name=schema_name,
             table_name=table,
@@ -914,19 +918,25 @@ async def _handle_select(
     else:
         rows = _generator.generate_rows(
             columns=columns_def,
-            row_count=row_count,
+            row_count=base_count,
             session_id=req.session_id,
             table_name=table,
             limit=effective_limit,
             offset=offset,
         )
 
-    # Prepend any inserted rows (mutation store)
+    # Merge session-local inserts, then apply bounded UPDATE/DELETE overlays.
     inserted = _mutations.get_inserted_rows(req.session_id, table)
-    if inserted and offset == 0:
+    if row_id is not None:
+        inserted_matches = [row for row in inserted if row.get("id") == row_id]
+        rows = inserted_matches + [row for row in rows if row.get("id") == row_id]
+    elif inserted and offset == 0:
         rows = inserted[:effective_limit] + rows[:max(0, effective_limit - len(inserted))]
+    rows = _mutations.apply_rows(req.session_id, table, rows)
 
-    col_names = [c["name"] for c in columns_def]
+    all_col_names = [c["name"] for c in columns_def]
+    col_names = _parse_select_projection(req.query_normalized, all_col_names)
+    rows = [{column: row.get(column) for column in col_names} for row in rows]
     is_trap = table_def.get("is_trap", False)
 
     if is_trap:
@@ -962,23 +972,47 @@ async def _handle_mutation(
             explanation="Mutation target is not in fake schema — forwarding to backend",
         ))
 
+    transaction_active = getattr(req, "transaction_state", "idle") == "in_transaction"
+    affected = 0
     if fp.startswith("insert"):
         row = _fake_insert_row(req, schema_name, table)
         if row:
-            _mutations.record_insert(req.session_id, table, row)
-        affected = 1
+            _mutations.record_insert(
+                req.session_id, table, row,
+                transaction_active=transaction_active,
+            )
+            affected = 1
     elif fp.startswith("update"):
-        _mutations.record_update(req.session_id, table, "", "")
-        affected = random.randint(1, 5)
+        row_id = _parse_id_predicate(fp)
+        assignments = _parse_update_assignments(
+            fp, {column["name"] for column in _schema_loader.get_columns(schema_name, table)}
+        )
+        if row_id is not None and assignments and _row_id_exists(req, schema_name, table, row_id):
+            _mutations.record_update(
+                req.session_id, table, "", "", row_id=row_id,
+                assignments=assignments, transaction_active=transaction_active,
+            )
+            affected = 1
     elif fp.startswith("delete"):
-        _mutations.record_delete(req.session_id, table, "")
-        affected = random.randint(1, 3)
-    else:
-        affected = 0
+        row_id = _parse_id_predicate(fp)
+        if row_id is None:
+            # Preserve the existing mutation-audit hook for placeholder or
+            # unsupported predicates without pretending a row was deleted.
+            _mutations.record_delete(
+                req.session_id, table, "", row_id=None,
+                transaction_active=transaction_active,
+            )
+        elif _row_id_exists(req, schema_name, table, row_id):
+            _mutations.record_delete(
+                req.session_id, table, "", row_id=row_id,
+                transaction_active=transaction_active,
+            )
+            affected = 1
 
     return _json_response(DecisionResponse(
         mode="fake",
         rows=[],
+        affected_rows=affected,
         latency_ms=_latency(req.deception_level, base=30),
         profile="fake_table_data",
         explanation=f"Mutation recorded: {fp[:30]} — {affected} rows affected",
@@ -1006,6 +1040,19 @@ async def session_end(body: dict) -> dict:
         _mutations.cleanup_session(session_id)
         _generator.cleanup_session(session_id)
     return {"status": "ok"}
+
+
+@app.post("/transaction/{action}")
+async def transaction_action(action: str, body: dict) -> dict:
+    """Finalize one session-local deceptive mutation transaction."""
+    action = str(action or "").strip().lower()
+    session_id = str(body.get("session_id") or "").strip() if isinstance(body, dict) else ""
+    if action not in {"commit", "rollback"}:
+        raise HTTPException(status_code=400, detail="unsupported transaction action")
+    if not session_id or _byte_len(session_id) > DECIDE_MAX_SESSION_ID_BYTES:
+        raise HTTPException(status_code=400, detail="invalid session_id")
+    _mutations.finalize_transaction(session_id, action)
+    return {"status": "ok", "action": action, "session_id": session_id}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1111,13 +1158,111 @@ def _fake_insert_row(req: DecisionRequest, schema_name: str, table: str) -> dict
 
 def _extract_table(fp: str) -> str:
     """Best-effort table name extraction from normalised fingerprint."""
-    for keyword in (" from ", " into ", " update ", " join "):
-        idx = fp.find(keyword)
-        if idx >= 0:
-            rest = fp[idx + len(keyword):].strip()
-            token = rest.split()[0] if rest.split() else ""
-            return token.strip("`'\";,()").split(".")[-1].strip("`'\";,()")
+    match = re.search(
+        r"\b(?:from|into|update|join)\s+([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)",
+        str(fp or ""), re.I,
+    )
+    if match:
+        return match.group(1).split(".")[-1].lower()
     return ""
+
+
+def _parse_id_predicate(query: str) -> int | None:
+    """Parse the supported bounded row predicate: WHERE [alias.]id = integer."""
+    match = re.search(r"\bwhere\s+(.+)$", str(query or ""), re.I)
+    if not match:
+        return None
+    predicate = re.split(r"\s+(?:limit|offset)\s+", match.group(1), maxsplit=1, flags=re.I)[0]
+    predicate = predicate.strip().rstrip(";").strip()
+    bounded = re.fullmatch(
+        r"(?:(?:[a-z_][a-z0-9_]*)\.)?id\s*=\s*(\d+)",
+        predicate, re.I,
+    )
+    return int(bounded.group(1)) if bounded else None
+
+
+def _parse_select_projection(query: str, available: list[str]) -> list[str]:
+    """Return a simple identifier-only SELECT projection or the safe full row."""
+    match = re.search(r"\bselect\s+(.*?)\s+from\s+", str(query or ""), re.I)
+    if not match:
+        return list(available)
+    expressions = match.group(1).strip()
+    if expressions == "*" or expressions.endswith(".*"):
+        return list(available)
+    projected: list[str] = []
+    for expression in expressions.split(",")[:len(available)]:
+        expression = re.sub(r"\s+as\s+[a-z_][a-z0-9_]*$", "", expression.strip(), flags=re.I)
+        identifier = expression.split(".")[-1].strip(' `"')
+        if identifier in available and identifier not in projected:
+            projected.append(identifier)
+    return projected or list(available)
+
+
+def _parse_update_assignments(query: str, available: set[str]) -> dict:
+    """Parse bounded column assignments; no expressions beyond +/- numeric."""
+    match = re.search(r"\bset\s+(.+?)\s+where\b", str(query or ""), re.I)
+    if not match:
+        return {}
+    assignments: dict[str, dict] = {}
+    for expression in match.group(1).split(",")[:16]:
+        expression = expression.strip()
+        relative = re.fullmatch(
+            r"([a-z_][a-z0-9_]*)\s*=\s*\1\s*([+-])\s*(-?\d+(?:\.\d+)?)",
+            expression, re.I,
+        )
+        if relative:
+            column = relative.group(1).lower()
+            if column not in available:
+                return {}
+            raw_value = relative.group(3)
+            value = float(raw_value) if "." in raw_value else int(raw_value)
+            assignments[column] = {
+                "op": "add" if relative.group(2) == "+" else "subtract",
+                "value": value,
+            }
+            continue
+
+        literal = re.fullmatch(
+            r"([a-z_][a-z0-9_]*)\s*=\s*(null|true|false|-?\d+(?:\.\d+)?|'(?:''|[^'])*')",
+            expression, re.I,
+        )
+        if not literal:
+            return {}
+        column = literal.group(1).lower()
+        if column not in available or column == "id":
+            return {}
+        raw_value = literal.group(2)
+        lowered = raw_value.lower()
+        if lowered == "null":
+            value = None
+        elif lowered in {"true", "false"}:
+            value = lowered == "true"
+        elif raw_value.startswith("'"):
+            value = raw_value[1:-1].replace("''", "'")
+        elif "." in raw_value:
+            value = float(raw_value)
+        else:
+            value = int(raw_value)
+        assignments[column] = {"op": "set", "value": value}
+    return assignments
+
+
+def _row_id_exists(
+    req: DecisionRequest, schema_name: str, table: str, row_id: int
+) -> bool:
+    table_def = _schema_loader.get_table(schema_name, table)
+    if not table_def or row_id < 1:
+        return False
+    base_count = _generator.generate_count(
+        table_def.get("row_count", 100), req.session_id, table
+    )
+    exists = row_id <= base_count or any(
+        row.get("id") == row_id
+        for row in _mutations.get_inserted_rows(req.session_id, table)
+    )
+    if not exists:
+        return False
+    return bool(_mutations.apply_rows(req.session_id, table, [{"id": row_id}]))
 
 
 def _parse_limit_offset(fp: str) -> tuple[int, int]:

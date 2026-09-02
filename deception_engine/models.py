@@ -21,6 +21,7 @@ class DecisionRequest:
     table:            str = ""       # extracted table name if available
     deception_level:  int = 1    # from mitre-events (1–4)
     risk_score:       float = 0.0
+    transaction_state: str = "idle"  # idle | in_transaction | failed_transaction
 
 
 @dataclass
@@ -29,6 +30,7 @@ class DecisionResponse:
     mode:        str             # "passthrough" | "fake" | "block" | "delay"
     rows:        list[dict] = field(default_factory=list)
     count:       Optional[int] = None
+    affected_rows: Optional[int] = None
     columns:     list[str] = field(default_factory=list)
     tables:      list[str] = field(default_factory=list)   # for SHOW TABLES
     databases:   list[str] = field(default_factory=list)   # for SHOW DATABASES

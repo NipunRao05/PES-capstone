@@ -427,6 +427,7 @@ Dynamic D0 baseline verification         VERIFIED (2026-09-01; open-loop)
 Persistent experiment assignment         VERIFIED D1 (2026-09-01)
 Deceptive HR base-world realism           VERIFIED (2026-09-01)
 PostgreSQL metadata consistency           VERIFIED (2026-09-01; bounded filters)
+PostgreSQL stateful deceptive CRUD        VERIFIED (2026-09-02; bounded id predicates)
 Commitment/world ledger                  PENDING
 Attack-path registry and steering        PENDING
 Post-success intervention registry       PENDING

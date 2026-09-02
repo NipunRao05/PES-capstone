@@ -27,7 +27,7 @@ phase*_after_*.json
 phase*_before_*.txt
 phase*_after_*.txt
 
-# Final local secret ignores — Phase 8/9
+# Final local secret ignores ï¿½ Phase 8/9
 .env
 .env.*
 !.env.example

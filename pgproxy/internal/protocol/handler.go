@@ -49,6 +49,7 @@ type Handler struct {
 	// auth metadata captured during handshake
 	authMethod       string
 	lastQueryOutcome interceptor.QueryOutcome
+	deceptionTxDirty bool
 }
 
 // NewHandler constructs a protocol handler.
@@ -487,6 +488,16 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 		// forward the query to the real backend. If /decide is unavailable or returns
 		// passthrough, the proxy falls back to the native trap path or backend forwarding.
 		if q, ok := clientMsg.(*pgproto3.Query); ok {
+			if shouldRejectDeceptionQuery(h.currentTxStatus(), q.String) {
+				if err := h.sendPostgresAbortedTransaction(); err != nil {
+					return fmt.Errorf("send aborted transaction response: %w", err)
+				}
+				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{
+					Verified: true, Success: false, Authority: "protocol",
+					TransactionState: "failed_transaction", ErrorCode: "25P02",
+				})
+				continue
+			}
 			if dec, ok := h.decideWithDeceptionEngine(ctx, q.String, "postgres"); ok {
 				h.logger.Info(
 					"serving deception-engine fake result",
@@ -498,6 +509,9 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 				)
 				if err := h.sendPostgresDeceptionResult(dec, q.String); err != nil {
 					return fmt.Errorf("send deception-engine fake result: %w", err)
+				}
+				if isDeceptionMutationSQL(q.String) && h.currentTxStatus() == 'T' && dec.AffectedRows != nil && *dec.AffectedRows > 0 {
+					h.deceptionTxDirty = true
 				}
 				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.postgresTransactionState()})
 				continue
@@ -630,6 +644,18 @@ func (h *Handler) drainBackendResponses(ctx context.Context, trigger pgproto3.Fr
 			if notice := shapeCtx.TruncationNotice(); notice != nil {
 				if err := h.sendToClient(notice); err != nil {
 					return fmt.Errorf("send truncation notice: %w", err)
+				}
+			}
+		}
+
+		if _, ok := msg.(*pgproto3.ReadyForQuery); ok && h.deceptionTxDirty && h.lastQueryOutcome.Success {
+			if query, queryOK := trigger.(*pgproto3.Query); queryOK {
+				action := deceptionTransactionAction(query.String)
+				if action != "" {
+					if err := h.notifyDeceptionTransaction(ctx, action); err != nil {
+						return fmt.Errorf("finalize deceptive transaction: %w", err)
+					}
+					h.deceptionTxDirty = false
 				}
 			}
 		}
@@ -778,31 +804,33 @@ func (h *Handler) handleCopyBoth(ctx context.Context) error {
 // ─── Deception-engine integration ────────────────────────────────────────────
 
 type deceptionDecisionRequest struct {
-	SessionID       string  `json:"session_id"`
-	QueryNormalized string  `json:"query_normalized"`
-	Fingerprint     string  `json:"fingerprint"`
-	EventType       string  `json:"event_type"`
-	Phase           string  `json:"phase"`
-	Username        string  `json:"username"`
-	Database        string  `json:"database"`
-	Protocol        string  `json:"protocol"`
-	Table           string  `json:"table"`
-	DeceptionLevel  int     `json:"deception_level"`
-	RiskScore       float64 `json:"risk_score"`
+	SessionID        string  `json:"session_id"`
+	QueryNormalized  string  `json:"query_normalized"`
+	Fingerprint      string  `json:"fingerprint"`
+	EventType        string  `json:"event_type"`
+	Phase            string  `json:"phase"`
+	Username         string  `json:"username"`
+	Database         string  `json:"database"`
+	Protocol         string  `json:"protocol"`
+	Table            string  `json:"table"`
+	DeceptionLevel   int     `json:"deception_level"`
+	RiskScore        float64 `json:"risk_score"`
+	TransactionState string  `json:"transaction_state"`
 }
 
 type deceptionDecisionResponse struct {
-	Mode        string                   `json:"mode"`
-	Rows        []map[string]interface{} `json:"rows"`
-	Count       *int                     `json:"count"`
-	Columns     []string                 `json:"columns"`
-	Tables      []string                 `json:"tables"`
-	Databases   []string                 `json:"databases"`
-	LatencyMS   int                      `json:"latency_ms"`
-	ErrorMsg    string                   `json:"error_msg"`
-	Profile     string                   `json:"profile"`
-	Explanation string                   `json:"explanation"`
-	IsTrap      bool                     `json:"is_trap"`
+	Mode         string                   `json:"mode"`
+	Rows         []map[string]interface{} `json:"rows"`
+	Count        *int                     `json:"count"`
+	AffectedRows *int                     `json:"affected_rows"`
+	Columns      []string                 `json:"columns"`
+	Tables       []string                 `json:"tables"`
+	Databases    []string                 `json:"databases"`
+	LatencyMS    int                      `json:"latency_ms"`
+	ErrorMsg     string                   `json:"error_msg"`
+	Profile      string                   `json:"profile"`
+	Explanation  string                   `json:"explanation"`
+	IsTrap       bool                     `json:"is_trap"`
 }
 
 func (h *Handler) deceptionBreakerOpen() bool {
@@ -845,6 +873,49 @@ func (h *Handler) recordDeceptionFailure(protocol string, errMsg string) {
 	}
 }
 
+func deceptionTransactionAction(sql string) string {
+	q := normalizeDeceptionSQL(sql)
+	switch q {
+	case "commit", "end":
+		return "commit"
+	case "rollback", "abort":
+		return "rollback"
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) notifyDeceptionTransaction(ctx context.Context, action string) error {
+	if action != "commit" && action != "rollback" {
+		return fmt.Errorf("unsupported deception transaction action %q", action)
+	}
+	baseURL := os.Getenv("DECEPTION_ENGINE_URL")
+	if baseURL == "" {
+		baseURL = "http://deception-engine:8001/decide"
+	}
+	url := strings.TrimSuffix(baseURL, "/decide") + "/transaction/" + action
+	body, err := json.Marshal(map[string]string{"session_id": safeSessionID(h)})
+	if err != nil {
+		return err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("deception transaction endpoint returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol string) (*deceptionDecisionResponse, bool) {
 	if !shouldConsultDeceptionEngine(sql) {
 		return nil, false
@@ -871,17 +942,18 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	normalized := normalizeDeceptionSQL(sql)
 	req := deceptionDecisionRequest{
-		SessionID:       safeSessionID(h),
-		QueryNormalized: normalized,
-		Fingerprint:     deceptionFingerprint(normalized),
-		EventType:       "query",
-		Phase:           inferDeceptionPhase(normalized),
-		Username:        safeUsername(h),
-		Database:        safeDatabase(h),
-		Protocol:        protocol,
-		Table:           extractDeceptionTableName(normalized),
-		DeceptionLevel:  inferDeceptionLevel(normalized),
-		RiskScore:       inferDeceptionRisk(normalized),
+		SessionID:        safeSessionID(h),
+		QueryNormalized:  normalized,
+		Fingerprint:      deceptionFingerprint(normalized),
+		EventType:        "query",
+		Phase:            inferDeceptionPhase(normalized),
+		Username:         safeUsername(h),
+		Database:         safeDatabase(h),
+		Protocol:         protocol,
+		Table:            extractDeceptionTableName(normalized),
+		DeceptionLevel:   inferDeceptionLevel(normalized),
+		RiskScore:        inferDeceptionRisk(normalized),
+		TransactionState: h.postgresTransactionState(),
 	}
 
 	body, err := json.Marshal(req)
@@ -934,7 +1006,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 	}
 
 	normalizeDecisionShape(&dec, protocol)
-	if len(dec.Columns) == 0 {
+	if len(dec.Columns) == 0 && !isDeceptionMutationSQL(normalized) {
 		return nil, false
 	}
 
@@ -949,24 +1021,47 @@ func (h *Handler) sendPostgresDeceptionResult(dec *deceptionDecisionResponse, sq
 	rows := decisionRowsAsBytes(dec)
 	messages := make([]pgproto3.BackendMessage, 0, 3+len(rows))
 
-	fields := make([]pgproto3.FieldDescription, 0, len(dec.Columns))
-	for _, col := range dec.Columns {
-		fields = append(fields, pgproto3.FieldDescription{
-			Name:         []byte(col),
-			DataTypeOID:  25, // TEXT keeps fake metadata broadly compatible with psql and GUI clients.
-			DataTypeSize: -1,
-			TypeModifier: -1,
-			Format:       0, // text format
-		})
-	}
+	if !isDeceptionMutationSQL(sql) {
+		fields := make([]pgproto3.FieldDescription, 0, len(dec.Columns))
+		for _, col := range dec.Columns {
+			fields = append(fields, pgproto3.FieldDescription{
+				Name:         []byte(col),
+				DataTypeOID:  25, // TEXT keeps fake metadata broadly compatible with psql and GUI clients.
+				DataTypeSize: -1,
+				TypeModifier: -1,
+				Format:       0, // text format
+			})
+		}
 
-	messages = append(messages, &pgproto3.RowDescription{Fields: fields})
-	for _, row := range rows {
-		messages = append(messages, &pgproto3.DataRow{Values: row})
+		messages = append(messages, &pgproto3.RowDescription{Fields: fields})
+		for _, row := range rows {
+			messages = append(messages, &pgproto3.DataRow{Values: row})
+		}
 	}
-	messages = append(messages, &pgproto3.CommandComplete{CommandTag: postgresFakeCommandTag(sql, len(rows))})
+	affectedRows := 0
+	if dec.AffectedRows != nil {
+		affectedRows = *dec.AffectedRows
+	}
+	messages = append(messages, &pgproto3.CommandComplete{CommandTag: postgresFakeCommandTag(sql, len(rows), affectedRows)})
 	messages = append(messages, &pgproto3.ReadyForQuery{TxStatus: h.currentTxStatus()})
 
+	for _, msg := range messages {
+		if err := h.sendToClient(msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Handler) sendPostgresAbortedTransaction() error {
+	messages := []pgproto3.BackendMessage{
+		&pgproto3.ErrorResponse{
+			Severity: "ERROR",
+			Code:     "25P02",
+			Message:  "current transaction is aborted, commands ignored until end of transaction block",
+		},
+		&pgproto3.ReadyForQuery{TxStatus: 'E'},
+	}
 	for _, msg := range messages {
 		if err := h.sendToClient(msg); err != nil {
 			return err
@@ -1065,10 +1160,14 @@ func shouldConsultDeceptionEngine(sql string) bool {
 	if containsDeceptionTrapTable(q) {
 		return true
 	}
-	if strings.HasPrefix(q, "select ") && extractDeceptionTableName(q) != "" {
+	if (strings.HasPrefix(q, "select ") || isDeceptionMutationSQL(q)) && extractDeceptionTableName(q) != "" {
 		return true
 	}
 	return false
+}
+
+func shouldRejectDeceptionQuery(txStatus byte, sql string) bool {
+	return txStatus == 'E' && shouldConsultDeceptionEngine(sql)
 }
 
 func normalizeDeceptionSQL(sql string) string {
@@ -1196,15 +1295,20 @@ func safeDatabase(h *Handler) string {
 	return h.sess.Database
 }
 
-func postgresFakeCommandTag(sql string, rowCount int) []byte {
+func isDeceptionMutationSQL(sql string) bool {
+	q := strings.TrimSpace(strings.ToLower(sql))
+	return strings.HasPrefix(q, "insert ") || strings.HasPrefix(q, "update ") || strings.HasPrefix(q, "delete ")
+}
+
+func postgresFakeCommandTag(sql string, rowCount int, affectedRows int) []byte {
 	q := strings.TrimSpace(strings.ToLower(sql))
 	switch {
 	case strings.HasPrefix(q, "insert"):
-		return []byte("INSERT 0 0")
+		return []byte(fmt.Sprintf("INSERT 0 %d", affectedRows))
 	case strings.HasPrefix(q, "update"):
-		return []byte("UPDATE 0")
+		return []byte(fmt.Sprintf("UPDATE %d", affectedRows))
 	case strings.HasPrefix(q, "delete"):
-		return []byte("DELETE 0")
+		return []byte(fmt.Sprintf("DELETE %d", affectedRows))
 	default:
 		return []byte(fmt.Sprintf("SELECT %d", rowCount))
 	}

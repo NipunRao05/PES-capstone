@@ -1,10 +1,32 @@
 # Validation Checkpoint
 
-Checkpoint date: 2026-09-01
+Checkpoint date: 2026-09-02
 
 Repository: `F:\b\Capstone-main`
 
-Latest checkpoint start: main / 50617e8 (Dynamic D0 verification)
+Latest checkpoint start: main / 262bfe3 (Dataset + Metadata Realism Fix)
+
+## PostgreSQL stateful CRUD correction — 2026-09-02
+
+- The bounded corrective checkpoint is **VERIFIED**. Root causes, contracts,
+  and evidence are recorded in `POSTGRES_STATEFUL_CRUD_REGRESSION_FIX.md`.
+- Qualified and unqualified deceptive SELECT/INSERT/UPDATE/DELETE now use the
+  same table normalization and session-local Redis overlay. `WHERE id = literal`
+  is evaluated, UPDATE changes only the selected row, and PostgreSQL command
+  tags report exact affected counts.
+- Transactional mutation snapshots provide same-session read-your-write,
+  rollback restoration, commit persistence under the existing session-local
+  contract, and cross-session isolation.
+- `pgproxy` remains authoritative for PostgreSQL transaction status. A backend
+  error causes deceptive statements to return SQLSTATE 25P02 until PostgreSQL
+  successfully processes ROLLBACK.
+- Verification passed: deception-engine 73/73, authoritative state 9/9, all
+  pgproxy tests and `go vet`, and bounded live SELECT, rollback, commit, aborted
+  transaction, simultaneous-session isolation, and qualified INSERT/DELETE
+  smokes. The strategy registry remained ready and non-degraded.
+- No physical deceptive PostgreSQL tables, shared mutation state, generalized
+  SQL parser, dynamic steering/intervention behavior, or cloud deployment was
+  introduced.
 
 ## Dynamic D1 checkpoint — 2026-09-01
 
