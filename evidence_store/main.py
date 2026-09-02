@@ -84,19 +84,30 @@ _QUERY_ARTIFACT_KEYS = {"query", "query_raw", "query_normalized", "sql"}
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def canonical_timestamp(value: Any) -> str:
+    """Normalize ISO or legacy epoch evidence time to UTC ISO-8601."""
+    text = bounded_text(value, 128).strip()
+    try:
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", text):
+            parsed = datetime.fromtimestamp(float(text), tz=timezone.utc)
+        else:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.isoformat().replace("+00:00", "Z")
+    except (ValueError, OverflowError, OSError):
+        return utc_now()
 
 
 def timestamp_score(value: Any) -> float:
     """Convert bounded event time to a safe Redis index score."""
     now = time.time()
-    text = bounded_text(value, 128).strip()
-    if not text:
-        return now
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = datetime.fromisoformat(canonical_timestamp(value).replace("Z", "+00:00"))
         score = parsed.timestamp()
     except (ValueError, OverflowError, OSError):
         return now
@@ -170,6 +181,13 @@ def sanitize_artifact(value: Any, *, key: str = "", depth: int = 0) -> Any:
     if depth > 8:
         raise ValueError("artifact nesting exceeds the evidence boundary")
     normalized_key = key.strip().lower()
+    safe_derived_feature = (
+        isinstance(value, (bool, int, float))
+        and normalized_key.endswith((
+            "_count", "_score", "_ratio", "_rate", "_present", "_detected",
+            "_attempts", "_interest", "_confidence",
+        ))
+    )
     sensitive_key = (
         normalized_key in _SENSITIVE_ARTIFACT_KEYS
         or any(
@@ -180,7 +198,7 @@ def sanitize_artifact(value: Any, *, key: str = "", depth: int = 0) -> Any:
             )
         )
     )
-    if sensitive_key:
+    if sensitive_key and not safe_derived_feature:
         return "[REDACTED]"
     if value is None or isinstance(value, bool) or isinstance(value, int):
         return value
@@ -189,6 +207,11 @@ def sanitize_artifact(value: Any, *, key: str = "", depth: int = 0) -> Any:
             raise ValueError("artifact contains a non-finite number")
         return value
     if isinstance(value, str):
+        if normalized_key in {
+            "timestamp", "created_at", "updated_at", "observed_at",
+            "first_seen", "last_seen", "closed_at", "started_at",
+        }:
+            return canonical_timestamp(value)
         return redact_query(value) if normalized_key in _QUERY_ARTIFACT_KEYS else bounded_text(value)
     if isinstance(value, list):
         if len(value) > 500:
@@ -374,10 +397,9 @@ class EvidenceRepository:
             log.warning("Ignoring evidence event without session_id: topic=%s offset=%s", topic, offset)
             return False
 
-        timestamp = bounded_text(
+        timestamp = canonical_timestamp(
             payload.get("timestamp") or payload.get("timestamp_closed") or payload.get("created_at"),
-            128,
-        ) or utc_now()
+        )
         event_id = kafka_event_id(payload, topic, partition, offset, session_id)
         self._touch(session_id, payload, timestamp)
 
@@ -428,6 +450,7 @@ class EvidenceRepository:
                 "source_topic": topic,
                 "source_partition": partition,
                 "source_offset": offset,
+                "provenance": "summary" if topic == "mitre-sessions" else "detailed",
             }
             self._append_once(session_id, "session_events", event_id, event, MAX_STAGE_EVENTS)
 
@@ -442,6 +465,10 @@ class EvidenceRepository:
                 "risk_score": safe_float(payload.get("risk_score", payload.get("final_risk_score"))),
                 "risk_level": bounded_text(payload.get("risk_level"), 32).lower(),
                 "trap_triggered": bool(payload.get("is_trap_triggered", payload.get("trap_triggered", False))),
+                "logical_trap_interaction": (
+                    topic == "mitre-events"
+                    and bool(payload.get("is_trap_triggered", payload.get("trap_triggered", False)))
+                ),
                 "source_topic": topic,
                 "source_partition": partition,
                 "source_offset": offset,
@@ -461,7 +488,7 @@ class EvidenceRepository:
                 for match in payload.get("techniques_matched", []):
                     if isinstance(match, dict):
                         self._merge_technique(session_id, bounded_text(match.get("technique_id"), 64))
-                if event["trap_triggered"]:
+                if event["trap_triggered"] and topic == "mitre-events":
                     self._append_once(
                         session_id,
                         "trap_events",
@@ -472,6 +499,8 @@ class EvidenceRepository:
                             "technique_id": technique_id,
                             "risk_score": event["risk_score"],
                             "source_event_id": event_id,
+                            "logical_interaction": True,
+                            "provenance": "detailed",
                         },
                         MAX_STAGE_EVENTS,
                     )
@@ -483,7 +512,7 @@ class EvidenceRepository:
         session_id = bounded_text(payload.get("session_id"), 512).strip()
         if not session_id or session_id.startswith("metric-pressure-"):
             return False
-        timestamp = bounded_text(payload.get("timestamp"), 128) or utc_now()
+        timestamp = canonical_timestamp(payload.get("timestamp"))
         scale_event_id = stable_id(
             "scale",
             session_id,
@@ -512,7 +541,7 @@ class EvidenceRepository:
         report_id = bounded_text(payload.get("report_id"), 128).strip()
         if not session_id or not report_id:
             return False
-        generated_at = bounded_text(payload.get("generated_at"), 128) or utc_now()
+        generated_at = canonical_timestamp(payload.get("generated_at"))
         event = {
             "ai_report_id": report_id,
             "session_id": session_id,
@@ -539,7 +568,7 @@ class EvidenceRepository:
         session, kind, identity, sanitized = validate_artifact_link(
             session_id, artifact_type, artifact_id, payload
         )
-        observed_at = bounded_text(timestamp, 128).strip() or utc_now()
+        observed_at = canonical_timestamp(timestamp)
         record = {
             "artifact_type": kind,
             "artifact_id": identity,
@@ -566,7 +595,14 @@ class EvidenceRepository:
 
     def _load_list(self, session_id: str, suffix: str) -> list[dict[str, Any]]:
         values = self.client.lrange(self._child_key(session_id, suffix), 0, -1)
-        return [item for item in (safe_json(value, None) for value in values) if isinstance(item, dict)]
+        records = [item for item in (safe_json(value, None) for value in values) if isinstance(item, dict)]
+        return sorted(
+            records,
+            key=lambda item: (
+                timestamp_score(item.get("timestamp") or item.get("created_at")),
+                bounded_text(item.get("event_id") or item.get("artifact_id"), 256),
+            ),
+        )
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         record = self.client.hgetall(self._record_key(session_id))

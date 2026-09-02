@@ -32,10 +32,13 @@ class DecisionResponse:
     count:       Optional[int] = None
     affected_rows: Optional[int] = None
     columns:     list[str] = field(default_factory=list)
+    column_types: list[str] = field(default_factory=list)
     tables:      list[str] = field(default_factory=list)   # for SHOW TABLES
     databases:   list[str] = field(default_factory=list)   # for SHOW DATABASES
     latency_ms:  int = 0
     error_msg:   str = ""
+    error_code:  int = 0
+    sqlstate:    str = ""
     profile:     str = ""        # which deception profile was applied
     explanation: str = ""
     is_trap:     bool = False

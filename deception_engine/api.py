@@ -38,6 +38,10 @@ from schema_loader import SchemaLoader
 from strategy_registry import StrategyRegistry
 from policy_guard import POLICY_VERSION, PolicyGuard
 from strategy_agent import RULE_POLICY_VERSION, RuleOnlyStrategyAgent
+from persona import (
+    DEFAULT_DATABASE, DEFAULT_SCHEMA, MYSQL_VERSION, MYSQL_VERSION_COMMENT,
+    POSTGRES_SERVER_VERSION, POSTGRES_VERSION,
+)
 
 log = logging.getLogger(__name__)
 
@@ -69,10 +73,9 @@ DECIDE_RATE_LIMIT_FAIL_OPEN = os.environ.get("DECIDE_RATE_LIMIT_FAIL_OPEN", "tru
 # System variable banner values — override via env
 BANNER_HOSTNAME       = os.environ.get("DECEPTION_HOSTNAME",        "db-prod-02")
 BANNER_DATADIR        = os.environ.get("DECEPTION_DATADIR",         "/var/lib/mysql")
-BANNER_VERSION_COMMENT = os.environ.get("DECEPTION_VERSION_COMMENT", "MySQL Community Server - GPL")
-BANNER_VERSION        = os.environ.get("DECEPTION_VERSION",         "8.0.34-log")
+BANNER_VERSION_COMMENT = MYSQL_VERSION_COMMENT
+BANNER_VERSION        = MYSQL_VERSION
 BANNER_PORT           = os.environ.get("DECEPTION_PORT",            "3306")
-POSTGRES_VERSION      = os.environ.get("DECEPTION_POSTGRES_VERSION",  "PostgreSQL 16.2 on x86_64-pc-linux-gnu, compiled by gcc, 64-bit")
 POSTGRES_PORT         = os.environ.get("DECEPTION_POSTGRES_PORT",     "5432")
 
 # Fake database list returned by SHOW DATABASES
@@ -109,6 +112,7 @@ POSTGRES_SYSTEM_VAR_MAP = {
     "select current_schema()":      ("current_schema", "public"),
     "select current_schema":        ("current_schema", "public"),
     "select inet_server_port()":    ("inet_server_port", POSTGRES_PORT),
+    "show server_version":          ("server_version", POSTGRES_SERVER_VERSION),
 }
 
 # ─── App startup ──────────────────────────────────────────────────────────────
@@ -636,33 +640,42 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
         "show databases" in fp
         or "show schemas" in fp
         or " from pg_database" in fp
+        or " from pg_catalog.pg_database" in fp
         or " from information_schema.schemata" in fp
     ):
+        databases = _visible_databases(req)
         if " from information_schema.schemata" in fp:
             return _json_response(DecisionResponse(
                 mode="fake",
-                databases=FAKE_DATABASES,
-                rows=[{"schema_name": db} for db in FAKE_DATABASES],
+                databases=databases,
+                rows=[{"schema_name": db} for db in databases],
                 columns=["schema_name"],
+                column_types=["text"],
                 latency_ms=_latency(req.deception_level, base=30),
                 profile="fake_schema",
                 strategy_id="D1",
             ))
         if req.protocol.lower().startswith("postgres") or " from pg_database" in fp:
+            database_rows = databases
+            datname_match = re.search(r"\bdatname\s*=\s*'([^']+)'", fp, re.I)
+            if datname_match:
+                database_rows = [db for db in databases if db == datname_match.group(1)]
             return _json_response(DecisionResponse(
                 mode="fake",
-                databases=FAKE_DATABASES,
-                rows=[{"datname": db} for db in FAKE_DATABASES],
+                databases=database_rows,
+                rows=[{"datname": db} for db in database_rows],
                 columns=["datname"],
+                column_types=["text"],
                 latency_ms=_latency(req.deception_level, base=30),
                 profile="fake_schema",
                 strategy_id="D1",
             ))
         return _json_response(DecisionResponse(
             mode="fake",
-            databases=FAKE_DATABASES,
-            rows=[{"Database": db} for db in FAKE_DATABASES],
+            databases=databases,
+            rows=[{"Database": db} for db in databases],
             columns=["Database"],
+            column_types=["text"],
             latency_ms=_latency(req.deception_level, base=30),
             profile="fake_schema",
             strategy_id="D1",
@@ -677,32 +690,43 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
     ):
         return await _handle_information_schema(req, schema_name, fp)
 
-    # 4. Table enumeration — progressive exposure. Support common MySQL and
-    # PostgreSQL pg_tables catalog queries.
+    # 4. Bounded protocol-native catalog reconnaissance.
+    if req.protocol.lower().startswith("postgres") and _is_pg_catalog_query(fp):
+        return await _handle_postgres_catalog(req, schema_name, fp)
+
+    mysql_metadata_table = _extract_mysql_metadata_table(fp)
+    if mysql_metadata_table:
+        return await _handle_mysql_columns(req, schema_name, mysql_metadata_table)
+
+    # 5. Table enumeration — progressive exposure.
     if (
         "show tables" in fp
         or "show full tables" in fp
-        or " from pg_tables" in fp
     ):
         return await _handle_show_tables(req, schema_name)
 
-    # 5. COUNT(*) query
+    table = req.table or _extract_table(fp)
+
+    if table and _schema_loader.get_table(schema_name, table):
+        invalid = _validate_managed_sql(req, fp, table, schema_name)
+        if invalid is not None:
+            return invalid
+
+    # 6. COUNT(*) query
     if _is_count_query(fp):
         return await _handle_count(req, fp, schema_name)
 
-    table = req.table or _extract_table(fp)
-
-    # 6. Managed mutations must be classified before generic table reads.
+    # 7. Managed mutations must be classified before generic table reads.
     # The handlers already existed, but the earlier branch order made them
     # unreachable for known fake tables and returned SELECT-shaped rows instead.
     if _is_mutation(fp):
         return await _handle_mutation(req, fp, table, schema_name)
 
-    # 7. SELECT from a known fake table
+    # 8. SELECT from a known fake table
     if table and _schema_loader.get_table(schema_name, table):
         return await _handle_select(req, table, schema_name)
 
-    # 8. SELECT from unknown table — passthrough to real backend
+    # 9. SELECT from unknown table — passthrough to real backend
     return _json_response(DecisionResponse(
         mode="passthrough",
         explanation="Table not in fake schema — forwarding to backend",
@@ -722,6 +746,221 @@ _INFORMATION_SCHEMA_COLUMN_COLUMNS = [
 _SUPPORTED_METADATA_FILTERS = {"table_schema", "table_name", "column_name"}
 
 
+def _is_pg_catalog_query(query: str) -> bool:
+    return any(
+        marker in query
+        for marker in (
+            " from pg_catalog.pg_tables", " from pg_tables",
+            " from pg_catalog.pg_class", " from pg_catalog.pg_attribute",
+            " from pg_catalog.pg_constraint", " from pg_catalog.pg_index",
+            " from pg_catalog.pg_inherits", " from pg_catalog.pg_trigger",
+            " from pg_catalog.pg_policy", " from pg_catalog.pg_statistic_ext",
+            " from pg_catalog.pg_publication",
+        )
+    )
+
+
+def _stable_relation_oid(schema_name: str, table_name: str) -> int:
+    tables = list(_schema_loader.get_all_tables(schema_name))
+    return 80000 + tables.index(table_name) if table_name in tables else 0
+
+
+def _table_for_relation_oid(schema_name: str, oid: int) -> str:
+    for table_name in _schema_loader.get_all_tables(schema_name):
+        if _stable_relation_oid(schema_name, table_name) == oid:
+            return table_name
+    return ""
+
+
+def _pg_catalog_requested_table(query: str) -> str:
+    patterns = (
+        r"\bc\.relname\s*=\s*'([a-z_][a-z0-9_$]*)'",
+        r"\btablename\s*=\s*'([a-z_][a-z0-9_$]*)'",
+        r"\^\((?:public\\\.)?([a-z_][a-z0-9_$]*)\)\$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, query, re.I)
+        if match:
+            return match.group(1).lower()
+    return ""
+
+
+async def _handle_postgres_catalog(
+    req: DecisionRequest, schema_name: str, query: str
+) -> JSONResponse:
+    r"""Serve only the catalog shapes used by pg_tables and psql \dt/\d."""
+    depth = _exposure.get_depth(req.session_id)
+    visible = _schema_loader.get_tables_at_depth(schema_name, depth)
+
+    if "pg_tables" in query:
+        rows = [
+            {
+                "schemaname": DEFAULT_SCHEMA,
+                "tablename": table,
+                "tableowner": req.username or "postgres",
+                "tablespace": None,
+                "hasindexes": False,
+                "hasrules": False,
+                "hastriggers": False,
+                "rowsecurity": False,
+            }
+            for table in visible
+        ]
+        available = list(rows[0]) if rows else ["schemaname", "tablename"]
+        columns = _simple_projection(query, available, default=available)
+        rows = [{column: row.get(column) for column in columns} for row in rows]
+        return _json_response(DecisionResponse(
+            mode="fake", rows=rows, columns=columns,
+            column_types=["boolean" if column.startswith("has") or column == "rowsecurity" else "text" for column in columns],
+            profile="fake_schema", strategy_id="D1",
+            explanation=f"Bounded pg_tables catalog at exposure depth {depth}",
+        ))
+
+    if any(marker in query for marker in (
+        "pg_catalog.pg_inherits", "pg_catalog.pg_policy",
+        "pg_catalog.pg_statistic_ext", "pg_catalog.pg_publication",
+        "pg_catalog.pg_constraint", "pg_catalog.pg_index",
+        "pg_catalog.pg_trigger",
+    )):
+        return _json_response(DecisionResponse(
+            mode="fake", rows=[], columns=["Name"], column_types=["text"],
+            profile="fake_schema", strategy_id="D1",
+            explanation="No optional relation objects declared by deceptive schema",
+        ))
+
+    if "pg_catalog.pg_class" in query:
+        if "c.relchecks" in query:
+            oid_match = re.search(r"\bc\.oid\s*=\s*'?([0-9]+)'?", query, re.I)
+            table = _table_for_relation_oid(schema_name, int(oid_match.group(1))) if oid_match else ""
+            rows = []
+            if table in visible:
+                rows = [{
+                    "relchecks": 0,
+                    "relkind": "r",
+                    "relhasindex": False,
+                    "relhasrules": False,
+                    "relhastriggers": False,
+                    "relrowsecurity": False,
+                    "relforcerowsecurity": False,
+                    "relhasoids": False,
+                    "relispartition": False,
+                    "partition_parent": "",
+                    "reltablespace": 0,
+                    "reloftype": "",
+                    "relpersistence": "p",
+                    "relreplident": "d",
+                    "amname": "heap",
+                }]
+            columns = [
+                "relchecks", "relkind", "relhasindex", "relhasrules",
+                "relhastriggers", "relrowsecurity", "relforcerowsecurity",
+                "relhasoids", "relispartition", "partition_parent",
+                "reltablespace", "reloftype", "relpersistence",
+                "relreplident", "amname",
+            ]
+            types = [
+                "integer", "text", "boolean", "boolean", "boolean",
+                "boolean", "boolean", "boolean", "boolean", "text",
+                "integer", "text", "text", "text", "text",
+            ]
+            return _json_response(DecisionResponse(
+                mode="fake", rows=rows, columns=columns, column_types=types,
+                profile="fake_schema", strategy_id="D1",
+                explanation="Bounded psql relation detail catalog",
+            ))
+        requested = _pg_catalog_requested_table(query)
+        selected = [requested] if requested in visible else ([] if requested else visible)
+        if 'as "schema"' in query or " as schema" in query:
+            columns = ["Schema", "Name", "Type", "Owner"]
+            rows = [
+                {"Schema": DEFAULT_SCHEMA, "Name": table, "Type": "table", "Owner": req.username or "postgres"}
+                for table in selected
+            ]
+            types = ["text"] * 4
+        else:
+            columns = ["oid", "nspname", "relname"]
+            rows = [
+                {"oid": _stable_relation_oid(schema_name, table), "nspname": DEFAULT_SCHEMA, "relname": table}
+                for table in selected
+            ]
+            types = ["integer", "text", "text"]
+        return _json_response(DecisionResponse(
+            mode="fake", rows=rows, columns=columns, column_types=types,
+            profile="fake_schema", strategy_id="D1",
+            explanation=f"Bounded pg_class catalog at exposure depth {depth}",
+        ))
+
+    if "pg_catalog.pg_attribute" in query:
+        oid_match = re.search(r"attrelid\s*=\s*'?([0-9]+)'?", query, re.I)
+        table = _table_for_relation_oid(schema_name, int(oid_match.group(1))) if oid_match else ""
+        if table not in visible:
+            table = ""
+        rows = []
+        for column in _schema_loader.get_columns(schema_name, table) if table else []:
+            rows.append({
+                "Column": column["name"],
+                "Type": _column_sql_type(column),
+                "Collation": None,
+                "NotNull": not column.get("nullable", False),
+                "Default": None,
+                "Identity": "",
+                "Generated": "",
+            })
+        columns = [
+            "Column", "Type", "Default", "NotNull", "Collation",
+            "Identity", "Generated",
+        ]
+        return _json_response(DecisionResponse(
+            mode="fake", rows=rows, columns=columns,
+            column_types=["text", "text", "text", "boolean", "text", "text", "text"],
+            profile="fake_schema",
+            strategy_id="D1", explanation="Bounded pg_attribute relation description",
+        ))
+
+    # psql asks optional follow-up catalogs for indexes, constraints, policies,
+    # inheritance and triggers.  The current YAML declares none, so an empty
+    # typed result is the truthful bounded answer.
+    return _json_response(DecisionResponse(
+        mode="fake", rows=[], columns=["Name"], column_types=["text"],
+        profile="fake_schema", strategy_id="D1",
+        explanation="No optional catalog objects declared by deceptive schema",
+    ))
+
+
+def _extract_mysql_metadata_table(query: str) -> str:
+    match = re.match(
+        r"^(?:describe|desc)\s+([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)$",
+        query, re.I,
+    )
+    if not match:
+        match = re.match(
+            r"^show\s+(?:columns|fields)\s+from\s+([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)(?:\s+from\s+[a-z_][a-z0-9_$]*)?$",
+            query, re.I,
+        )
+    return match.group(1).split(".")[-1].lower() if match else ""
+
+
+async def _handle_mysql_columns(
+    req: DecisionRequest, schema_name: str, table: str
+) -> JSONResponse:
+    table_def = _schema_loader.get_table(schema_name, table)
+    if not table_def:
+        return _json_response(DecisionResponse(
+            mode="passthrough",
+            explanation="Metadata target is not in fake schema — forwarding to backend",
+        ))
+    denied = _table_access_error(req, schema_name, table, table_def)
+    if denied is not None:
+        return denied
+    columns = ["Field", "Type", "Null", "Key", "Default", "Extra"]
+    return _json_response(DecisionResponse(
+        mode="fake", rows=_schema_loader.get_mysql_columns(schema_name, table),
+        columns=columns, column_types=["text"] * len(columns),
+        profile="fake_schema", strategy_id="D1",
+        explanation=f"YAML-backed MySQL metadata for {table}",
+    ))
+
+
 async def _handle_information_schema(
     req: DecisionRequest, schema_name: str, fp: str
 ) -> JSONResponse:
@@ -730,10 +969,18 @@ async def _handle_information_schema(
     is_columns = " from information_schema.columns" in fp
     if is_columns:
         available = _INFORMATION_SCHEMA_COLUMN_COLUMNS
-        rows = _schema_loader.get_metadata_columns(schema_name, depth)
+        rows = _schema_loader.get_metadata_columns(
+            schema_name, depth, table_catalog=req.database or DEFAULT_DATABASE
+        )
     else:
         available = _INFORMATION_SCHEMA_TABLE_COLUMNS
-        rows = _schema_loader.get_metadata_tables(schema_name, depth)
+        rows = _schema_loader.get_metadata_tables(
+            schema_name, depth, table_catalog=req.database or DEFAULT_DATABASE
+        )
+
+    invalid = _validate_metadata_sql(req, fp, available)
+    if invalid is not None:
+        return invalid
 
     rows = _filter_metadata_rows(rows, fp)
     columns = _metadata_projection(fp, available)
@@ -746,6 +993,7 @@ async def _handle_information_schema(
         tables=visible_tables if not is_columns else [],
         rows=projected,
         columns=columns,
+        column_types=[_metadata_result_type(column) for column in columns],
         latency_ms=_latency(req.deception_level, base=35),
         profile="fake_schema",
         is_trap=bool(trap_tables.intersection(visible_tables)),
@@ -776,6 +1024,24 @@ def _metadata_projection(query: str, available: list[str]) -> list[str]:
     return projected or list(available)
 
 
+def _simple_projection(
+    query: str, available: list[str], *, default: list[str]
+) -> list[str]:
+    match = re.search(r"\bselect\s+(.*?)\s+from\s+", query, re.I)
+    if not match:
+        return list(default)
+    selection = re.sub(r"^distinct\s+", "", match.group(1).strip(), flags=re.I)
+    if selection == "*":
+        return list(available)
+    columns: list[str] = []
+    for expression in selection.split(","):
+        base = re.sub(r"\s+as\s+.+$", "", expression.strip(), flags=re.I)
+        name = base.split(".")[-1].strip(' `"')
+        if name in available and name not in columns:
+            columns.append(name)
+    return columns or list(default)
+
+
 def _filter_metadata_rows(rows: list[dict], query: str) -> list[dict]:
     """Apply literal =/LIKE/ILIKE predicates for three metadata fields."""
     where = query.split(" where ", 1)[1] if " where " in query else ""
@@ -790,24 +1056,156 @@ def _filter_metadata_rows(rows: list[dict], query: str) -> list[dict]:
         if match.group(1).lower() in _SUPPORTED_METADATA_FILTERS
     ]
     if not predicates:
-        return rows
-
-    def matches(row: dict) -> bool:
-        for field, operator, expected in predicates:
-            actual = str(row.get(field, ""))
-            if operator == "=" and actual != expected:
-                return False
-            if operator in {"like", "ilike"}:
-                pattern = "".join(
-                    ".*" if char == "%" else "." if char == "_" else re.escape(char)
-                    for char in expected
-                )
-                flags = re.I if operator == "ilike" else 0
-                if re.fullmatch(pattern, actual, flags=flags) is None:
+        filtered = rows
+    else:
+        def matches(row: dict) -> bool:
+            for field, operator, expected in predicates:
+                actual = str(row.get(field, ""))
+                if operator == "=" and actual != expected:
                     return False
-        return True
+                if operator in {"like", "ilike"}:
+                    pattern = "".join(
+                        ".*" if char == "%" else "." if char == "_" else re.escape(char)
+                        for char in expected
+                    )
+                    flags = re.I if operator == "ilike" else 0
+                    if re.fullmatch(pattern, actual, flags=flags) is None:
+                        return False
+            return True
 
-    return [row for row in rows if matches(row)]
+        filtered = [row for row in rows if matches(row)]
+
+    limit_match = re.search(r"\blimit\s+(\d+)\b", query, re.I)
+    if limit_match:
+        filtered = filtered[:min(int(limit_match.group(1)), 500)]
+    return filtered
+
+
+def _metadata_result_type(column: str) -> str:
+    if column in {"ordinal_position", "numeric_precision", "numeric_scale"}:
+        return "integer"
+    return "text"
+
+
+def _column_sql_type(column: dict) -> str:
+    from schema_loader import SQL_TYPE_BY_GENERATOR_TYPE
+    return column.get(
+        "sql_type",
+        SQL_TYPE_BY_GENERATOR_TYPE.get(column.get("type", "sentence"), "character varying"),
+    )
+
+
+def _syntax_error(req: DecisionRequest, message: str) -> JSONResponse:
+    protocol = str(getattr(req, "protocol", "mysql") or "mysql").lower()
+    if protocol.startswith("postgres"):
+        return _json_response(DecisionResponse(
+            mode="block", error_msg=message, sqlstate="42601",
+            explanation="Unsupported or malformed bounded deceptive SQL",
+        ))
+    return _json_response(DecisionResponse(
+        mode="block", error_msg=message, error_code=1064, sqlstate="42000",
+        explanation="Unsupported or malformed bounded deceptive SQL",
+    ))
+
+
+def _column_error(req: DecisionRequest, column: str) -> JSONResponse:
+    protocol = str(getattr(req, "protocol", "mysql") or "mysql").lower()
+    if protocol.startswith("postgres"):
+        return _json_response(DecisionResponse(
+            mode="block", error_msg=f'column "{column}" does not exist', sqlstate="42703",
+        ))
+    return _json_response(DecisionResponse(
+        mode="block", error_msg=f"Unknown column '{column}' in 'field list'",
+        error_code=1054, sqlstate="42S22",
+    ))
+
+
+def _validate_metadata_sql(
+    req: DecisionRequest, query: str, available: list[str]
+) -> JSONResponse | None:
+    if re.search(r"\bin\s*\(", query, re.I):
+        return _syntax_error(req, "unsupported metadata predicate")
+    if re.search(r"\border\s+by\b", query, re.I):
+        return _syntax_error(req, "unsupported metadata ORDER BY clause")
+    if re.search(r"\blimit\b(?!\s+\d+\b)", query, re.I):
+        return _syntax_error(req, "invalid LIMIT clause")
+    where = query.split(" where ", 1)[1] if " where " in query else ""
+    if where:
+        where = re.split(r"\s+limit\s+", where, maxsplit=1, flags=re.I)[0]
+        consumed = re.sub(
+            r"(?:(?:\b\w+)\.)?(?:table_schema|table_name|column_name)\s*(?:=|like|ilike)\s*'(?:''|[^'])*'",
+            "", where, flags=re.I,
+        )
+        consumed = re.sub(r"\s+and\s+", "", consumed, flags=re.I).strip(" ();")
+        if consumed:
+            return _syntax_error(req, "unsupported metadata predicate")
+    projected = _metadata_projection(query, available)
+    select_match = re.search(r"\bselect\s+(.*?)\s+from\s+information_schema\.", query, re.I)
+    if select_match and select_match.group(1).strip() != "*":
+        raw = re.sub(r"^distinct\s+", "", select_match.group(1).strip(), flags=re.I)
+        identifiers = [
+            re.sub(r"\s+as\s+\w+$", "", part.strip(), flags=re.I).split(".")[-1].strip(' "')
+            for part in raw.split(",")
+        ]
+        unknown = next((name for name in identifiers if name not in available), "")
+        if unknown:
+            return _column_error(req, unknown)
+        if not projected:
+            return _syntax_error(req, "invalid metadata projection")
+    return None
+
+
+def _validate_managed_sql(
+    req: DecisionRequest, query: str, table: str, schema_name: str
+) -> JSONResponse | None:
+    """Validate the intentionally small managed-table SQL grammar."""
+    if _is_mutation(query):
+        if query.startswith("update "):
+            if _parse_id_predicate(query) is None:
+                return _syntax_error(req, "UPDATE requires WHERE id = positive integer")
+            assignments = _parse_update_assignments(
+                query, {column["name"] for column in _schema_loader.get_columns(schema_name, table)}
+            )
+            if not assignments:
+                return _syntax_error(req, "unsupported UPDATE assignment")
+        elif query.startswith("delete ") and _parse_id_predicate(query) is None:
+            return _syntax_error(req, "DELETE requires WHERE id = positive integer")
+        elif query.startswith("insert ") and not re.fullmatch(
+            r"insert\s+into\s+[a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?\s*"
+            r"\([a-z_][a-z0-9_$]*(?:\s*,\s*[a-z_][a-z0-9_$]*)*\)\s*"
+            r"values\s*\(.+\)", query, re.I,
+        ):
+            return _syntax_error(req, "unsupported INSERT syntax")
+        return None
+
+    if not query.startswith("select "):
+        return _syntax_error(req, "unsupported statement for deceptive table")
+    if re.search(r"\border\s+by\b", query, re.I):
+        return _syntax_error(req, "unsupported ORDER BY clause")
+    if re.search(r"\bwhere\s*$", query, re.I):
+        return _syntax_error(req, "malformed WHERE clause")
+    if re.search(r"\blimit\b(?!\s+\d+\b)", query, re.I):
+        return _syntax_error(req, "invalid LIMIT clause")
+    if re.search(r"\boffset\b(?!\s+\d+\b)", query, re.I):
+        return _syntax_error(req, "invalid OFFSET clause")
+    if " where " in query and _parse_id_predicate(query) is None:
+        return _syntax_error(req, "unsupported WHERE predicate")
+    columns = [column["name"] for column in _schema_loader.get_columns(schema_name, table)]
+    match = re.search(r"\bselect\s+(.*?)\s+from\s+", query, re.I)
+    if not match:
+        return _syntax_error(req, "malformed SELECT")
+    projection = match.group(1).strip()
+    if projection.lower() == "count(*)":
+        return None
+    if projection != "*" and not projection.endswith(".*"):
+        for expression in projection.split(","):
+            expression = re.sub(r"\s+as\s+[a-z_][a-z0-9_]*$", "", expression.strip(), flags=re.I)
+            identifier = expression.split(".")[-1].strip(' `"')
+            if not re.fullmatch(r"[a-z_][a-z0-9_$]*", identifier, re.I):
+                return _syntax_error(req, "unsupported SELECT projection")
+            if identifier not in columns:
+                return _column_error(req, identifier)
+    return None
 
 async def _handle_show_tables(
     req: DecisionRequest, schema_name: str
@@ -821,14 +1219,16 @@ async def _handle_show_tables(
         rows = [{"schemaname": "public", "tablename": t} for t in visible]
         columns = ["schemaname", "tablename"]
     else:
-        rows = [{"Tables_in_db": t} for t in visible]
-        columns = ["Tables_in_db"]
+        column = f"Tables_in_{req.database or DEFAULT_DATABASE}"
+        rows = [{column: t} for t in visible]
+        columns = [column]
 
     return _json_response(DecisionResponse(
         mode="fake",
         tables=visible,
         rows=rows,
         columns=columns,
+        column_types=["text"] * len(columns),
         latency_ms=_latency(req.deception_level, base=35),
         profile="fake_schema",
         is_trap=is_trap,
@@ -848,7 +1248,11 @@ async def _handle_count(
     if not table_def:
         return _json_response(DecisionResponse(mode="passthrough"))
 
-    # Advance depth on table access
+    denied = _table_access_error(req, schema_name, table, table_def)
+    if denied is not None:
+        return denied
+
+    # Advance depth only after the currently exposed object is authorized.
     table_depth = table_def.get("exposure_depth", 1)
     _exposure.record_table_access(req.session_id, table, table_depth)
 
@@ -865,6 +1269,7 @@ async def _handle_count(
         count=count,
         rows=[{count_column: count}],
         columns=[count_column],
+        column_types=["bigint"],
         latency_ms=_latency(req.deception_level, base=20),
         profile="fake_table_data",
         is_trap=is_trap,
@@ -880,7 +1285,11 @@ async def _handle_select(
     if not table_def:
         return _json_response(DecisionResponse(mode="passthrough"))
 
-    # Advance exploration depth
+    denied = _table_access_error(req, schema_name, table, table_def)
+    if denied is not None:
+        return denied
+
+    # Advance exploration depth only after authorization.
     table_depth = table_def.get("exposure_depth", 1)
     _exposure.record_table_access(req.session_id, table, table_depth)
 
@@ -949,6 +1358,10 @@ async def _handle_select(
         mode="fake",
         rows=rows,
         columns=col_names,
+        column_types=[
+            _column_sql_type(next(column for column in columns_def if column["name"] == name))
+            for name in col_names
+        ],
         latency_ms=_latency(req.deception_level, base=45),
         profile="high_value_target" if is_trap else "fake_table_data",
         is_trap=is_trap,
@@ -966,11 +1379,16 @@ async def _handle_mutation(
     state for an empty/unknown table creates later consistency leaks such as
     `{}` rows appearing in SELECT results.
     """
-    if not table or not _schema_loader.get_table(schema_name, table):
+    table_def = _schema_loader.get_table(schema_name, table) if table else None
+    if not table or not table_def:
         return _json_response(DecisionResponse(
             mode="passthrough",
             explanation="Mutation target is not in fake schema — forwarding to backend",
         ))
+
+    denied = _table_access_error(req, schema_name, table, table_def)
+    if denied is not None:
+        return denied
 
     transaction_active = getattr(req, "transaction_state", "idle") == "in_transaction"
     affected = 0
@@ -1077,9 +1495,18 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
             mode="fake",
             rows=[{column: value}],
             columns=[column],
+            column_types=["integer" if column.endswith("port") else "text"],
             latency_ms=_latency(req.deception_level, base=25),
             profile="fake_system_info",
             explanation=f"PostgreSQL banner hardening: {fp} → {column}='{value}'",
+        ))
+
+    if fp in {"select database()", "select database"}:
+        value = req.database or DEFAULT_DATABASE
+        return _json_response(DecisionResponse(
+            mode="fake", rows=[{"database()": value}], columns=["database()"],
+            column_types=["text"], latency_ms=_latency(req.deception_level, base=25),
+            profile="fake_system_info", explanation="Canonical connected database identity",
         ))
 
     if fp in SYSTEM_VAR_MAP:
@@ -1088,6 +1515,7 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
             mode="fake",
             rows=[{"value": val}],
             columns=["value"],
+            column_types=["text"],
             latency_ms=_latency(req.deception_level, base=25),
             profile="fake_system_info",
             explanation=f"Banner hardening: {fp} → '{val}'",
@@ -1095,11 +1523,69 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
     return None
 
 
+def _visible_databases(req: DecisionRequest) -> list[str]:
+    connected = str(getattr(req, "database", "") or DEFAULT_DATABASE)
+    return list(dict.fromkeys([*FAKE_DATABASES, connected]))
+
+
 def _strategy_id_for_table(schema_name: str, table_name: str) -> str:
     """Map only existing approved assets; unknown assets stay on D0."""
     return _strategy_registry.strategy_for_asset(
         schema_name, table_name
     ).strategy_id
+
+
+def _table_access_error(
+    req: DecisionRequest, schema_name: str, table_name: str, table_def: dict
+) -> JSONResponse | None:
+    """Fail closed when a known deceptive object has not been exposed.
+
+    Metadata visibility and direct access now use the same exposure authority.
+    The registry check prevents an unapproved asset mapping from becoming an
+    attacker-facing path even if a malformed schema definition gives it a low
+    exposure depth.  Crucially, this function never records access, so a guessed
+    hidden name cannot advance the session.
+    """
+    raw_depth = _exposure.get_depth(req.session_id)
+    current_depth = raw_depth if isinstance(raw_depth, int) else 1
+    required_depth = max(1, int(table_def.get("exposure_depth", 1)))
+    strategy = _strategy_registry.strategy_for_asset(schema_name, table_name)
+    authorized = (
+        required_depth <= current_depth
+        and strategy.approval_status == "APPROVED"
+    )
+    if authorized:
+        return None
+    return _relation_error(
+        req,
+        table_name,
+        explanation=(
+            f"Managed object unavailable at exposure depth {current_depth}; "
+            f"required={required_depth} strategy={strategy.strategy_id}"
+        ),
+    )
+
+
+def _relation_error(
+    req: DecisionRequest, table_name: str, *, explanation: str = ""
+) -> JSONResponse:
+    protocol = str(getattr(req, "protocol", "mysql") or "mysql").lower()
+    if protocol.startswith("postgres"):
+        return _json_response(DecisionResponse(
+            mode="block",
+            error_msg=f'relation "{table_name}" does not exist',
+            error_code=0,
+            sqlstate="42P01",
+            explanation=explanation,
+        ))
+    database = str(getattr(req, "database", "") or "testdb")
+    return _json_response(DecisionResponse(
+        mode="block",
+        error_msg=f"Table '{database}.{table_name}' doesn't exist",
+        error_code=1146,
+        sqlstate="42S02",
+        explanation=explanation,
+    ))
 
 
 def _json_response(resp: DecisionResponse) -> JSONResponse:

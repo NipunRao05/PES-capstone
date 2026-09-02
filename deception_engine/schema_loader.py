@@ -52,6 +52,18 @@ SQL_TYPE_BY_GENERATOR_TYPE = {
     "json_blob": "jsonb",
 }
 
+MYSQL_TYPE_BY_SQL_TYPE = {
+    "integer": "int",
+    "double precision": "double",
+    "numeric": "decimal(12,2)",
+    "boolean": "tinyint(1)",
+    "date": "date",
+    "timestamp without time zone": "datetime",
+    "uuid": "char(36)",
+    "jsonb": "json",
+    "character varying": "varchar(255)",
+}
+
 
 class SchemaLoader:
     """
@@ -137,12 +149,13 @@ class SchemaLoader:
         return list(self._schemas.keys())
 
     def get_metadata_tables(
-        self, schema_name: str, max_depth: int, table_schema: str = "public"
+        self, schema_name: str, max_depth: int, table_schema: str = "public",
+        table_catalog: str | None = None,
     ) -> list[dict]:
         """Render information_schema.tables rows from the canonical YAML."""
         return [
             {
-                "table_catalog": schema_name,
+                "table_catalog": table_catalog or schema_name,
                 "table_schema": table_schema,
                 "table_name": table_name,
                 "table_type": "BASE TABLE",
@@ -151,7 +164,8 @@ class SchemaLoader:
         ]
 
     def get_metadata_columns(
-        self, schema_name: str, max_depth: int, table_schema: str = "public"
+        self, schema_name: str, max_depth: int, table_schema: str = "public",
+        table_catalog: str | None = None,
     ) -> list[dict]:
         """Render information_schema.columns rows from the canonical YAML."""
         rows: list[dict] = []
@@ -159,7 +173,7 @@ class SchemaLoader:
             for ordinal, column in enumerate(self.get_columns(schema_name, table_name), start=1):
                 generator_type = column.get("type", "sentence")
                 row = {
-                    "table_catalog": schema_name,
+                    "table_catalog": table_catalog or schema_name,
                     "table_schema": table_schema,
                     "table_name": table_name,
                     "column_name": column["name"],
@@ -176,4 +190,27 @@ class SchemaLoader:
                 if "numeric_scale" in column:
                     row["numeric_scale"] = int(column["numeric_scale"])
                 rows.append(row)
+        return rows
+
+    def get_mysql_columns(self, schema_name: str, table_name: str) -> list[dict]:
+        """Render the bounded DESCRIBE/SHOW COLUMNS surface from YAML."""
+        rows: list[dict] = []
+        for column in self.get_columns(schema_name, table_name):
+            sql_type = column.get(
+                "sql_type",
+                SQL_TYPE_BY_GENERATOR_TYPE.get(column.get("type", "sentence"), "character varying"),
+            )
+            mysql_type = MYSQL_TYPE_BY_SQL_TYPE.get(sql_type, "varchar(255)")
+            if sql_type == "numeric":
+                precision = int(column.get("numeric_precision", 12))
+                scale = int(column.get("numeric_scale", 2))
+                mysql_type = f"decimal({precision},{scale})"
+            rows.append({
+                "Field": column["name"],
+                "Type": mysql_type,
+                "Null": "YES" if column.get("nullable", False) else "NO",
+                "Key": "PRI" if column.get("type") == "pk_int" else "",
+                "Default": None,
+                "Extra": "",
+            })
         return rows

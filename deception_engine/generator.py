@@ -589,9 +589,36 @@ class DataGenerator:
                 else:
                     row[name] = self._generate_value(col, row_rng, row_fake)
 
+            self._enforce_temporal_integrity(table_name, row, row_rng)
+
             rows.append(row)
 
         return rows
+
+    @staticmethod
+    def _enforce_temporal_integrity(
+        table_name: str, row: dict, rng: random.Random
+    ) -> None:
+        """Enforce the two declared cross-column time relationships."""
+        pairs = {
+            "sessions": ("login_at", "logout_at"),
+            "api_keys": ("created_at", "last_used"),
+        }
+        pair = pairs.get(table_name)
+        if not pair:
+            return
+        earlier_name, later_name = pair
+        earlier_raw, later_raw = row.get(earlier_name), row.get(later_name)
+        if earlier_raw is None or later_raw is None:
+            return
+        earlier = datetime.strptime(earlier_raw, "%Y-%m-%d %H:%M:%S")
+        later = datetime.strptime(later_raw, "%Y-%m-%d %H:%M:%S")
+        if later < earlier:
+            later = min(
+                FAKE_TIME_ANCHOR,
+                earlier + timedelta(minutes=rng.randint(5, 12 * 60)),
+            )
+            row[later_name] = later.strftime("%Y-%m-%d %H:%M:%S")
 
     def generate_count(self, row_count: int, session_id: str, table_name: str) -> int:
         """

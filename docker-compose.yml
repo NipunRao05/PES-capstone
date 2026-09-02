@@ -465,8 +465,11 @@ services:
       PORT: "8001"
       DECEPTION_HOSTNAME: "db-prod-02"
       DECEPTION_DATADIR: "/var/lib/mysql"
-      DECEPTION_VERSION_COMMENT: "MySQL Community Server - GPL"
-      DECEPTION_VERSION: "8.0.34-log"
+      DECEPTION_MYSQL_VERSION_COMMENT: "MySQL Community Server - GPL"
+      DECEPTION_MYSQL_VERSION: "8.0.45"
+      DECEPTION_POSTGRES_SERVER_VERSION: "16.13"
+      DECEPTION_DATABASE: "testdb"
+      DECEPTION_SCHEMA: "public"
       DECEPTION_PORT: "3306"
       PYTHONUNBUFFERED: "1"
     depends_on:

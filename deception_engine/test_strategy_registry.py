@@ -113,6 +113,7 @@ class TestStrategyRegistryApiIntegration(unittest.TestCase):
             api._schema_loader.schema_for_database.return_value = "hr"
             api._generator = MagicMock()
             api._exposure = MagicMock()
+            api._exposure.get_depth.return_value = 3
             api._mutations = MagicMock()
             api.DECIDE_RATE_LIMIT_ENABLED = False
             payload = self.decode(asyncio.run(api.decide(MagicMock(), req.__dict__)))
@@ -135,6 +136,7 @@ class TestStrategyRegistryApiIntegration(unittest.TestCase):
             api._generator.generate_count.return_value = 1
             api._generator.generate_rows.return_value = [{"id": 1}]
             api._exposure = MagicMock()
+            api._exposure.get_depth.return_value = 3
             api._mutations = MagicMock()
             api._mutations.get_count_delta.return_value = 0
             api._mutations.get_inserted_rows.return_value = []
@@ -144,8 +146,8 @@ class TestStrategyRegistryApiIntegration(unittest.TestCase):
             api._schema_loader, api._generator, api._exposure, api._mutations = old
 
     def test_managed_mutation_response_is_d6_through_decide(self):
-        req = DecisionRequest("mutation", "delete from employees where id = ?",
-            "delete from employees where id = ?", "query", "data_discovery",
+        req = DecisionRequest("mutation", "delete from employees where id = 1",
+            "delete from employees where id = 1", "query", "data_discovery",
             "guest", "hr_production", "mysql", "employees")
         old = (api._schema_loader, api._generator, api._exposure, api._mutations)
         old_rate = api.DECIDE_RATE_LIMIT_ENABLED
@@ -154,8 +156,12 @@ class TestStrategyRegistryApiIntegration(unittest.TestCase):
             api._schema_loader.schema_for_database.return_value = "hr"
             api._schema_loader.get_table.return_value = {"row_count": 1}
             api._generator = MagicMock()
+            api._generator.generate_count.return_value = 1
             api._exposure = MagicMock()
+            api._exposure.get_depth.return_value = 1
             api._mutations = MagicMock()
+            api._mutations.get_inserted_rows.return_value = []
+            api._mutations.apply_rows.return_value = [{"id": 1}]
             api.DECIDE_RATE_LIMIT_ENABLED = False
             payload = self.decode(asyncio.run(api.decide(MagicMock(), req.__dict__)))
             self.assertEqual(payload["strategy_id"], "D6")

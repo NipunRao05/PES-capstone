@@ -425,9 +425,10 @@ Decoy Generation Agent                   VERIFIED offline candidate v1 (Phase 19
 Two-stage dynamic design                 APPROVED PLAN (2026-08-31; not implemented)
 Dynamic D0 baseline verification         VERIFIED (2026-09-01; open-loop)
 Persistent experiment assignment         VERIFIED D1 (2026-09-01)
-Deceptive HR base-world realism           VERIFIED (2026-09-01)
-PostgreSQL metadata consistency           VERIFIED (2026-09-01; bounded filters)
+Deceptive HR base-world realism           VERIFIED (2026-09-02; temporal integrity)
+PostgreSQL metadata consistency           VERIFIED (2026-09-02; info_schema/pg_catalog/psql)
 PostgreSQL stateful deceptive CRUD        VERIFIED (2026-09-02; bounded id predicates)
+Realism + protocol corrective pass        VERIFIED (2026-09-02; bounded audit fixes)
 Commitment/world ledger                  PENDING
 Attack-path registry and steering        PENDING
 Post-success intervention registry       PENDING

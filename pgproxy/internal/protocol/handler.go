@@ -73,6 +73,7 @@ func (h *Handler) Run(ctx context.Context) error {
 
 	defer func() {
 		if h.sess != nil {
+			h.notifyDeceptionSession(context.Background(), "end")
 			if h.intercept != nil {
 				h.intercept.CleanupSession(h.sess.ID)
 			}
@@ -113,6 +114,9 @@ func (h *Handler) Run(ctx context.Context) error {
 			AppName:    snap.AppName,
 			AuthMethod: h.authMethod,
 		})
+	}
+	if h.sess != nil {
+		h.notifyDeceptionSession(ctx, "start")
 	}
 
 	if err := h.proxyLoop(ctx); err != nil {
@@ -510,28 +514,22 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 				if err := h.sendPostgresDeceptionResult(dec, q.String); err != nil {
 					return fmt.Errorf("send deception-engine fake result: %w", err)
 				}
-				if isDeceptionMutationSQL(q.String) && h.currentTxStatus() == 'T' && dec.AffectedRows != nil && *dec.AffectedRows > 0 {
+				if strings.EqualFold(dec.Mode, "fake") && isDeceptionMutationSQL(q.String) && h.currentTxStatus() == 'T' && dec.AffectedRows != nil && *dec.AffectedRows > 0 {
 					h.deceptionTxDirty = true
 				}
-				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.postgresTransactionState()})
+				success := strings.EqualFold(dec.Mode, "fake")
+				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: success, Authority: "deception", TransactionState: h.postgresTransactionState(), ErrorCode: dec.SQLState})
 				continue
 			}
 		}
 
-		// Trap-table deception fallback: publish telemetry above, then return fake rows
-		// directly to the client without forwarding the query to the real backend.
+		// Never expose a guessed trap when the authority is unavailable.  An
+		// exposed trap is served only after the engine has authorized it.
 		if q, ok := clientMsg.(*pgproto3.Query); ok && isTrapTableReference(q.String) {
-			h.logger.Info(
-				"serving proxy-native fake trap result",
-				"protocol", "postgres",
-				"profile", "proxy_native_trap",
-				"query", truncateSQL(q.String, 200),
-			)
-			if err := h.sendPostgresTrapResponse(q.String); err != nil {
-				h.logger.Error("failed to send postgres fake trap response", "err", err)
-				return fmt.Errorf("send fake trap response: %w", err)
+			if err := h.sendPostgresDeceptionError("42P01", "relation does not exist"); err != nil {
+				return fmt.Errorf("send hidden relation response: %w", err)
 			}
-			h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.postgresTransactionState()})
+			h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "deception", TransactionState: h.postgresTransactionState(), ErrorCode: "42P01"})
 			continue
 		}
 
@@ -824,10 +822,13 @@ type deceptionDecisionResponse struct {
 	Count        *int                     `json:"count"`
 	AffectedRows *int                     `json:"affected_rows"`
 	Columns      []string                 `json:"columns"`
+	ColumnTypes  []string                 `json:"column_types"`
 	Tables       []string                 `json:"tables"`
 	Databases    []string                 `json:"databases"`
 	LatencyMS    int                      `json:"latency_ms"`
 	ErrorMsg     string                   `json:"error_msg"`
+	ErrorCode    int                      `json:"error_code"`
+	SQLState     string                   `json:"sqlstate"`
 	Profile      string                   `json:"profile"`
 	Explanation  string                   `json:"explanation"`
 	IsTrap       bool                     `json:"is_trap"`
@@ -916,6 +917,31 @@ func (h *Handler) notifyDeceptionTransaction(ctx context.Context, action string)
 	return nil
 }
 
+func (h *Handler) notifyDeceptionSession(ctx context.Context, action string) {
+	if action != "start" && action != "end" {
+		return
+	}
+	baseURL := os.Getenv("DECEPTION_ENGINE_URL")
+	if baseURL == "" {
+		baseURL = "http://deception-engine:8001/decide"
+	}
+	url := strings.TrimSuffix(baseURL, "/decide") + "/session/" + action
+	body, _ := json.Marshal(map[string]string{"session_id": safeSessionID(h)})
+	callCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.logger.Warn("deception session lifecycle notification failed", "action", action)
+		return
+	}
+	resp.Body.Close()
+}
+
 func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol string) (*deceptionDecisionResponse, bool) {
 	if !shouldConsultDeceptionEngine(sql) {
 		return nil, false
@@ -1001,8 +1027,12 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	h.recordDeceptionSuccess()
 
-	if strings.ToLower(dec.Mode) != "fake" {
+	mode := strings.ToLower(dec.Mode)
+	if mode != "fake" && mode != "block" {
 		return nil, false
+	}
+	if mode == "block" {
+		return &dec, true
 	}
 
 	normalizeDecisionShape(&dec, protocol)
@@ -1017,17 +1047,22 @@ func (h *Handler) sendPostgresDeceptionResult(dec *deceptionDecisionResponse, sq
 	if dec.LatencyMS > 0 {
 		time.Sleep(time.Duration(dec.LatencyMS) * time.Millisecond)
 	}
+	if strings.EqualFold(dec.Mode, "block") {
+		return h.sendPostgresDeceptionError(dec.SQLState, dec.ErrorMsg)
+	}
 
 	rows := decisionRowsAsBytes(dec)
 	messages := make([]pgproto3.BackendMessage, 0, 3+len(rows))
 
 	if !isDeceptionMutationSQL(sql) {
 		fields := make([]pgproto3.FieldDescription, 0, len(dec.Columns))
-		for _, col := range dec.Columns {
+		for index, col := range dec.Columns {
+			typeName := decisionColumnType(dec, index)
+			oid, size := postgresTypeMetadata(typeName)
 			fields = append(fields, pgproto3.FieldDescription{
 				Name:         []byte(col),
-				DataTypeOID:  25, // TEXT keeps fake metadata broadly compatible with psql and GUI clients.
-				DataTypeSize: -1,
+				DataTypeOID:  oid,
+				DataTypeSize: size,
 				TypeModifier: -1,
 				Format:       0, // text format
 			})
@@ -1046,6 +1081,24 @@ func (h *Handler) sendPostgresDeceptionResult(dec *deceptionDecisionResponse, sq
 	messages = append(messages, &pgproto3.ReadyForQuery{TxStatus: h.currentTxStatus()})
 
 	for _, msg := range messages {
+		if err := h.sendToClient(msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Handler) sendPostgresDeceptionError(sqlState, message string) error {
+	if sqlState == "" {
+		sqlState = "42601"
+	}
+	if message == "" {
+		message = "syntax error"
+	}
+	for _, msg := range []pgproto3.BackendMessage{
+		&pgproto3.ErrorResponse{Severity: "ERROR", Code: sqlState, Message: message},
+		&pgproto3.ReadyForQuery{TxStatus: h.currentTxStatus()},
+	} {
 		if err := h.sendToClient(msg); err != nil {
 			return err
 		}
@@ -1129,14 +1182,61 @@ func decisionRowsAsBytes(dec *deceptionDecisionResponse) [][][]byte {
 		row := make([][]byte, len(dec.Columns))
 		for i, col := range dec.Columns {
 			if v, ok := src[col]; ok && v != nil {
-				row[i] = []byte(fmt.Sprint(v))
+				row[i] = []byte(formatDecisionValue(v, decisionColumnType(dec, i)))
 			} else {
-				row[i] = []byte("")
+				row[i] = nil // pgproto3 encodes nil as SQL NULL (-1 length).
 			}
 		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func decisionColumnType(dec *deceptionDecisionResponse, index int) string {
+	if index >= 0 && index < len(dec.ColumnTypes) {
+		return strings.ToLower(dec.ColumnTypes[index])
+	}
+	return "text"
+}
+
+func postgresTypeMetadata(typeName string) (uint32, int16) {
+	switch typeName {
+	case "integer", "int", "int4":
+		return 23, 4
+	case "bigint", "int8":
+		return 20, 8
+	case "numeric", "decimal", "double precision":
+		return 1700, -1
+	case "boolean", "bool":
+		return 16, 1
+	case "date":
+		return 1082, 4
+	case "timestamp", "timestamp without time zone", "datetime":
+		return 1114, 8
+	default:
+		return 25, -1
+	}
+}
+
+func formatDecisionValue(value interface{}, typeName string) string {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return "t"
+		}
+		return "f"
+	case float64:
+		switch typeName {
+		case "integer", "int", "int4", "bigint", "int8":
+			return fmt.Sprintf("%.0f", typed)
+		case "numeric", "decimal":
+			return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.10f", typed), "0"), ".")
+		default:
+			return fmt.Sprintf("%v", typed)
+		}
+	default:
+		return fmt.Sprint(value)
+	}
 }
 
 func shouldConsultDeceptionEngine(sql string) bool {

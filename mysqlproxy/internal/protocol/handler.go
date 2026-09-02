@@ -34,6 +34,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -153,6 +154,7 @@ func (h *Handler) Run(ctx context.Context) error {
 	// Fix 5: always clean up session state on exit + emit session_end
 	defer func() {
 		if h.sess != nil {
+			h.notifyDeceptionSession(context.Background(), "end")
 			if h.intercept != nil {
 				h.intercept.CleanupSession(h.sess.ID)
 			}
@@ -240,6 +242,7 @@ func (h *Handler) Run(ctx context.Context) error {
 			AuthMethod: h.authMethod,
 		})
 	}
+	h.notifyDeceptionSession(ctx, "start")
 
 	// Fix 10: enrich logger with session context
 	h.logger = h.logger.With(
@@ -651,24 +654,22 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 				if err := h.sendMySQLDeceptionResult(dec); err != nil {
 					return fmt.Errorf("send deception-engine fake result: %w", err)
 				}
-				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.mysqlTransactionState()})
+				success := strings.EqualFold(dec.Mode, "fake")
+				errorCode := ""
+				if !success {
+					errorCode = fmt.Sprintf("mysql_%d", dec.ErrorCode)
+				}
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: success, Authority: "deception", TransactionState: h.mysqlTransactionState(), ErrorCode: errorCode})
 				continue
 			}
 
-			// Trap-table deception: publish telemetry above, then return fake rows
-			// directly to the client without forwarding the query to the real backend.
+			// The engine is the exposure authority.  If it is unavailable, fail
+			// closed instead of exposing a guessed trap through a native fallback.
 			if isTrapTableReference(sql) {
-				h.logger.Info("serving proxy-native fake trap result", "query", truncate(sql, 200))
-				if isSQLSelect(sql) {
-					if err := h.sendMySQLTrapRows(); err != nil {
-						return fmt.Errorf("send fake trap result: %w", err)
-					}
-				} else {
-					if err := h.sendMySQLTrapOK(); err != nil {
-						return fmt.Errorf("send fake trap OK: %w", err)
-					}
+				if err := h.sendMySQLDeceptionError(1146, "42S02", "Table doesn't exist"); err != nil {
+					return fmt.Errorf("send hidden table response: %w", err)
 				}
-				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "deception", TransactionState: h.mysqlTransactionState()})
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "deception", TransactionState: h.mysqlTransactionState(), ErrorCode: "mysql_1146"})
 				continue
 			}
 
@@ -1750,17 +1751,21 @@ type deceptionDecisionRequest struct {
 }
 
 type deceptionDecisionResponse struct {
-	Mode        string                   `json:"mode"`
-	Rows        []map[string]interface{} `json:"rows"`
-	Count       *int                     `json:"count"`
-	Columns     []string                 `json:"columns"`
-	Tables      []string                 `json:"tables"`
-	Databases   []string                 `json:"databases"`
-	LatencyMS   int                      `json:"latency_ms"`
-	ErrorMsg    string                   `json:"error_msg"`
-	Profile     string                   `json:"profile"`
-	Explanation string                   `json:"explanation"`
-	IsTrap      bool                     `json:"is_trap"`
+	Mode         string                   `json:"mode"`
+	Rows         []map[string]interface{} `json:"rows"`
+	Count        *int                     `json:"count"`
+	AffectedRows *int                     `json:"affected_rows"`
+	Columns      []string                 `json:"columns"`
+	ColumnTypes  []string                 `json:"column_types"`
+	Tables       []string                 `json:"tables"`
+	Databases    []string                 `json:"databases"`
+	LatencyMS    int                      `json:"latency_ms"`
+	ErrorMsg     string                   `json:"error_msg"`
+	ErrorCode    int                      `json:"error_code"`
+	SQLState     string                   `json:"sqlstate"`
+	Profile      string                   `json:"profile"`
+	Explanation  string                   `json:"explanation"`
+	IsTrap       bool                     `json:"is_trap"`
 }
 
 func (h *Handler) deceptionBreakerOpen() (bool, time.Time) {
@@ -1889,12 +1894,16 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	h.recordDeceptionSuccess()
 
-	if strings.ToLower(dec.Mode) != "fake" {
+	mode := strings.ToLower(dec.Mode)
+	if mode != "fake" && mode != "block" {
 		return nil, false
+	}
+	if mode == "block" {
+		return &dec, true
 	}
 
 	normalizeDecisionShape(&dec, protocol)
-	if len(dec.Columns) == 0 {
+	if len(dec.Columns) == 0 && !isDeceptionMutationSQL(normalized) {
 		return nil, false
 	}
 
@@ -1905,17 +1914,18 @@ func (h *Handler) sendMySQLDeceptionResult(dec *deceptionDecisionResponse) error
 	if dec.LatencyMS > 0 {
 		time.Sleep(time.Duration(dec.LatencyMS) * time.Millisecond)
 	}
+	if strings.EqualFold(dec.Mode, "block") {
+		return h.sendMySQLDeceptionError(dec.ErrorCode, dec.SQLState, dec.ErrorMsg)
+	}
+	if len(dec.Columns) == 0 && dec.AffectedRows != nil {
+		return h.sendMySQLDeceptionOK(*dec.AffectedRows)
+	}
 
-	rows := decisionRowsAsText(dec)
+	rows := decisionRowsAsMySQLBytes(dec)
 
 	columns := make([]mysqlTrapColumn, 0, len(dec.Columns))
-	for _, name := range dec.Columns {
-		columns = append(columns, mysqlTrapColumn{
-			Name:    name,
-			Type:    0xfd, // MYSQL_TYPE_VAR_STRING
-			Charset: 33,   // utf8_general_ci
-			Length:  255,
-		})
+	for index, name := range dec.Columns {
+		columns = append(columns, mysqlDecisionColumn(name, decisionColumnType(dec, index)))
 	}
 
 	seq := byte(1)
@@ -1943,7 +1953,7 @@ func (h *Handler) sendMySQLDeceptionResult(dec *deceptionDecisionResponse) error
 
 	// Text rows.
 	for _, row := range rows {
-		if err := h.sendPacket(h.clientConn, buildMySQLTextRow(row), seq); err != nil {
+		if err := h.sendPacket(h.clientConn, buildMySQLNullableTextRow(row), seq); err != nil {
 			return err
 		}
 		seq++
@@ -1958,6 +1968,58 @@ func (h *Handler) sendMySQLDeceptionResult(dec *deceptionDecisionResponse) error
 		h.sess.IncrBytesOut(1)
 	}
 	return nil
+}
+
+func (h *Handler) sendMySQLDeceptionOK(affectedRows int) error {
+	if affectedRows < 0 {
+		affectedRows = 0
+	}
+	pkt := []byte{packetOK}
+	pkt = append(pkt, writeLenEncInt(uint64(affectedRows))...)
+	pkt = append(pkt, 0x00)                   // last insert id
+	pkt = append(pkt, 0x02, 0x00, 0x00, 0x00) // autocommit, warnings=0
+	return h.sendPacket(h.clientConn, pkt, 1)
+}
+
+func (h *Handler) sendMySQLDeceptionError(code int, sqlState, message string) error {
+	if code <= 0 || code > 65535 {
+		code = 1064
+	}
+	if len(sqlState) != 5 {
+		sqlState = "42000"
+	}
+	if message == "" {
+		message = "You have an error in your SQL syntax"
+	}
+	pkt := []byte{packetERR, byte(code), byte(code >> 8), '#'}
+	pkt = append(pkt, []byte(sqlState)...)
+	pkt = append(pkt, []byte(message)...)
+	return h.sendPacket(h.clientConn, pkt, 1)
+}
+
+func (h *Handler) notifyDeceptionSession(ctx context.Context, action string) {
+	if h.sess == nil || (action != "start" && action != "end") {
+		return
+	}
+	baseURL := os.Getenv("DECEPTION_ENGINE_URL")
+	if baseURL == "" {
+		baseURL = "http://deception-engine:8001/decide"
+	}
+	url := strings.TrimSuffix(baseURL, "/decide") + "/session/" + action
+	body, _ := json.Marshal(map[string]string{"session_id": safeSessionID(h)})
+	callCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.logger.Warn("deception session lifecycle notification failed", "action", action)
+		return
+	}
+	resp.Body.Close()
 }
 
 func normalizeDecisionShape(dec *deceptionDecisionResponse, protocol string) {
@@ -1999,20 +2061,80 @@ func normalizeDecisionShape(dec *deceptionDecisionResponse, protocol string) {
 	}
 }
 
-func decisionRowsAsText(dec *deceptionDecisionResponse) [][]string {
-	rows := make([][]string, 0, len(dec.Rows))
+func decisionRowsAsMySQLBytes(dec *deceptionDecisionResponse) [][][]byte {
+	rows := make([][][]byte, 0, len(dec.Rows))
 	for _, src := range dec.Rows {
-		row := make([]string, len(dec.Columns))
+		row := make([][]byte, len(dec.Columns))
 		for i, col := range dec.Columns {
 			if v, ok := src[col]; ok && v != nil {
-				row[i] = fmt.Sprint(v)
+				row[i] = []byte(formatDecisionValue(v, decisionColumnType(dec, i)))
 			} else {
-				row[i] = ""
+				row[i] = nil
 			}
 		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func decisionColumnType(dec *deceptionDecisionResponse, index int) string {
+	if index >= 0 && index < len(dec.ColumnTypes) {
+		return strings.ToLower(dec.ColumnTypes[index])
+	}
+	return "text"
+}
+
+func mysqlDecisionColumn(name, typeName string) mysqlTrapColumn {
+	column := mysqlTrapColumn{Name: name, Type: 0xfd, Charset: 33, Length: 255}
+	switch typeName {
+	case "integer", "int", "int4":
+		column.Type, column.Charset, column.Length = 0x03, 63, 11
+	case "bigint", "int8":
+		column.Type, column.Charset, column.Length = 0x08, 63, 20
+	case "numeric", "decimal", "double precision":
+		column.Type, column.Charset, column.Length = 0xf6, 63, 32
+	case "boolean", "bool":
+		column.Type, column.Charset, column.Length = 0x01, 63, 1
+	case "date":
+		column.Type, column.Charset, column.Length = 0x0a, 63, 10
+	case "timestamp", "timestamp without time zone", "datetime":
+		column.Type, column.Charset, column.Length = 0x0c, 63, 19
+	}
+	return column
+}
+
+func formatDecisionValue(value interface{}, typeName string) string {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return "1"
+		}
+		return "0"
+	case float64:
+		switch typeName {
+		case "integer", "int", "int4", "bigint", "int8":
+			return fmt.Sprintf("%.0f", typed)
+		case "numeric", "decimal":
+			return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.10f", typed), "0"), ".")
+		default:
+			return fmt.Sprintf("%v", typed)
+		}
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
+func buildMySQLNullableTextRow(values [][]byte) []byte {
+	var pkt []byte
+	for _, value := range values {
+		if value == nil {
+			pkt = append(pkt, 0xfb)
+			continue
+		}
+		pkt = append(pkt, writeLenEncInt(uint64(len(value)))...)
+		pkt = append(pkt, value...)
+	}
+	return pkt
 }
 
 func shouldConsultDeceptionEngine(sql string) bool {
@@ -2021,7 +2143,10 @@ func shouldConsultDeceptionEngine(sql string) bool {
 	if strings.HasPrefix(q, "show ") {
 		return true
 	}
-	if strings.Contains(q, "@@") || strings.Contains(q, "version()") {
+	if strings.HasPrefix(q, "describe ") || strings.HasPrefix(q, "desc ") {
+		return true
+	}
+	if strings.Contains(q, "@@") || strings.Contains(q, "version()") || strings.Contains(q, "database()") {
 		return true
 	}
 	if strings.Contains(q, "information_schema.") || strings.Contains(q, "pg_catalog.") {
@@ -2105,6 +2230,9 @@ func inferDeceptionRisk(normalized string) float64 {
 }
 
 func extractDeceptionTableName(sql string) string {
+	if match := regexp.MustCompile(`(?i)\b(?:from|join|update|into)\s+(?:[a-z_][a-z0-9_$]*\.)?([a-z_][a-z0-9_$]*)`).FindStringSubmatch(sql); len(match) == 2 {
+		return strings.ToLower(match[1])
+	}
 	tokens := sqlRelationTokensForDeception(sql)
 	for i, tok := range tokens {
 		switch tok {
@@ -2124,6 +2252,11 @@ func extractDeceptionTableName(sql string) string {
 	}
 
 	return ""
+}
+
+func isDeceptionMutationSQL(sql string) bool {
+	q := strings.TrimSpace(strings.ToLower(sql))
+	return strings.HasPrefix(q, "insert ") || strings.HasPrefix(q, "update ") || strings.HasPrefix(q, "delete ")
 }
 
 func sqlRelationTokensForDeception(sql string) []string {

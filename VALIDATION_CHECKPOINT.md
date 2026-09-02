@@ -4,7 +4,34 @@ Checkpoint date: 2026-09-02
 
 Repository: `F:\b\Capstone-main`
 
-Latest checkpoint start: main / 262bfe3 (Dataset + Metadata Realism Fix)
+Latest checkpoint start: main / 727b055 (`i did it`)
+
+## Realism + protocol corrective pass — 2026-09-02
+
+- The bounded audit remediation is **VERIFIED**. Full contracts, evidence, and
+  limitations are recorded in `REALISM_PROTOCOL_CORRECTIVE_PASS.md`.
+- Hidden managed objects are now authorized before every read/mutation and
+  before exposure advancement. Guessed hidden names fail with native errors;
+  both proxy-native success fallbacks were removed.
+- MySQL deceptive mutations now return protocol-valid OK packets and no longer
+  fall through after the engine records state. Invalid SQL is rejected before
+  mutation, and clean disconnects remove exposure/mutation/transaction state.
+- YAML-backed PostgreSQL and MySQL discovery now covers the required native
+  clients, including psql `\dt`/`\d`, MySQL DESCRIBE/SHOW COLUMNS, and qualified
+  MySQL identifiers. Canonical versions/database/schema identities agree.
+- Unsupported SQL fails explicitly; schema-derived protocol types, true NULL,
+  canonical booleans, and fixed numeric rendering are verified.
+- Evidence derived numeric features remain typed while secrets stay redacted;
+  timestamps are UTC-normalized/ordered; trap summaries do not double-count;
+  generated cross-column time relationships are valid.
+- Final regressions: deception engine 80/80, evidence store 16/16, all MySQL
+  (40 named), PostgreSQL (57 named), and scaling (38 named) Go tests plus vet,
+  and authoritative-state live validation with PostgreSQL 19/MySQL 13 outcomes.
+- A bounded live scaling smoke passed threshold (`1 -> 3`), cooldown hold, and
+  scale-down (`3 -> 2` after the configured 120-second low-pressure window).
+- Only deception-engine, pgproxy, mysqlproxy, and evidence-store were rebuilt/
+  recreated. No numbered phase, dynamic steering/intervention, backend decoy
+  table, extended protocol, deployment, or GitHub push was introduced.
 
 ## PostgreSQL stateful CRUD correction — 2026-09-02
 

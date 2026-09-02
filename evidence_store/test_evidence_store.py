@@ -56,6 +56,7 @@ from main import (
     AdaptiveEvidencePoller,
     EvidenceRepository,
     bounded_text,
+    canonical_timestamp,
     decode_json_object,
     kafka_event_id,
     redact_query,
@@ -209,11 +210,55 @@ class EvidenceSafetyTests(unittest.TestCase):
         })
         self.assertEqual(sanitized["source_ip"], "[REDACTED]")
         self.assertNotIn("unsafe", sanitized["query"])
+        features = sanitize_artifact({
+            "credential_keyword_count": 3,
+            "bounded_credential_keyword_count": 2,
+            "credential_signal_present": True,
+            "credential_value": "actual-secret",
+            "api_token": "actual-token",
+        })
+        self.assertEqual(features["credential_keyword_count"], 3)
+        self.assertEqual(features["bounded_credential_keyword_count"], 2)
+        self.assertIs(features["credential_signal_present"], True)
+        self.assertEqual(features["credential_value"], "[REDACTED]")
+        self.assertEqual(features["api_token"], "[REDACTED]")
         with self.assertRaisesRegex(ValueError, "cross-session"):
             validate_artifact_link(
                 "session-20", "replay_result", "RP-1",
                 {"session_id": "session-20", "nested": {"session_id": "other"}},
             )
+
+    def test_timestamps_are_normalized_sorted_and_traps_are_not_double_counted(self):
+        repository = EvidenceRepository(MemoryRedis())
+        session_id = "ordered-evidence"
+        repository.ingest_kafka(
+            "mysql-session-events",
+            {"event_id": "later", "session_id": session_id, "timestamp": "1788000001", "event_type": "session_end"},
+            0, 1,
+        )
+        repository.ingest_kafka(
+            "mysql-session-events",
+            {"event_id": "earlier", "session_id": session_id, "timestamp": "1788000000", "event_type": "session_start"},
+            0, 2,
+        )
+        trap = {
+            "session_id": session_id, "timestamp": "2026-08-28T00:00:02+00:00",
+            "technique_id": "T1555", "trap_triggered": True,
+        }
+        repository.ingest_kafka("mitre-events", {**trap, "event_id": "detail"}, 0, 3)
+        repository.ingest_kafka("mitre-sessions", {**trap, "event_id": "summary"}, 0, 4)
+        record = repository.get_session(session_id)
+        self.assertLessEqual(
+            timestamp_score(record["connection_events"][0]["timestamp"]),
+            timestamp_score(record["connection_events"][1]["timestamp"]),
+        )
+        self.assertTrue(all(item["timestamp"].endswith("Z") for item in record["connection_events"]))
+        self.assertEqual(len(record["trap_events"]), 1)
+        self.assertEqual(record["trap_events"][0]["provenance"], "detailed")
+        self.assertEqual(
+            sum(bool(item["logical_trap_interaction"]) for item in record["mitre_events"]), 1
+        )
+        self.assertEqual(canonical_timestamp("1788000000"), "2026-08-29T10:40:00Z")
 
     def test_phase20_end_to_end_trace_contract(self):
         repository = EvidenceRepository(MemoryRedis())
