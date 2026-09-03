@@ -123,11 +123,12 @@ _mutations: MutationStore | None = None
 _strategy_registry: StrategyRegistry = StrategyRegistry.load_with_fallback()
 _policy_guard: PolicyGuard = PolicyGuard(_strategy_registry)
 _strategy_agent: RuleOnlyStrategyAgent = RuleOnlyStrategyAgent(_policy_guard)
+_world_config_generation: int = 0
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _redis_client, _schema_loader, _generator, _exposure, _mutations, _strategy_registry, _policy_guard, _strategy_agent
+    global _redis_client, _schema_loader, _generator, _exposure, _mutations, _strategy_registry, _policy_guard, _strategy_agent, _world_config_generation
     _redis_client = redis.Redis(
         host=REDIS_HOST, port=REDIS_PORT,
         decode_responses=True,
@@ -141,6 +142,7 @@ async def lifespan(app: FastAPI):
     _strategy_registry = StrategyRegistry.load_with_fallback()
     _policy_guard = PolicyGuard(_strategy_registry)
     _strategy_agent = RuleOnlyStrategyAgent(_policy_guard)
+    _world_config_generation = 1
     if _strategy_registry.degraded:
         log.error("Strategy registry invalid; using built-in D0 fallback")
     log.info(
@@ -181,6 +183,8 @@ def _runtime_components_loaded() -> bool:
     """Return True when all in-process components required by /decide exist."""
     return (
         _schema_loader is not None
+        and _schema_loader.is_valid
+        and not _world_configuration_errors(_schema_loader)
         and _generator is not None
         and _exposure is not None
         and _mutations is not None
@@ -200,9 +204,11 @@ def _readiness_payload() -> dict:
     """Build a readiness payload without raising if one dependency is unhealthy."""
     schemas = _loaded_schema_names()
     redis_ok = _redis_ready()
+    world_errors = _world_configuration_errors(_schema_loader)
     checks = {
         "app_started": True,
         "schemas_loaded": bool(schemas),
+        "world_configuration_valid": not world_errors,
         "generator_loaded": _generator is not None,
         "exposure_tracker_loaded": _exposure is not None,
         "mutation_store_loaded": _mutations is not None,
@@ -232,11 +238,47 @@ def _readiness_payload() -> dict:
         "checks": checks,
         "schema_count": len(schemas),
         "schemas": schemas,
+        "active_world": ACTIVE_WORLD or "database-mapped",
+        "world_config_generation": _world_config_generation,
+        "world_configuration_errors": world_errors,
         "strategy_registry_version": _strategy_registry.registry_version,
         "strategy_registry_degraded": _strategy_registry.degraded,
         "policy_guard_version": POLICY_VERSION,
         "rule_strategy_agent_version": RULE_POLICY_VERSION,
     }
+
+
+def _world_configuration_errors(loader: SchemaLoader | None) -> list[str]:
+    """Validate world files against the live approved strategy registry."""
+    if loader is None:
+        return ["schema loader is not initialized"]
+    raw_errors = loader.get_load_errors() if hasattr(loader, "get_load_errors") else []
+    errors = list(raw_errors) if isinstance(raw_errors, (list, tuple)) else []
+    raw_schemas = loader.get_schema_names()
+    schemas = list(raw_schemas) if isinstance(raw_schemas, (list, tuple)) else []
+    if ACTIVE_WORLD and ACTIVE_WORLD not in schemas:
+        errors.append(f"configured active world {ACTIVE_WORLD!r} is not loaded")
+    for world_id in schemas:
+        for asset_kind, raw_assets in (
+            ("table", loader.get_all_tables(world_id)),
+            ("function", loader.get_all_functions(world_id)),
+        ):
+            assets = raw_assets if isinstance(raw_assets, dict) else {}
+            for asset_name, definition in assets.items():
+                requested = str(definition.get("strategy_id") or "").strip().upper()
+                if not requested:
+                    continue
+                strategy = _strategy_registry.get(requested)
+                if strategy is None or strategy.approval_status != "APPROVED":
+                    errors.append(
+                        f"{world_id}.{asset_kind}.{asset_name} references unapproved strategy {requested!r}"
+                    )
+                elif not {"mysql", "postgres"}.issubset(set(strategy.supported_protocols)):
+                    errors.append(
+                        f"{world_id}.{asset_kind}.{asset_name} strategy {requested!r} "
+                        "must support mysql and postgres"
+                    )
+    return errors[:100]
 
 
 def _byte_len(value: object) -> int:
@@ -528,6 +570,98 @@ async def readyz():
         status_code=200 if payload["ready"] else 503,
         content=payload,
     )
+
+
+def _world_inventory(loader: SchemaLoader) -> list[dict]:
+    worlds: list[dict] = []
+    for world_id in loader.get_schema_names():
+        tables = loader.get_all_tables(world_id)
+        functions = loader.get_all_functions(world_id)
+        worlds.append({
+            "world_id": world_id,
+            "database_name": loader.get_database_name(world_id),
+            "table_count": len(tables),
+            "function_count": len(functions),
+            "traps": [
+                {
+                    "asset_id": f"{world_id}.{kind}.{name}",
+                    "asset_kind": kind,
+                    "trap_id": definition.get("trap_id", ""),
+                    "trap_kind": definition.get("trap_kind", ""),
+                    "strategy_id": definition.get("strategy_id", ""),
+                    "mitre_technique_id": definition.get("mitre_technique_id", ""),
+                    "risk_score": definition.get("risk_score", 0),
+                    "exposure_depth": definition.get("exposure_depth", 1),
+                }
+                for kind, assets in (("table", tables), ("function", functions))
+                for name, definition in assets.items()
+                if definition.get("is_trap") is True
+            ],
+        })
+    return worlds
+
+
+@app.get("/worlds")
+async def list_worlds() -> dict:
+    """Return the active declarative world inventory without generated rows."""
+    if _schema_loader is None:
+        raise HTTPException(status_code=503, detail="schema loader is not initialized")
+    errors = _world_configuration_errors(_schema_loader)
+    return {
+        "status": "valid" if not errors else "invalid",
+        "active_world": ACTIVE_WORLD or "database-mapped",
+        "generation": _world_config_generation,
+        "errors": errors,
+        "worlds": _world_inventory(_schema_loader),
+    }
+
+
+@app.post("/worlds/reload")
+async def reload_worlds() -> dict:
+    """Atomically activate changed YAML after validation and session drain.
+
+    Existing sessions must finish first so a reload cannot rewrite facts an
+    attacker has already observed. The mounted schemas directory is read-only;
+    this endpoint only validates and activates operator-provided files.
+    """
+    global _schema_loader, _world_config_generation
+    if _schema_loader is None or _exposure is None:
+        raise HTTPException(status_code=503, detail="world runtime is not initialized")
+    active_sessions = _exposure.active_session_count()
+    if active_sessions < 0:
+        raise HTTPException(status_code=503, detail="cannot verify active session state")
+    if active_sessions:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "status": "reload_rejected",
+                "reason": "active sessions must finish before world activation",
+                "active_sessions": active_sessions,
+            },
+        )
+    candidate = SchemaLoader(_schema_loader.schemas_dir)
+    errors = _world_configuration_errors(candidate)
+    if errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status": "reload_rejected",
+                "reason": "world validation failed; previous configuration remains active",
+                "errors": errors,
+            },
+        )
+    _schema_loader = candidate
+    _world_config_generation += 1
+    log.info(
+        "Activated world configuration generation=%d worlds=%s active=%s",
+        _world_config_generation, candidate.get_schema_names(), ACTIVE_WORLD or "database-mapped",
+    )
+    return {
+        "status": "reloaded",
+        "active_world": ACTIVE_WORLD or "database-mapped",
+        "generation": _world_config_generation,
+        "worlds": _world_inventory(candidate),
+    }
 
 
 @app.get("/strategies")
@@ -1177,23 +1311,42 @@ def _validate_managed_sql(
     req: DecisionRequest, query: str, table: str, schema_name: str
 ) -> JSONResponse | None:
     """Validate the intentionally small managed-table SQL grammar."""
+    column_defs = _schema_loader.get_columns(schema_name, table)
+    columns = {column["name"] for column in column_defs}
+    has_integer_id = any(
+        column.get("name") == "id" and column.get("type") == "pk_int"
+        for column in column_defs
+    )
     if _is_mutation(query):
         if query.startswith("update "):
+            if not has_integer_id:
+                return _column_error(req, "id")
             if _parse_id_predicate(query) is None:
                 return _syntax_error(req, "UPDATE requires WHERE id = positive integer")
             assignments = _parse_update_assignments(
-                query, {column["name"] for column in _schema_loader.get_columns(schema_name, table)}
+                query, columns
             )
             if not assignments:
                 return _syntax_error(req, "unsupported UPDATE assignment")
-        elif query.startswith("delete ") and _parse_id_predicate(query) is None:
-            return _syntax_error(req, "DELETE requires WHERE id = positive integer")
-        elif query.startswith("insert ") and not re.fullmatch(
-            r"insert\s+into\s+[a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?\s*"
-            r"\([a-z_][a-z0-9_$]*(?:\s*,\s*[a-z_][a-z0-9_$]*)*\)\s*"
-            r"values\s*\(.+\)", query, re.I,
-        ):
-            return _syntax_error(req, "unsupported INSERT syntax")
+        elif query.startswith("delete "):
+            if not has_integer_id:
+                return _column_error(req, "id")
+            if _parse_id_predicate(query) is None:
+                return _syntax_error(req, "DELETE requires WHERE id = positive integer")
+        elif query.startswith("insert "):
+            insert = re.fullmatch(
+                r"insert\s+into\s+[a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?\s*"
+                r"\(([a-z_][a-z0-9_$]*(?:\s*,\s*[a-z_][a-z0-9_$]*)*)\)\s*"
+                r"values\s*\(.+\)", query, re.I,
+            )
+            if not insert:
+                return _syntax_error(req, "unsupported INSERT syntax")
+            requested_columns = [name.strip().lower() for name in insert.group(1).split(",")]
+            if len(requested_columns) != len(set(requested_columns)):
+                return _syntax_error(req, "duplicate INSERT column")
+            unknown = next((name for name in requested_columns if name not in columns), "")
+            if unknown:
+                return _column_error(req, unknown)
         return None
 
     if not query.startswith("select "):
@@ -1208,7 +1361,8 @@ def _validate_managed_sql(
         return _syntax_error(req, "invalid OFFSET clause")
     if " where " in query and _parse_id_predicate(query) is None:
         return _syntax_error(req, "unsupported WHERE predicate")
-    columns = [column["name"] for column in _schema_loader.get_columns(schema_name, table)]
+    if " where " in query and not has_integer_id:
+        return _column_error(req, "id")
     match = re.search(r"\bselect\s+(.*?)\s+from\s+", query, re.I)
     if not match:
         return _syntax_error(req, "malformed SELECT")
@@ -1217,6 +1371,11 @@ def _validate_managed_sql(
         return None
     if projection != "*" and not projection.endswith(".*"):
         for expression in projection.split(","):
+            raw_expression = expression.strip()
+            if raw_expression == "*" or raw_expression.endswith(".*"):
+                continue
+            if _parse_literal_alias(raw_expression) is not None:
+                continue
             expression = re.sub(r"\s+as\s+[a-z_][a-z0-9_]*$", "", expression.strip(), flags=re.I)
             identifier = expression.split(".")[-1].strip(' `"')
             if not re.fullmatch(r"[a-z_][a-z0-9_$]*", identifier, re.I):
@@ -1302,6 +1461,10 @@ async def _handle_function_select(
     if not definition:
         return _json_response(DecisionResponse(mode="passthrough"))
 
+    invalid = _validate_function_select(req, function_name, definition)
+    if invalid is not None:
+        return invalid
+
     depth = _exposure.get_depth(req.session_id)
     required_depth = max(1, int(definition.get("exposure_depth", 1)))
     requested_strategy = str(definition.get("strategy_id") or "D0").strip().upper()
@@ -1334,6 +1497,7 @@ async def _handle_function_select(
         table_name=f"function:{schema_name}.{function_name}",
         limit=min(limit, 100),
         offset=offset,
+        pk_pool=_schema_pk_pool(schema_name, req.session_id),
     )
     rows = [{column: row.get(column) for column in projection} for row in rows]
     _exposure.record_table_access(
@@ -1418,6 +1582,7 @@ async def _handle_select(
             table_name=table,
             limit=effective_limit,
             offset=offset,
+            pk_pool=_schema_pk_pool(schema_name, req.session_id),
         )
 
     # Merge session-local inserts, then apply bounded UPDATE/DELETE overlays.
@@ -1431,6 +1596,10 @@ async def _handle_select(
 
     all_col_names = [c["name"] for c in columns_def]
     col_names = _parse_select_projection(req.query_normalized, all_col_names)
+    literal_columns = _parse_select_literal_aliases(req.query_normalized, set(col_names))
+    for row in rows:
+        row.update({name: value for name, value, _type in literal_columns})
+    col_names.extend(name for name, _value, _type in literal_columns)
     rows = [{column: row.get(column) for column in col_names} for row in rows]
     is_trap = table_def.get("is_trap", False)
     asset = _asset_fields(schema_name, "table", table, table_def, is_trap)
@@ -1445,10 +1614,7 @@ async def _handle_select(
         mode="fake",
         rows=rows,
         columns=col_names,
-        column_types=[
-            _column_sql_type(next(column for column in columns_def if column["name"] == name))
-            for name in col_names
-        ],
+        column_types=_select_result_column_types(col_names, columns_def, literal_columns),
         latency_ms=_latency(req.deception_level, base=45),
         profile="high_value_target" if is_trap else "fake_table_data",
         is_trap=is_trap,
@@ -1515,14 +1681,19 @@ async def _handle_mutation(
             )
             affected = 1
 
+    is_trap = table_def.get("is_trap") is True
+    asset = _asset_fields(schema_name, "table", table, table_def, is_trap)
+    strategy_id = _strategy_id_for_table(schema_name, table) if is_trap else "D6"
     return _json_response(DecisionResponse(
         mode="fake",
         rows=[],
         affected_rows=affected,
         latency_ms=_latency(req.deception_level, base=30),
-        profile="fake_table_data",
+        profile="high_value_target" if is_trap else "fake_table_data",
+        is_trap=is_trap,
+        **asset,
         explanation=f"Mutation recorded: {fp[:30]} — {affected} rows affected",
-        strategy_id="D6",
+        strategy_id=strategy_id,
     ))
 
 
@@ -1642,7 +1813,9 @@ def _strategy_for_asset_definition(
             return strategy
         # Missing explicit strategy must fail closed rather than silently turn
         # a declared trap into D0.
-        return SimpleNamespace(strategy_id=requested, approval_status="REJECTED")
+        return SimpleNamespace(
+            strategy_id=requested, approval_status="REJECTED", supported_protocols=()
+        )
     return _strategy_registry.strategy_for_asset(schema_name, asset_name)
 
 
@@ -1668,6 +1841,21 @@ def _asset_fields(
     }
 
 
+def _schema_pk_pool(schema_name: str, session_id: str) -> dict[str, range]:
+    """Build bounded FK target ranges from the same effective table counts."""
+    pool: dict[str, range] = {}
+    for table_name, definition in _schema_loader.get_all_tables(schema_name).items():
+        count = _generator.generate_count(
+            definition.get("row_count", 100), session_id, table_name
+        )
+        if count <= 0:
+            continue
+        for column in definition.get("columns", []):
+            if column.get("type") == "pk_int":
+                pool[f"{table_name}.{column['name']}"] = range(1, count + 1)
+    return pool
+
+
 def _table_access_error(
     req: DecisionRequest, schema_name: str, table_name: str, table_def: dict
 ) -> JSONResponse | None:
@@ -1683,9 +1871,11 @@ def _table_access_error(
     current_depth = raw_depth if isinstance(raw_depth, int) else 1
     required_depth = max(1, int(table_def.get("exposure_depth", 1)))
     strategy = _strategy_for_asset_definition(schema_name, table_name, table_def)
+    protocol = "postgres" if req.protocol.lower().startswith("postgres") else "mysql"
     authorized = (
         required_depth <= current_depth
         and strategy.approval_status == "APPROVED"
+        and protocol in strategy.supported_protocols
     )
     if authorized:
         return None
@@ -1792,6 +1982,7 @@ def _fake_insert_row(req: DecisionRequest, schema_name: str, table: str) -> dict
         table_name=table,
         limit=1,
         offset=base_count + inserted_count,
+        pk_pool=_schema_pk_pool(schema_name, req.session_id),
     )
     return rows[0] if rows else {}
 
@@ -1814,6 +2005,26 @@ def _extract_function_call(query: str) -> str:
         str(query or ""), re.I,
     )
     return match.group(1).lower() if match else ""
+
+
+def _validate_function_select(
+    req: DecisionRequest, function_name: str, definition: dict
+) -> JSONResponse | None:
+    """Validate the no-argument generated function grammar and projection."""
+    query = str(req.query_normalized or "").strip().rstrip(";").strip()
+    relation = rf"(?:[a-z_][a-z0-9_$]*\.)?{re.escape(function_name)}\s*\(\s*\)"
+    projection = r"(?:\*|[a-z_][a-z0-9_$]*(?:\s*,\s*[a-z_][a-z0-9_$]*)*)"
+    tail = r"(?:\s+limit\s+(?:\d+|\d+\s*,\s*\d+))?(?:\s+offset\s+\d+)?"
+    if not re.fullmatch(rf"select\s+{projection}\s+from\s+{relation}{tail}", query, re.I):
+        return _syntax_error(req, "unsupported generated function query")
+    available = {str(column["name"]).lower() for column in definition.get("columns", [])}
+    select_match = re.match(r"select\s+(.*?)\s+from\s+", query, re.I)
+    requested = select_match.group(1).strip() if select_match else "*"
+    if requested != "*":
+        for identifier in (item.strip().lower() for item in requested.split(",")):
+            if identifier not in available:
+                return _column_error(req, identifier)
+    return None
 
 
 def _parse_id_predicate(query: str) -> int | None:
@@ -1845,6 +2056,53 @@ def _parse_select_projection(query: str, available: list[str]) -> list[str]:
         if identifier in available and identifier not in projected:
             projected.append(identifier)
     return projected or list(available)
+
+
+def _parse_literal_alias(expression: str) -> tuple[str, object, str] | None:
+    """Parse one bounded SELECT literal alias without evaluating SQL."""
+    match = re.fullmatch(
+        r"(-?\d+(?:\.\d+)?|'(?:''|[^'])*')\s+as\s+([a-z_][a-z0-9_$]*)",
+        str(expression or "").strip(), re.I,
+    )
+    if not match:
+        return None
+    raw, alias = match.groups()
+    if raw.startswith("'"):
+        return alias.lower(), raw[1:-1].replace("''", "'"), "text"
+    if "." in raw:
+        return alias.lower(), float(raw), "double precision"
+    return alias.lower(), int(raw), "bigint"
+
+
+def _parse_select_literal_aliases(
+    query: str, existing_columns: set[str]
+) -> list[tuple[str, object, str]]:
+    match = re.search(r"\bselect\s+(.*?)\s+from\s+", str(query or ""), re.I)
+    if not match:
+        return []
+    aliases: list[tuple[str, object, str]] = []
+    seen = set(existing_columns)
+    for expression in match.group(1).split(","):
+        parsed = _parse_literal_alias(expression)
+        if parsed is None or parsed[0] in seen:
+            continue
+        aliases.append(parsed)
+        seen.add(parsed[0])
+    return aliases
+
+
+def _select_result_column_types(
+    selected: list[str], definitions: list[dict],
+    literals: list[tuple[str, object, str]],
+) -> list[str]:
+    literal_types = {name: type_name for name, _value, type_name in literals}
+    definition_by_name = {column["name"]: column for column in definitions}
+    return [
+        literal_types[name]
+        if name in literal_types
+        else _column_sql_type(definition_by_name[name])
+        for name in selected
+    ]
 
 
 def _parse_update_assignments(query: str, available: set[str]) -> dict:

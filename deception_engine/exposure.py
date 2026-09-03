@@ -115,6 +115,24 @@ class ExposureTracker:
         except Exception as e:
             log.error("Redis cleanup_session failed for %s: %s", session_id, e)
 
+    def active_session_count(self, limit: int = 10_000) -> int:
+        """Return a bounded count of live exposure sessions.
+
+        World reloads use this to avoid changing established schema facts in
+        the middle of a connection. Redis remains the shared authority across
+        scaled deception-engine replicas.
+        """
+        count = 0
+        try:
+            for _key in self._redis.scan_iter(match=REDIS_KEY_PREFIX + "*", count=100):
+                count += 1
+                if count >= limit:
+                    break
+        except Exception as e:
+            log.error("Redis active-session scan failed: %s", e)
+            return -1
+        return count
+
     def get_session_info(self, session_id: str) -> dict:
         """Return full depth info for a session (for debugging)."""
         key = REDIS_KEY_PREFIX + session_id

@@ -33,7 +33,7 @@ import unicodedata
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any
+from typing import Any, Sequence
 
 from faker import Faker
 
@@ -534,7 +534,7 @@ class DataGenerator:
         table_name: str,
         limit: int = 100,
         offset: int = 0,
-        pk_pool: dict[str, list] | None = None,
+        pk_pool: dict[str, Sequence[Any]] | None = None,
     ) -> list[dict]:
         """
         Generate `limit` rows starting at `offset` for the given table.
@@ -773,7 +773,7 @@ class DataGenerator:
         self,
         col: dict,
         row_idx: int,
-        pk_pool: dict[str, list] | None,
+        pk_pool: dict[str, Sequence[Any]] | None,
         rng: random.Random,
     ) -> int:
         """

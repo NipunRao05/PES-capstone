@@ -525,6 +525,7 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 					WorldID:            dec.WorldID, AssetID: dec.AssetID, AssetKind: dec.AssetKind,
 					TrapTriggered: success && dec.TrapTriggered,
 					TrapID:        dec.TrapID, TrapKind: dec.TrapKind,
+					TrapMitreTechniqueID: dec.TrapMitreTechniqueID, TrapRiskScore: dec.TrapRiskScore,
 					StrategyID:              dec.StrategyID,
 					StrategyRegistryVersion: dec.StrategyRegistryVersion,
 				})
@@ -848,6 +849,8 @@ type deceptionDecisionResponse struct {
 	TrapTriggered           bool                     `json:"trap_triggered"`
 	TrapID                  string                   `json:"trap_id"`
 	TrapKind                string                   `json:"trap_kind"`
+	TrapMitreTechniqueID    string                   `json:"trap_mitre_technique_id"`
+	TrapRiskScore           float64                  `json:"trap_risk_score"`
 	StrategyID              string                   `json:"strategy_id"`
 	StrategyRegistryVersion string                   `json:"strategy_registry_version"`
 }

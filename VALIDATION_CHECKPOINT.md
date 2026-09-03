@@ -239,3 +239,30 @@ Latest checkpoint start: main / 727b055 (`i did it`)
 ## Checkpoint decision
 
 Phases 0 through 20 are complete, and Phase 20 is **VERIFIED LIVE**. Phase 19.1 remains **INCOMPLETE / INTERRUPTED** and explicitly operator-deferred; no aggregate Ornith quality claim is made. The next ordered, AI-independent work is Phase 21 replay verification, which was not started during this Phase 20 completion turn.
+
+## Extensible base-world and trap completion — 2026-09-03
+
+Status: **VERIFIED locally and live for declarative table and no-argument
+set-returning function traps.**
+
+- YAML worlds are auto-discovered and validated fail-closed, including aliases,
+  generators, columns, ranges, foreign keys, exposure depths, unique trap IDs,
+  MITRE/risk metadata, and approved strategy/protocol compatibility.
+- Operators can inspect `GET /worlds` and atomically `POST /worlds/reload`; reload
+  rejects active sessions and invalid candidate configurations without replacing
+  the last valid configuration.
+- MySQL and PostgreSQL propagate structured world/asset/trap/strategy/MITRE/risk
+  metadata through query events into MITRE, session/behavior, evidence, and the
+  existing generic scaling/observability trap signal.
+- Live research-world sessions
+  `ca3f06d8-2b57-4b9b-a77b-bcb531180253` (MySQL) and
+  `90c9d777-6805-42f8-9bc5-dab36be2c1d7` (PostgreSQL) traversed the base world,
+  discovered and invoked the declarative function trap, and retained D3,
+  `T1555`, declared risk 12, and logical-interaction evidence.
+- Verification: deception engine 94/94; both complete Go proxy suites PASS;
+  MITRE 34/34; session module 256/256; evidence store 16/16; frozen baseline
+  `baseline-1788427577-a2cec9` 40/40; authoritative state PASS (PostgreSQL 19,
+  MySQL 13); local predeployment security gate 19/19.
+- Runtime was restored to default database-mapped world selection. No public
+  exposure, production data, deployment, arbitrary generated SQL execution,
+  strategy-space expansion, or GitHub push occurred.

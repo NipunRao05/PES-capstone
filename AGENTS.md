@@ -429,6 +429,7 @@ Deceptive HR base-world realism           VERIFIED (2026-09-02; temporal integri
 PostgreSQL metadata consistency           VERIFIED (2026-09-02; info_schema/pg_catalog/psql)
 PostgreSQL stateful deceptive CRUD        VERIFIED (2026-09-02; bounded id predicates)
 Realism + protocol corrective pass        VERIFIED (2026-09-02; bounded audit fixes)
+Extensible base worlds and traps          VERIFIED (2026-09-03; declarative table/function traps)
 Commitment/world ledger                  PENDING
 Attack-path registry and steering        PENDING
 Post-success intervention registry       PENDING

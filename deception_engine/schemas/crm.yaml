@@ -85,6 +85,11 @@ tables:
     exposure_depth: 3
     row_count: 6
     is_trap: true
+    trap_id: "CRM-TABLE-AWS-CREDENTIALS-001"
+    trap_kind: "credential_table"
+    strategy_id: "D3"
+    mitre_technique_id: "T1555"
+    risk_score: 12
     description: "TRAP — AWS IAM credentials for CRM infrastructure"
     columns:
       - {name: id,              type: pk_int}
@@ -99,6 +104,11 @@ tables:
     exposure_depth: 3
     row_count: 9
     is_trap: true
+    trap_id: "CRM-TABLE-ADMIN-TOKENS-001"
+    trap_kind: "credential_table"
+    strategy_id: "D3"
+    mitre_technique_id: "T1555"
+    risk_score: 12
     description: "TRAP — CRM admin access tokens"
     columns:
       - {name: id,              type: pk_int}
@@ -113,6 +123,11 @@ tables:
     exposure_depth: 3
     row_count: 22
     is_trap: true
+    trap_id: "CRM-TABLE-BACKUP-PASSWORDS-001"
+    trap_kind: "backup_table"
+    strategy_id: "D2"
+    mitre_technique_id: "T1555"
+    risk_score: 12
     description: "TRAP — Emergency break-glass credentials"
     columns:
       - {name: id,              type: pk_int}

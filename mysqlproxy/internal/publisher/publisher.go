@@ -23,34 +23,36 @@ import (
 // RawEvent is the full per-execution query event.
 // Kafka key: session_id (guarantees ordering within a session)
 type RawEvent struct {
-	EventType               string `json:"event_type"` // "query"
-	Protocol                string `json:"protocol"`
-	SessionID               string `json:"session_id"`
-	Timestamp               string `json:"timestamp"`
-	ClientIP                string `json:"client_ip"`
-	Username                string `json:"username"`
-	Database                string `json:"database"`
-	QueryRaw                string `json:"query_raw"`
-	QueryNormalized         string `json:"query_normalized"`
-	Fingerprint             string `json:"fingerprint"`
-	ProtocolMode            string `json:"protocol_mode"`
-	QueryLength             int    `json:"query_length"`
-	BytesIn                 int64  `json:"bytes_in"`
-	BytesOut                int64  `json:"bytes_out"`
-	OutcomeVerified         bool   `json:"outcome_verified"`
-	Success                 bool   `json:"success"`
-	Authority               string `json:"authority,omitempty"`
-	TransactionState        string `json:"transaction_state,omitempty"`
-	ErrorCode               string `json:"error_code,omitempty"`
-	EventSchemaVersion      string `json:"event_schema_version,omitempty"`
-	WorldID                 string `json:"world_id,omitempty"`
-	AssetID                 string `json:"asset_id,omitempty"`
-	AssetKind               string `json:"asset_kind,omitempty"`
-	TrapTriggered           bool   `json:"trap_triggered"`
-	TrapID                  string `json:"trap_id,omitempty"`
-	TrapKind                string `json:"trap_kind,omitempty"`
-	StrategyID              string `json:"strategy_id,omitempty"`
-	StrategyRegistryVersion string `json:"strategy_registry_version,omitempty"`
+	EventType               string  `json:"event_type"` // "query"
+	Protocol                string  `json:"protocol"`
+	SessionID               string  `json:"session_id"`
+	Timestamp               string  `json:"timestamp"`
+	ClientIP                string  `json:"client_ip"`
+	Username                string  `json:"username"`
+	Database                string  `json:"database"`
+	QueryRaw                string  `json:"query_raw"`
+	QueryNormalized         string  `json:"query_normalized"`
+	Fingerprint             string  `json:"fingerprint"`
+	ProtocolMode            string  `json:"protocol_mode"`
+	QueryLength             int     `json:"query_length"`
+	BytesIn                 int64   `json:"bytes_in"`
+	BytesOut                int64   `json:"bytes_out"`
+	OutcomeVerified         bool    `json:"outcome_verified"`
+	Success                 bool    `json:"success"`
+	Authority               string  `json:"authority,omitempty"`
+	TransactionState        string  `json:"transaction_state,omitempty"`
+	ErrorCode               string  `json:"error_code,omitempty"`
+	EventSchemaVersion      string  `json:"event_schema_version,omitempty"`
+	WorldID                 string  `json:"world_id,omitempty"`
+	AssetID                 string  `json:"asset_id,omitempty"`
+	AssetKind               string  `json:"asset_kind,omitempty"`
+	TrapTriggered           bool    `json:"trap_triggered"`
+	TrapID                  string  `json:"trap_id,omitempty"`
+	TrapKind                string  `json:"trap_kind,omitempty"`
+	TrapMitreTechniqueID    string  `json:"trap_mitre_technique_id,omitempty"`
+	TrapRiskScore           float64 `json:"trap_risk_score,omitempty"`
+	StrategyID              string  `json:"strategy_id,omitempty"`
+	StrategyRegistryVersion string  `json:"strategy_registry_version,omitempty"`
 }
 
 // AuthEvent is published on every authentication attempt (success or failure).
@@ -312,6 +314,7 @@ func (p *Publisher) ingestLoop(ctx context.Context, events <-chan interceptor.Qu
 				EventSchemaVersion: qe.EventSchemaVersion,
 				WorldID:            qe.WorldID, AssetID: qe.AssetID, AssetKind: qe.AssetKind,
 				TrapTriggered: qe.TrapTriggered, TrapID: qe.TrapID, TrapKind: qe.TrapKind,
+				TrapMitreTechniqueID: qe.TrapMitreTechniqueID, TrapRiskScore: qe.TrapRiskScore,
 				StrategyID: qe.StrategyID, StrategyRegistryVersion: qe.StrategyRegistryVersion,
 			}
 			select {

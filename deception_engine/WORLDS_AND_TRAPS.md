@@ -52,6 +52,12 @@ documented at the top of `generator.py`; examples include `pk_int`, `uuid`,
 `name`, `email`, `choice`, `past_datetime`, `password`, `api_key`, and
 `aws_access_key`.
 
+The loader validates every table and function before activation: identifiers,
+column names, generator names, bounds, duplicate columns/trap IDs, exposure
+depth, foreign keys, and trap metadata. An `fk` must point to a declared
+`pk_int` column, for example `ref: customers.id`; generated values are then
+bounded by that parent table's effective per-session row count.
+
 Never put literal secrets, credentials, real people, production rows, or raw SQL
 in a world file.
 
@@ -95,14 +101,17 @@ functions:
       - {name: access_token, type: api_key}
 ```
 
-Use an already approved strategy:
+Use a strategy currently marked `APPROVED` by `GET /strategies`. The common
+content choices are:
 
 - `D2`: backup/archive lure
 - `D3`: credential/token/key lure
 - `D4`: sensitive-data lure
 
-An invalid/unapproved strategy, unsafe identifier, duplicate database alias, or
-malformed function definition makes that world fail closed during loading.
+An invalid/unapproved strategy, unsafe identifier, duplicate database alias,
+duplicate trap ID, unknown generator, broken foreign key, or malformed asset
+makes the configuration fail closed. The previous configuration remains active
+when a reload candidate fails validation.
 
 Exposure depths are 1-3. A depth-2 function becomes available after a successful
 access to a currently visible depth-1 asset. A guessed hidden function returns a
@@ -117,20 +126,38 @@ SELECT * FROM legacy_token_export();
 Projection, `LIMIT`, and `OFFSET` are also supported. Arbitrary function SQL is
 not executed; rows are generated deterministically inside the deception engine.
 
-## Apply only the changed services
+## Validate and activate YAML-only changes
 
-Do not start the full stack. If the required existing dependencies are already
-running, rebuild/recreate the deception engine and only the protocol proxy you
-will use:
+The Compose service mounts `deception_engine/schemas` read-only. After the
+initial deployment, adding or editing a YAML world does not require an image
+rebuild. First disconnect demo/attacker clients, then inspect and reload:
 
 ```powershell
-docker compose -f docker-compose.yml up -d --no-deps --build deception-engine pgproxy
+Invoke-RestMethod http://127.0.0.1:8001/worlds
+Invoke-RestMethod -Method Post http://127.0.0.1:8001/worlds/reload
+Invoke-RestMethod http://127.0.0.1:8001/readyz
 ```
 
-or:
+Reload is rejected with HTTP 409 while any session is active. This prevents a
+schema or trap change from contradicting facts already observed in that
+session. Invalid YAML is rejected with HTTP 400 and does not replace the last
+known-good in-memory configuration.
+
+Changing `DECEPTION_ACTIVE_WORLD` itself still requires recreating the
+deception-engine because environment selection is read at process startup:
 
 ```powershell
-docker compose -f docker-compose.yml up -d --no-deps --build deception-engine mysqlproxy
+docker compose -f docker-compose.yml up -d --no-deps --force-recreate deception-engine
+```
+
+## Apply source-code changes once
+
+For the initial rollout of this feature (or later source-code changes), do not
+start the full stack. Rebuild/recreate the deception engine and the protocol
+proxies:
+
+```powershell
+docker compose -f docker-compose.yml up -d --no-deps --build deception-engine pgproxy mysqlproxy
 ```
 
 Because the proxy event schema changed, rebuild `mitre-agent`, `session-module`,
@@ -198,12 +225,26 @@ That event is mapped generically to MITRE rule `R001_trap_table_access`, the
 YAML-declared technique `T1555`, critical trap risk, evidence-store trap history, and the existing
 trap-trigger metric used by scaling and Grafana.
 
+## Recommended base-world workflow
+
+1. Model the ordinary fictional business world first at depth 1.
+2. Add coherent sensitive/lure assets at depth 2 with valid foreign keys.
+3. Add requirement-specific traps at depth 2 or 3, each with a unique `trap_id`.
+4. Check `/worlds`, drain sessions, call `/worlds/reload`, and confirm `/readyz`.
+5. Demo normal reads, catalog progression, trap access, MITRE evidence, and the
+   trap metric in that order.
+
+The YAML world—not the harmless backing `testdb`—is the attacker-facing data
+contract. Keep it fictional and internally coherent. Do not import production
+database rows or credentials into the world files.
+
 ## Immediate boundaries
 
-- World YAML is loaded when deception-engine starts; there is no hot reload yet.
+- YAML hot reload is local-instance scoped and requires all sessions to drain;
+  a multi-replica deployment should roll all deception-engine replicas together.
 - Function traps are deterministic set-returning functions with no arguments.
-- New strategy classes still require registry/policy review; reuse D2/D3/D4 for
-  immediate traps.
+- New strategy classes still require the existing registry/policy review;
+  adding a trap never expands the approved action space.
 - Existing content strategies are not attack paths. P0-P4 steering, commitment
   ledgers, and post-success interventions remain pending by design.
 - PostgreSQL simple-query and MySQL text-query paths carry the new outcome

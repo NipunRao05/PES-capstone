@@ -473,6 +473,8 @@ services:
       DECEPTION_ACTIVE_WORLD: "${DECEPTION_ACTIVE_WORLD:-}"
       DECEPTION_PORT: "3306"
       PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./deception_engine/schemas:/app/schemas:ro
     depends_on:
       redis-deception:
         condition: service_started

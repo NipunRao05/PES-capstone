@@ -20,7 +20,7 @@ tables:
       - {name: full_name,      type: name}
       - {name: email,          type: email,        domain: "@company.internal"}
       - {name: department,     type: choice,        choices: [Engineering, Finance, HR, Sales, Legal, Operations, IT, Executive]}
-      - {name: job_title,      type: choice}
+      - {name: job_title,      type: job_title}
       - {name: seniority_level,type: int_range,     min: 1, max: 6}
       - {name: hire_date,      type: past_date,     years_back: 10}
       - {name: salary,         type: int_range,     min: 47000, max: 300000}
@@ -83,6 +83,11 @@ tables:
     exposure_depth: 3
     row_count: 15
     is_trap: true
+    trap_id: "HR-TABLE-API-KEYS-BACKUP-001"
+    trap_kind: "backup_table"
+    strategy_id: "D2"
+    mitre_technique_id: "T1213.006"
+    risk_score: 12
     description: "TRAP — Legacy backup of API credentials"
     columns:
       - {name: id,             type: pk_int}
@@ -95,6 +100,11 @@ tables:
     exposure_depth: 3
     row_count: 12
     is_trap: true
+    trap_id: "HR-TABLE-EXECUTIVE-SALARY-001"
+    trap_kind: "sensitive_data_table"
+    strategy_id: "D4"
+    mitre_technique_id: "T1213.006"
+    risk_score: 12
     description: "TRAP — Executive compensation details"
     columns:
       - {name: id,             type: pk_int}
@@ -109,6 +119,11 @@ tables:
     exposure_depth: 3
     row_count: 8
     is_trap: true
+    trap_id: "HR-TABLE-PROD-CREDENTIALS-001"
+    trap_kind: "credential_table"
+    strategy_id: "D3"
+    mitre_technique_id: "T1555"
+    risk_score: 12
     description: "TRAP — Production system credentials"
     columns:
       - {name: id,             type: pk_int}

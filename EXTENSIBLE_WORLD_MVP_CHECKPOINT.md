@@ -1,8 +1,8 @@
-# Extensible Base-World and Trap MVP — Work-in-Progress Checkpoint
+# Extensible Base-World and Trap MVP — Verification Checkpoint
 
 Date: 2026-09-03
 
-Status: **SOURCE-LEVEL WORK IN PROGRESS — DO NOT CLAIM LIVE VERIFICATION**
+Status: **VERIFIED LOCALLY AND LIVE — DECLARATIVE TABLE/FUNCTION SCOPE**
 
 ## Intent
 
@@ -105,81 +105,64 @@ commitment ledger, or I0-I3 intervention system.
 - Added `deception_engine/WORLDS_AND_TRAPS.md` with the YAML contract, example
   table/function traps, selective rebuild commands, and example client queries.
 
-## Verification completed before stopping
+## Verification
 
-No containers were started.
+- Complete deception-engine suite: **94/94 PASS**. This includes strict world,
+  table, function, generator, foreign-key, duplicate-trap, strategy, projection,
+  exposure-depth, reload, and mutation validation.
+- MySQL and PostgreSQL proxy suites: **PASS**, including structured world,
+  asset, trap, strategy, declared MITRE technique, and risk propagation.
+- MITRE agent: **34/34 PASS**; session module: **256/256 PASS**; evidence store:
+  **16/16 PASS** against freshly built images.
+- Frozen live baseline `baseline-1788427577-a2cec9`: **40/40 PASS** after the
+  trap case followed the same progressive-exposure contract as real sessions.
+- Authoritative live state validation: **PASS** with 19 PostgreSQL and 13 MySQL
+  verified outcomes, including CRUD, rollback, permissions, discovery, and
+  contradiction checks.
+- Local predeployment security gate: **19/19 PASS**; no public exposure or
+  deployment was performed.
+- Live `research` world validation passed through both real proxies. Each client
+  traversed its synthetic base tables, discovered `legacy_token_export`, and
+  received deterministic synthetic rows. Evidence sessions
+  `90c9d777-6805-42f8-9bc5-dab36be2c1d7` (PostgreSQL) and
+  `ca3f06d8-2b57-4b9b-a77b-bcb531180253` (MySQL) retained the declared function
+  trap identity, D3 strategy, `T1555`, risk 12, and logical interaction.
+- A closed-session `POST /worlds/reload` completed successfully and advanced the
+  generation. Active sessions reject reload; invalid candidates fail atomically
+  while the last valid world set remains active.
 
-- Python syntax compilation passed for the edited Python modules before the last
-  declarative MITRE/risk metadata additions.
-- YAML parsing passed for all world files.
-- MySQL proxy: `go test ./...` passed.
-- PostgreSQL proxy: `go test ./...` passed.
-- MITRE focused suite: 32/32 passed.
-- Evidence-store focused suite: 16/16 passed.
-- Authoritative/behavior state focused suites: 21/21 passed.
-- Extensible-world loader tests: two passed and the generator test was skipped
-  because the host Python environment lacks Faker.
-- `git diff --check` reported no patch-format errors; only Windows line-ending
-  warnings.
+## Verified operator contract
 
-The complete deception-engine suite could not run on the host because the host
-Python environment lacks FastAPI, Uvicorn, and Faker. The Docker daemon was not
-available, so image builds and live integration were not attempted.
+1. Define a coherent synthetic base world in one
+   `deception_engine/schemas/<world>.yaml` file.
+2. Add ordinary tables and then declarative table or no-argument set-returning
+   function traps with unique structured metadata.
+3. Inspect `GET /worlds`, drain active sessions, and call `POST /worlds/reload`.
+4. Select a fixed world with `DECEPTION_ACTIVE_WORLD=<world>` when required, or
+   retain database-name/alias mapping.
 
-## Incomplete work / resume blockers
+The loader fails closed on malformed identifiers, generators, columns, ranges,
+foreign keys, trap metadata, duplicate trap IDs, unsupported strategy/protocol
+combinations, or unsafe configuration keys. Declarative function bodies are
+never executed as SQL; only bounded deterministic generators create synthetic
+rows.
 
-### Must finish before calling the MVP deployable
+## Deliberate boundaries / later work
 
-1. **Finish declarative MITRE/risk propagation through both Go proxies.**
-   The YAML and Python layers now contain `trap_mitre_technique_id` and
-   `trap_risk_score`, but these two newest fields have not yet been added to the
-   Go deception-response, interceptor, and publisher structs. Until completed,
-   the trap still reaches generic R001 but falls back to R001's default
-   `T1213.006`/critical scoring instead of the YAML-declared `T1555` value.
-
-2. **Re-run syntax and focused suites after the last Python edits.**
-   Work was stopped immediately after those edits at the user's request.
-
-3. **Run the full deception-engine tests in its container/runtime.**
-   Add focused tests for authorized function response, hidden-function failure,
-   projection, LIMIT/OFFSET, routine discovery, strategy rejection, and the rule
-   that metadata visibility never counts as a trigger.
-
-4. **Perform one bounded live end-to-end validation.**
-   Rebuild/recreate only `deception-engine`, one selected proxy, `mitre-agent`,
-   `session-module`, and `evidence-store`. Verify generated rows, one query event,
-   one MITRE event, one evidence trap record, and one aggregate Grafana/scaling
-   trap increment. Do not start the whole stack unless dependencies are absent.
-
-5. **Review/update frozen baseline expectations.**
-   Database enumeration now auto-discovers `research_production`; exact-list
-   baseline fixtures may need an intentional update or database visibility may
-   need to be restricted to the active world.
-
-### Strengthening for the next pass
-
-- Validate table definitions as strictly as function definitions, including
-  column generator names and duplicate columns.
-- Add PostgreSQL `pg_proc` discovery for clients using `\df`; immediate discovery
-  currently uses `information_schema.routines` and in-world clues.
-- Add hot reload or an operator reload endpoint if restart-free YAML changes are
-  required.
-- Support only deliberately approved function argument contracts; current MVP is
-  no-argument set-returning functions.
-- Add explicit Grafana dimensions/panels by `world_id`, `trap_id`, and
-  `trap_kind`. The existing dashboard receives the aggregate trigger count only.
-- Decide whether a newly proposed strategy beyond D2/D3/D4 needs the existing
-  blue-team registry approval/validation workflow.
-- Design realism/consistency fixtures for whichever final base world replaces
-  the research example.
-- Later, keep content assets (D strategies), attack paths (P plans), and defender
-  interventions (I actions) as separate registries when implementing the approved
-  two-stage dynamic plan.
+- Function traps are deliberately bounded to no-argument set-returning functions.
+- PostgreSQL discovery supports `information_schema.routines`; fuller `pg_proc`
+  compatibility can be added if a target client requires it.
+- Existing dashboards receive the generic trap total; per-world/trap panels are
+  still future observability work.
+- A new strategy ID still requires the existing human review and strategy
+  registry workflow. Adding a trap does not expand the agent's action space.
+- Content assets (D strategies), attack paths (P plans), and defender
+  interventions (I actions) remain separate. This work does not implement the
+  planned steering, commitment ledger, or interventions.
 
 ## Current repository state
 
-- Changes are uncommitted in the working tree.
-- No GitHub push was performed.
-- No Docker/container state was changed.
-- The source tree should be treated as a resumable implementation checkpoint,
-  not as a completed verification record.
+- Completion changes are uncommitted in the working tree.
+- No GitHub push, public exposure, or production deployment was performed.
+- The Compose stack is healthy and the deception engine was restored to the
+  default database-mapped world after the bounded `research` demonstration.

@@ -46,6 +46,8 @@ type QueryEvent struct {
 	TrapTriggered           bool
 	TrapID                  string
 	TrapKind                string
+	TrapMitreTechniqueID    string
+	TrapRiskScore           float64
 	StrategyID              string
 	StrategyRegistryVersion string
 }
@@ -64,6 +66,8 @@ type QueryOutcome struct {
 	TrapTriggered           bool
 	TrapID                  string
 	TrapKind                string
+	TrapMitreTechniqueID    string
+	TrapRiskScore           float64
 	StrategyID              string
 	StrategyRegistryVersion string
 }
@@ -139,6 +143,7 @@ func (i *Interceptor) InterceptSimpleOutcome(sess *session.Session, sql string, 
 		EventSchemaVersion: outcome.EventSchemaVersion,
 		WorldID:            outcome.WorldID, AssetID: outcome.AssetID, AssetKind: outcome.AssetKind,
 		TrapTriggered: outcome.TrapTriggered, TrapID: outcome.TrapID, TrapKind: outcome.TrapKind,
+		TrapMitreTechniqueID: outcome.TrapMitreTechniqueID, TrapRiskScore: outcome.TrapRiskScore,
 		StrategyID: outcome.StrategyID, StrategyRegistryVersion: outcome.StrategyRegistryVersion,
 	}
 

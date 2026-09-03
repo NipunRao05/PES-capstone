@@ -1,6 +1,6 @@
 # Deterministic Baseline Regression
 
-This bounded local harness captures the Phase 1 deterministic behavior through the real MySQL and PostgreSQL proxies. It validates protocol output, latency, evidence correlation, MITRE mapping, trap behavior, logical scaling decisions, and the AI Agent v1 brief.
+This bounded local harness captures the Phase 1 deterministic behavior through the real MySQL and PostgreSQL proxies. It validates protocol output, latency, evidence correlation, MITRE mapping, trap behavior, logical scaling decisions, and the AI Agent v1 brief. The trap case traverses depth-1 and depth-2 assets in one MySQL connection before accessing the depth-3 trap; a fresh-session trap guess is intentionally hidden.
 
 Run from the repository root while the verified Compose stack is running:
 

@@ -27,7 +27,10 @@ services:
       DECEPTION_POSTGRES_SERVER_VERSION: "16.13"
       DECEPTION_DATABASE: "testdb"
       DECEPTION_SCHEMA: "public"
+      DECEPTION_ACTIVE_WORLD: "${DECEPTION_ACTIVE_WORLD:-}"
       DECEPTION_PORT:            "3306"
+    volumes:
+      - ./schemas:/app/schemas:ro
     depends_on:
       redis:
         condition: service_healthy

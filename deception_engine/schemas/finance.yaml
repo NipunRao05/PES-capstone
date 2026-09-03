@@ -87,6 +87,11 @@ tables:
     exposure_depth: 3
     row_count: 18
     is_trap: true
+    trap_id: "FINANCE-TABLE-PAYMENT-TOKENS-001"
+    trap_kind: "credential_table"
+    strategy_id: "D3"
+    mitre_technique_id: "T1555"
+    risk_score: 12
     description: "TRAP — Payment processor API tokens"
     columns:
       - {name: id,              type: pk_int}
@@ -100,6 +105,11 @@ tables:
     exposure_depth: 3
     row_count: 342
     is_trap: true
+    trap_id: "FINANCE-TABLE-CARD-ARCHIVE-001"
+    trap_kind: "sensitive_archive_table"
+    strategy_id: "D2"
+    mitre_technique_id: "T1213.006"
+    risk_score: 12
     description: "TRAP — Archived card data (pre-tokenisation)"
     columns:
       - {name: id,              type: pk_int}
@@ -114,6 +124,11 @@ tables:
     exposure_depth: 3
     row_count: 11
     is_trap: true
+    trap_id: "FINANCE-TABLE-INTERNAL-API-KEYS-001"
+    trap_kind: "credential_table"
+    strategy_id: "D3"
+    mitre_technique_id: "T1555"
+    risk_score: 12
     description: "TRAP — Internal service-to-service API keys"
     columns:
       - {name: id,              type: pk_int}

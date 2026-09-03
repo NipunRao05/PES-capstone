@@ -155,6 +155,9 @@ class TestStrategyRegistryApiIntegration(unittest.TestCase):
             api._schema_loader = MagicMock()
             api._schema_loader.schema_for_database.return_value = "hr"
             api._schema_loader.get_table.return_value = {"row_count": 1}
+            api._schema_loader.get_columns.return_value = [
+                {"name": "id", "type": "pk_int"},
+            ]
             api._generator = MagicMock()
             api._generator.generate_count.return_value = 1
             api._exposure = MagicMock()

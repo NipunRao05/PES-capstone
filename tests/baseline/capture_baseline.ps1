@@ -102,7 +102,7 @@ $executions = [ordered]@{
   mysql_benign = Invoke-MySqlQuery "SELECT 1 AS $($markers.mysql_benign);"
   postgres_benign = Invoke-PostgresQuery "SELECT current_database() AS database_name, current_user AS user_name, 1 AS $($markers.postgres_benign);"
   catalog_enumeration = Invoke-MySqlQuery "SELECT 1 AS $($markers.catalog_enumeration); SHOW DATABASES;"
-  trap_table = Invoke-MySqlQuery "SELECT *, 1 AS $($markers.trap_table) FROM api_keys_backup LIMIT 1;"
+  trap_table = Invoke-MySqlQuery "SELECT id FROM employees LIMIT 1; SELECT employee_id FROM payroll LIMIT 1; SELECT *, 1 AS $($markers.trap_table) FROM api_keys_backup LIMIT 1;"
 }
 
 $evidence = Get-EvidenceSessions $markers $EvidenceWaitSeconds
