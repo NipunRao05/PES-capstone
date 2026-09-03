@@ -4,6 +4,7 @@ description: "Human Resources database — enterprise production replica"
 # Global settings for this schema
 settings:
   database_name: "hr_production"
+  database_aliases: [hr, hr_prod, production, testdb]
   charset: "utf8mb4"
 
 tables:

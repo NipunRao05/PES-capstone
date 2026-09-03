@@ -1,7 +1,7 @@
 """
 schema_loader.py — Loads YAML schema definitions and provides table lookups.
 
-All three industry schemas (HR, Finance, CRM) are loaded at startup.
+All world definitions in ``schemas/*.yaml`` are loaded at startup.
 The active schema for a session is determined by the database name
 in the connection's event stream.
 """
@@ -9,6 +9,7 @@ in the connection's event stream.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import yaml
@@ -17,8 +18,8 @@ log = logging.getLogger(__name__)
 
 SCHEMAS_DIR = Path(__file__).parent / "schemas"
 
-# Map database names (or prefixes) → schema file
-DATABASE_TO_SCHEMA = {
+# Backward-compatible aliases. New worlds should declare aliases in YAML.
+LEGACY_DATABASE_TO_SCHEMA = {
     "hr":          "hr",
     "hr_prod":     "hr",
     "hr_production": "hr",
@@ -65,6 +66,10 @@ MYSQL_TYPE_BY_SQL_TYPE = {
 }
 
 
+def _safe_identifier(value: str) -> bool:
+    return re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", str(value or "").strip().lower()) is not None
+
+
 class SchemaLoader:
     """
     Loads all YAML schema definitions at startup.
@@ -79,6 +84,8 @@ class SchemaLoader:
         self._dir = schemas_dir or SCHEMAS_DIR
         # schema_name → {tables: {table_name → table_def}}
         self._schemas: dict[str, dict] = {}
+        self._database_to_schema: dict[str, str] = dict(LEGACY_DATABASE_TO_SCHEMA)
+        self._database_names: list[str] = []
         self._load_all()
 
     def _load_all(self) -> None:
@@ -86,11 +93,41 @@ class SchemaLoader:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
-                name = data.get("schema", path.stem)
+                if not isinstance(data, dict):
+                    raise ValueError("world root must be a mapping")
+                name = str(data.get("schema", path.stem)).strip().lower()
+                if not _safe_identifier(name):
+                    raise ValueError(f"unsafe schema/world identifier: {name!r}")
+                if name in self._schemas:
+                    raise ValueError(f"duplicate schema/world identifier: {name!r}")
+                self._validate_functions(data.get("functions", {}))
+                settings = data.get("settings", {}) or {}
+                database_name = str(settings.get("database_name") or name).strip().lower()
+                aliases = settings.get("database_aliases", []) or []
+                if not isinstance(aliases, list):
+                    raise ValueError("settings.database_aliases must be a list")
+                resolved_aliases: list[str] = []
+                for database in [name, database_name, *aliases]:
+                    database = str(database).strip().lower()
+                    if not _safe_identifier(database):
+                        raise ValueError(f"unsafe database alias: {database!r}")
+                    existing = self._database_to_schema.get(database)
+                    if existing and existing != name:
+                        raise ValueError(
+                            f"database alias {database!r} already belongs to {existing!r}"
+                        )
+                    resolved_aliases.append(database)
+
+                # Commit only after the whole world validates.
                 self._schemas[name] = data
+                for database in resolved_aliases:
+                    self._database_to_schema[database] = name
+                if database_name not in self._database_names:
+                    self._database_names.append(database_name)
                 table_count = len(data.get("tables", {}))
-                log.info("Loaded schema '%s': %d tables from %s",
-                         name, table_count, path.name)
+                function_count = len(data.get("functions", {}) or {})
+                log.info("Loaded world '%s': %d tables, %d functions from %s",
+                         name, table_count, function_count, path.name)
             except Exception as e:
                 log.error("Failed to load schema %s: %s", path, e)
 
@@ -99,7 +136,15 @@ class SchemaLoader:
         if not db_name:
             return DEFAULT_SCHEMA
         db_lower = db_name.lower()
-        return DATABASE_TO_SCHEMA.get(db_lower, DEFAULT_SCHEMA)
+        return self._database_to_schema.get(db_lower, DEFAULT_SCHEMA)
+
+    def get_database_names(self) -> list[str]:
+        """Return the canonical attacker-facing database name for every world."""
+        return list(self._database_names)
+
+    def get_world(self, schema_name: str) -> dict:
+        """Return a loaded world definition (read-only by convention)."""
+        return self._schemas.get(schema_name, {})
 
     def get_table(self, schema_name: str, table_name: str) -> dict | None:
         """Return the table definition dict, or None if not found."""
@@ -133,6 +178,80 @@ class SchemaLoader:
         """Return all trap table names for a schema."""
         tables = self.get_all_tables(schema_name)
         return [n for n, d in tables.items() if d.get("is_trap", False)]
+
+    def get_function(self, schema_name: str, function_name: str) -> dict | None:
+        """Return a declarative set-returning function definition."""
+        functions = self._schemas.get(schema_name, {}).get("functions", {}) or {}
+        return functions.get(str(function_name or "").strip().lower())
+
+    def get_all_functions(self, schema_name: str) -> dict[str, dict]:
+        return self._schemas.get(schema_name, {}).get("functions", {}) or {}
+
+    def get_functions_at_depth(self, schema_name: str, max_depth: int) -> list[str]:
+        return [
+            name for name, definition in self.get_all_functions(schema_name).items()
+            if int(definition.get("exposure_depth", 1)) <= max_depth
+        ]
+
+    def get_metadata_routines(
+        self, schema_name: str, max_depth: int, routine_schema: str = "public",
+        routine_catalog: str | None = None,
+    ) -> list[dict]:
+        return [
+            {
+                "routine_catalog": routine_catalog or schema_name,
+                "routine_schema": routine_schema,
+                "routine_name": name,
+                "routine_type": "FUNCTION",
+                "data_type": "record",
+            }
+            for name in self.get_functions_at_depth(schema_name, max_depth)
+        ]
+
+    @staticmethod
+    def _validate_functions(functions: object) -> None:
+        """Fail closed on the small declarative function-trap contract.
+
+        Functions never contain executable SQL or literal token values. They
+        only describe rows generated by the existing deterministic faker.
+        """
+        if functions in (None, {}):
+            return
+        if not isinstance(functions, dict):
+            raise ValueError("functions must be a mapping")
+        for name, definition in functions.items():
+            if not _safe_identifier(str(name)) or not isinstance(definition, dict):
+                raise ValueError(f"invalid function definition: {name!r}")
+            if set(definition) - {
+                "description", "exposure_depth", "row_count", "columns",
+                "is_trap", "trap_id", "trap_kind", "strategy_id",
+                "mitre_technique_id", "risk_score",
+            }:
+                raise ValueError(f"unsupported keys in function {name!r}")
+            depth = int(definition.get("exposure_depth", 1))
+            row_count = int(definition.get("row_count", 1))
+            if depth not in {1, 2, 3} or not 0 <= row_count <= 100_000:
+                raise ValueError(f"invalid depth/row_count for function {name!r}")
+            columns = definition.get("columns", [])
+            if not isinstance(columns, list) or not columns or len(columns) > 128:
+                raise ValueError(f"function {name!r} requires 1..128 generated columns")
+            if any(not isinstance(c, dict) or not _safe_identifier(str(c.get("name", ""))) for c in columns):
+                raise ValueError(f"function {name!r} has invalid columns")
+            if definition.get("is_trap") is True:
+                trap_id = str(definition.get("trap_id") or "")
+                strategy_id = str(definition.get("strategy_id") or "")
+                if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", trap_id):
+                    raise ValueError(f"trap function {name!r} requires a safe trap_id")
+                if strategy_id not in {"D2", "D3", "D4"}:
+                    raise ValueError(
+                        f"trap function {name!r} must use approved MVP strategy D2, D3, or D4"
+                    )
+                technique = str(definition.get("mitre_technique_id") or "")
+                risk_score = float(definition.get("risk_score", 0))
+                if not re.fullmatch(r"T\d{4}(?:\.\d{3})?", technique):
+                    raise ValueError(f"trap function {name!r} requires a MITRE technique ID")
+                if not 0 < risk_score <= 25:
+                    raise ValueError(f"trap function {name!r} risk_score must be in (0, 25]")
 
     def get_row_count(self, schema_name: str, table_name: str) -> int:
         """Return the configured row_count for a table."""

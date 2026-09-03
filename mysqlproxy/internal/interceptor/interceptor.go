@@ -36,25 +36,43 @@ type QueryEvent struct {
 	QueryNormalized string
 	// Fingerprint is a stable FNV-64a hex hash of QueryNormalized.
 	// Same query shape always → same fingerprint, regardless of literals.
-	Fingerprint      string
-	ProtocolMode     string // "text" (COM_QUERY) | "prepared" (COM_STMT_EXECUTE)
-	QueryLength      int
-	BytesIn          int64
-	BytesOut         int64
-	OutcomeVerified  bool
-	Success          bool
-	Authority        string // backend | deception | policy
-	TransactionState string // idle | in_transaction
-	ErrorCode        string
+	Fingerprint             string
+	ProtocolMode            string // "text" (COM_QUERY) | "prepared" (COM_STMT_EXECUTE)
+	QueryLength             int
+	BytesIn                 int64
+	BytesOut                int64
+	OutcomeVerified         bool
+	Success                 bool
+	Authority               string // backend | deception | policy
+	TransactionState        string // idle | in_transaction
+	ErrorCode               string
+	EventSchemaVersion      string
+	WorldID                 string
+	AssetID                 string
+	AssetKind               string
+	TrapTriggered           bool
+	TrapID                  string
+	TrapKind                string
+	StrategyID              string
+	StrategyRegistryVersion string
 }
 
 // QueryOutcome is attached only after a deterministic result is known.
 type QueryOutcome struct {
-	Verified         bool
-	Success          bool
-	Authority        string
-	TransactionState string
-	ErrorCode        string
+	Verified                bool
+	Success                 bool
+	Authority               string
+	TransactionState        string
+	ErrorCode               string
+	EventSchemaVersion      string
+	WorldID                 string
+	AssetID                 string
+	AssetKind               string
+	TrapTriggered           bool
+	TrapID                  string
+	TrapKind                string
+	StrategyID              string
+	StrategyRegistryVersion string
 }
 
 // ─── Interceptor ─────────────────────────────────────────────────────────────
@@ -108,23 +126,27 @@ func (i *Interceptor) InterceptTextQueryOutcome(sess *session.Session, sql strin
 	snap := sess.Snapshot()
 	normalized := NormalizeSQL(sql)
 	i.emit(QueryEvent{
-		SessionID:        snap.ID,
-		Timestamp:        time.Now(),
-		ClientIP:         snap.ClientIP,
-		Username:         snap.Username,
-		Database:         snap.Database,
-		QueryRaw:         sql,
-		QueryNormalized:  normalized,
-		Fingerprint:      FingerprintSQL(normalized),
-		ProtocolMode:     "text",
-		QueryLength:      len(sql),
-		BytesIn:          snap.BytesIn,
-		BytesOut:         snap.BytesOut,
-		OutcomeVerified:  outcome.Verified,
-		Success:          outcome.Success,
-		Authority:        outcome.Authority,
-		TransactionState: outcome.TransactionState,
-		ErrorCode:        outcome.ErrorCode,
+		SessionID:          snap.ID,
+		Timestamp:          time.Now(),
+		ClientIP:           snap.ClientIP,
+		Username:           snap.Username,
+		Database:           snap.Database,
+		QueryRaw:           sql,
+		QueryNormalized:    normalized,
+		Fingerprint:        FingerprintSQL(normalized),
+		ProtocolMode:       "text",
+		QueryLength:        len(sql),
+		BytesIn:            snap.BytesIn,
+		BytesOut:           snap.BytesOut,
+		OutcomeVerified:    outcome.Verified,
+		Success:            outcome.Success,
+		Authority:          outcome.Authority,
+		TransactionState:   outcome.TransactionState,
+		ErrorCode:          outcome.ErrorCode,
+		EventSchemaVersion: outcome.EventSchemaVersion,
+		WorldID:            outcome.WorldID, AssetID: outcome.AssetID, AssetKind: outcome.AssetKind,
+		TrapTriggered: outcome.TrapTriggered, TrapID: outcome.TrapID, TrapKind: outcome.TrapKind,
+		StrategyID: outcome.StrategyID, StrategyRegistryVersion: outcome.StrategyRegistryVersion,
 	})
 	sess.IncrQueryCount()
 }
@@ -157,23 +179,27 @@ func (i *Interceptor) InterceptStmtExecuteOutcome(sess *session.Session, stmtID 
 
 	normalized := NormalizeSQL(sql)
 	i.emit(QueryEvent{
-		SessionID:        snap.ID,
-		Timestamp:        time.Now(),
-		ClientIP:         snap.ClientIP,
-		Username:         snap.Username,
-		Database:         snap.Database,
-		QueryRaw:         sql,
-		QueryNormalized:  normalized,
-		Fingerprint:      FingerprintSQL(normalized),
-		ProtocolMode:     "prepared",
-		QueryLength:      len(sql),
-		BytesIn:          snap.BytesIn,
-		BytesOut:         snap.BytesOut,
-		OutcomeVerified:  outcome.Verified,
-		Success:          outcome.Success,
-		Authority:        outcome.Authority,
-		TransactionState: outcome.TransactionState,
-		ErrorCode:        outcome.ErrorCode,
+		SessionID:          snap.ID,
+		Timestamp:          time.Now(),
+		ClientIP:           snap.ClientIP,
+		Username:           snap.Username,
+		Database:           snap.Database,
+		QueryRaw:           sql,
+		QueryNormalized:    normalized,
+		Fingerprint:        FingerprintSQL(normalized),
+		ProtocolMode:       "prepared",
+		QueryLength:        len(sql),
+		BytesIn:            snap.BytesIn,
+		BytesOut:           snap.BytesOut,
+		OutcomeVerified:    outcome.Verified,
+		Success:            outcome.Success,
+		Authority:          outcome.Authority,
+		TransactionState:   outcome.TransactionState,
+		ErrorCode:          outcome.ErrorCode,
+		EventSchemaVersion: outcome.EventSchemaVersion,
+		WorldID:            outcome.WorldID, AssetID: outcome.AssetID, AssetKind: outcome.AssetKind,
+		TrapTriggered: outcome.TrapTriggered, TrapID: outcome.TrapID, TrapKind: outcome.TrapKind,
+		StrategyID: outcome.StrategyID, StrategyRegistryVersion: outcome.StrategyRegistryVersion,
 	})
 	sess.IncrQueryCount()
 }

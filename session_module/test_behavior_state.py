@@ -125,6 +125,15 @@ class BehaviorStateTests(unittest.TestCase):
         ))
         self.assertEqual(store.get("trap")["trap_trigger_count"], 0)
 
+    def test_declared_function_trap_does_not_need_a_name_list(self):
+        store = BehaviorStateStore()
+        store.apply_proxy_event(query(
+            "function-trap", "select * from harmless_helper()",
+            "2026-01-01T00:00:00Z", authority="deception",
+            trap_triggered=True, trap_id="CUSTOM-FUNCTION-001",
+        ))
+        self.assertEqual(store.get("function-trap")["trap_trigger_count"], 1)
+
     def test_malformed_values_are_deterministic_and_bounded(self):
         store = BehaviorStateStore(max_sessions=1)
         store.apply_proxy_event({

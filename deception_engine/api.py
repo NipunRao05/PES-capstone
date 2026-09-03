@@ -49,6 +49,7 @@ log = logging.getLogger(__name__)
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+ACTIVE_WORLD = os.environ.get("DECEPTION_ACTIVE_WORLD", "").strip().lower()
 
 # /decide request validation limits. These are defensive API limits; the
 # proxies already apply their own query-size guard before calling /decide.
@@ -78,11 +79,8 @@ BANNER_VERSION        = MYSQL_VERSION
 BANNER_PORT           = os.environ.get("DECEPTION_PORT",            "3306")
 POSTGRES_PORT         = os.environ.get("DECEPTION_POSTGRES_PORT",     "5432")
 
-# Fake database list returned by SHOW DATABASES
-FAKE_DATABASES = [
-    "information_schema", "mysql", "performance_schema",
-    "hr_production", "finance_production", "crm_production",
-]
+# Protocol/system databases returned alongside YAML-discovered base worlds.
+SYSTEM_DATABASES = ["information_schema", "mysql", "performance_schema"]
 
 # System variable → banner value mapping (normalised fingerprint → value)
 SYSTEM_VAR_MAP = {
@@ -624,7 +622,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
     # Use query_normalized for all pattern matching — fingerprint is the FNV hash,
     # not human-readable text. query_normalized is the lowercased SQL template.
     fp = req.query_normalized.strip().lower()
-    schema_name = _schema_loader.schema_for_database(req.database)
+    schema_name = _active_schema_for_request(req.database)
 
     # 1. System variable / banner queries — always fake regardless of level.
     # Use protocol-native column names for PostgreSQL so psql/ORM scanners see
@@ -687,6 +685,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
     if (
         " from information_schema.tables" in fp
         or " from information_schema.columns" in fp
+        or " from information_schema.routines" in fp
     ):
         return await _handle_information_schema(req, schema_name, fp)
 
@@ -704,6 +703,13 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
         or "show full tables" in fp
     ):
         return await _handle_show_tables(req, schema_name)
+
+    # Declarative set-returning functions are synthetic assets, not SQL loaded
+    # into the backing database. A new function trap therefore requires only a
+    # world YAML entry and an existing approved strategy ID.
+    function_name = _extract_function_call(fp)
+    if function_name and _schema_loader.get_function(schema_name, function_name):
+        return await _handle_function_select(req, function_name, schema_name)
 
     table = req.table or _extract_table(fp)
 
@@ -743,7 +749,12 @@ _INFORMATION_SCHEMA_COLUMN_COLUMNS = [
     "ordinal_position", "column_default", "is_nullable", "data_type",
     "numeric_precision", "numeric_scale",
 ]
-_SUPPORTED_METADATA_FILTERS = {"table_schema", "table_name", "column_name"}
+_INFORMATION_SCHEMA_ROUTINE_COLUMNS = [
+    "routine_catalog", "routine_schema", "routine_name", "routine_type", "data_type",
+]
+_SUPPORTED_METADATA_FILTERS = {
+    "table_schema", "table_name", "column_name", "routine_schema", "routine_name",
+}
 
 
 def _is_pg_catalog_query(query: str) -> bool:
@@ -967,7 +978,13 @@ async def _handle_information_schema(
     """Serve a bounded, query-aware PostgreSQL metadata catalog."""
     depth = _exposure.get_depth(req.session_id)
     is_columns = " from information_schema.columns" in fp
-    if is_columns:
+    is_routines = " from information_schema.routines" in fp
+    if is_routines:
+        available = _INFORMATION_SCHEMA_ROUTINE_COLUMNS
+        rows = _schema_loader.get_metadata_routines(
+            schema_name, depth, routine_catalog=req.database or DEFAULT_DATABASE
+        )
+    elif is_columns:
         available = _INFORMATION_SCHEMA_COLUMN_COLUMNS
         rows = _schema_loader.get_metadata_columns(
             schema_name, depth, table_catalog=req.database or DEFAULT_DATABASE
@@ -985,20 +1002,21 @@ async def _handle_information_schema(
     rows = _filter_metadata_rows(rows, fp)
     columns = _metadata_projection(fp, available)
     projected = [{column: row.get(column) for column in columns} for row in rows]
-    visible_tables = list(dict.fromkeys(row["table_name"] for row in rows))
-    trap_tables = set(_schema_loader.get_trap_tables(schema_name))
+    visible_tables = list(dict.fromkeys(
+        row["table_name"] for row in rows if "table_name" in row
+    ))
 
     return _json_response(DecisionResponse(
         mode="fake",
-        tables=visible_tables if not is_columns else [],
+        tables=visible_tables if not is_columns and not is_routines else [],
         rows=projected,
         columns=columns,
         column_types=[_metadata_result_type(column) for column in columns],
         latency_ms=_latency(req.deception_level, base=35),
         profile="fake_schema",
-        is_trap=bool(trap_tables.intersection(visible_tables)),
         explanation=(
-            f"Filtered information_schema.{'columns' if is_columns else 'tables'} "
+            f"Filtered information_schema."
+            f"{'routines' if is_routines else 'columns' if is_columns else 'tables'} "
             f"depth={depth}, {len(projected)} rows"
         ),
         strategy_id="D1",
@@ -1046,7 +1064,7 @@ def _filter_metadata_rows(rows: list[dict], query: str) -> list[dict]:
     """Apply literal =/LIKE/ILIKE predicates for three metadata fields."""
     where = query.split(" where ", 1)[1] if " where " in query else ""
     predicate_pattern = re.compile(
-        r"(?:(?:\b\w+)\.)?(table_schema|table_name|column_name)\s*"
+        r"(?:(?:\b\w+)\.)?(table_schema|table_name|column_name|routine_schema|routine_name)\s*"
         r"(=|like|ilike)\s*'((?:''|[^'])*)'",
         re.I,
     )
@@ -1133,7 +1151,7 @@ def _validate_metadata_sql(
     if where:
         where = re.split(r"\s+limit\s+", where, maxsplit=1, flags=re.I)[0]
         consumed = re.sub(
-            r"(?:(?:\b\w+)\.)?(?:table_schema|table_name|column_name)\s*(?:=|like|ilike)\s*'(?:''|[^'])*'",
+            r"(?:(?:\b\w+)\.)?(?:table_schema|table_name|column_name|routine_schema|routine_name)\s*(?:=|like|ilike)\s*'(?:''|[^'])*'",
             "", where, flags=re.I,
         )
         consumed = re.sub(r"\s+and\s+", "", consumed, flags=re.I).strip(" ();")
@@ -1212,9 +1230,6 @@ async def _handle_show_tables(
 ) -> JSONResponse:
     depth = _exposure.get_depth(req.session_id)
     visible = _schema_loader.get_tables_at_depth(schema_name, depth)
-    # Check if any trap tables are visible (depth 3)
-    trap_tables = _schema_loader.get_trap_tables(schema_name)
-    is_trap = any(t in visible for t in trap_tables)
     if req.protocol.lower().startswith("postgres"):
         rows = [{"schemaname": "public", "tablename": t} for t in visible]
         columns = ["schemaname", "tablename"]
@@ -1231,7 +1246,6 @@ async def _handle_show_tables(
         column_types=["text"] * len(columns),
         latency_ms=_latency(req.deception_level, base=35),
         profile="fake_schema",
-        is_trap=is_trap,
         explanation=f"Progressive exposure depth={depth}, {len(visible)} tables visible",
         strategy_id="D1",
     ))
@@ -1263,6 +1277,7 @@ async def _handle_count(
     count = max(0, base_count + delta)
 
     is_trap = table_def.get("is_trap", False)
+    asset = _asset_fields(schema_name, "table", table, table_def, is_trap)
     count_column = "count" if req.protocol.lower().startswith("postgres") else "COUNT(*)"
     return _json_response(DecisionResponse(
         mode="fake",
@@ -1273,8 +1288,79 @@ async def _handle_count(
         latency_ms=_latency(req.deception_level, base=20),
         profile="fake_table_data",
         is_trap=is_trap,
+        **asset,
         explanation=f"COUNT for {table}: {count} rows (base={base_count} delta={delta})",
         strategy_id=_strategy_id_for_table(schema_name, table),
+    ))
+
+
+async def _handle_function_select(
+    req: DecisionRequest, function_name: str, schema_name: str
+) -> JSONResponse:
+    """Execute a bounded YAML-declared set-returning synthetic function."""
+    definition = _schema_loader.get_function(schema_name, function_name)
+    if not definition:
+        return _json_response(DecisionResponse(mode="passthrough"))
+
+    depth = _exposure.get_depth(req.session_id)
+    required_depth = max(1, int(definition.get("exposure_depth", 1)))
+    requested_strategy = str(definition.get("strategy_id") or "D0").strip().upper()
+    strategy = _strategy_registry.get(requested_strategy)
+    protocol = "postgres" if req.protocol.lower().startswith("postgres") else "mysql"
+    authorized = (
+        required_depth <= depth
+        and strategy is not None
+        and strategy.approval_status == "APPROVED"
+        and protocol in strategy.supported_protocols
+    )
+    if not authorized:
+        return _function_error(
+            req, function_name,
+            explanation=(
+                f"Managed function unavailable at exposure depth {depth}; "
+                f"required={required_depth} strategy={requested_strategy}"
+            ),
+        )
+
+    columns_def = definition.get("columns", [])
+    available = [column["name"] for column in columns_def]
+    projection = _parse_select_projection(req.query_normalized, available)
+    limit, offset = _parse_limit_offset(req.query_normalized)
+    row_count = int(definition.get("row_count", 1))
+    rows = _generator.generate_rows(
+        columns=columns_def,
+        row_count=row_count,
+        session_id=req.session_id,
+        table_name=f"function:{schema_name}.{function_name}",
+        limit=min(limit, 100),
+        offset=offset,
+    )
+    rows = [{column: row.get(column) for column in projection} for row in rows]
+    _exposure.record_table_access(
+        req.session_id, f"function:{function_name}", required_depth
+    )
+
+    is_trap = definition.get("is_trap") is True
+    asset = _asset_fields(schema_name, "function", function_name, definition, is_trap)
+    if is_trap:
+        log.warning(
+            "TRAP FUNCTION ACCESSED: session=%s function=%s trap_id=%s depth=%d",
+            _short_id(req.session_id), function_name, asset["trap_id"], required_depth,
+        )
+    return _json_response(DecisionResponse(
+        mode="fake",
+        rows=rows,
+        columns=projection,
+        column_types=[
+            _column_sql_type(next(column for column in columns_def if column["name"] == name))
+            for name in projection
+        ],
+        latency_ms=_latency(req.deception_level, base=50),
+        profile="high_value_target" if is_trap else "fake_function_data",
+        is_trap=is_trap,
+        strategy_id=requested_strategy,
+        explanation=f"Synthetic rows from function {function_name}: {len(rows)} returned",
+        **asset,
     ))
 
 
@@ -1347,6 +1433,7 @@ async def _handle_select(
     col_names = _parse_select_projection(req.query_normalized, all_col_names)
     rows = [{column: row.get(column) for column in col_names} for row in rows]
     is_trap = table_def.get("is_trap", False)
+    asset = _asset_fields(schema_name, "table", table, table_def, is_trap)
 
     if is_trap:
         log.warning(
@@ -1365,6 +1452,7 @@ async def _handle_select(
         latency_ms=_latency(req.deception_level, base=45),
         profile="high_value_target" if is_trap else "fake_table_data",
         is_trap=is_trap,
+        **asset,
         explanation=f"Fake rows for {table}: {len(rows)} rows returned",
         strategy_id=_strategy_id_for_table(schema_name, table),
     ))
@@ -1525,14 +1613,59 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
 
 def _visible_databases(req: DecisionRequest) -> list[str]:
     connected = str(getattr(req, "database", "") or DEFAULT_DATABASE)
-    return list(dict.fromkeys([*FAKE_DATABASES, connected]))
+    configured = _schema_loader.get_database_names() if _schema_loader else []
+    return list(dict.fromkeys([*SYSTEM_DATABASES, *configured, connected]))
+
+
+def _active_schema_for_request(database: str) -> str:
+    """Resolve a virtual base world without requiring a real backend database."""
+    if ACTIVE_WORLD and ACTIVE_WORLD in _schema_loader.get_schema_names():
+        return ACTIVE_WORLD
+    if ACTIVE_WORLD:
+        log.error("Configured DECEPTION_ACTIVE_WORLD=%r is not loaded; using database mapping", ACTIVE_WORLD)
+    return _schema_loader.schema_for_database(database)
 
 
 def _strategy_id_for_table(schema_name: str, table_name: str) -> str:
-    """Map only existing approved assets; unknown assets stay on D0."""
-    return _strategy_registry.strategy_for_asset(
-        schema_name, table_name
-    ).strategy_id
+    """Use a declarative strategy when present, else preserve legacy mapping."""
+    definition = _schema_loader.get_table(schema_name, table_name) or {}
+    return _strategy_for_asset_definition(schema_name, table_name, definition).strategy_id
+
+
+def _strategy_for_asset_definition(
+    schema_name: str, asset_name: str, definition: dict
+):
+    requested = str(definition.get("strategy_id") or "").strip().upper()
+    if requested:
+        strategy = _strategy_registry.get(requested)
+        if strategy is not None:
+            return strategy
+        # Missing explicit strategy must fail closed rather than silently turn
+        # a declared trap into D0.
+        return SimpleNamespace(strategy_id=requested, approval_status="REJECTED")
+    return _strategy_registry.strategy_for_asset(schema_name, asset_name)
+
+
+def _asset_fields(
+    world_id: str, asset_kind: str, asset_name: str,
+    definition: dict, trap_triggered: bool,
+) -> dict:
+    asset_id = f"{world_id}.{asset_kind}.{asset_name}"
+    return {
+        "world_id": world_id,
+        "asset_id": asset_id,
+        "asset_kind": asset_kind,
+        "trap_triggered": bool(trap_triggered),
+        "trap_id": str(definition.get("trap_id") or asset_id) if trap_triggered else "",
+        "trap_kind": str(definition.get("trap_kind") or asset_kind) if trap_triggered else "",
+        "trap_mitre_technique_id": (
+            str(definition.get("mitre_technique_id") or "T1213.006")
+            if trap_triggered else ""
+        ),
+        "trap_risk_score": (
+            float(definition.get("risk_score", 12.0)) if trap_triggered else 0.0
+        ),
+    }
 
 
 def _table_access_error(
@@ -1549,7 +1682,7 @@ def _table_access_error(
     raw_depth = _exposure.get_depth(req.session_id)
     current_depth = raw_depth if isinstance(raw_depth, int) else 1
     required_depth = max(1, int(table_def.get("exposure_depth", 1)))
-    strategy = _strategy_registry.strategy_for_asset(schema_name, table_name)
+    strategy = _strategy_for_asset_definition(schema_name, table_name, table_def)
     authorized = (
         required_depth <= current_depth
         and strategy.approval_status == "APPROVED"
@@ -1584,6 +1717,27 @@ def _relation_error(
         error_msg=f"Table '{database}.{table_name}' doesn't exist",
         error_code=1146,
         sqlstate="42S02",
+        explanation=explanation,
+    ))
+
+
+def _function_error(
+    req: DecisionRequest, function_name: str, *, explanation: str = ""
+) -> JSONResponse:
+    protocol = str(getattr(req, "protocol", "mysql") or "mysql").lower()
+    if protocol.startswith("postgres"):
+        return _json_response(DecisionResponse(
+            mode="block",
+            error_msg=f'function {function_name}() does not exist',
+            sqlstate="42883",
+            explanation=explanation,
+        ))
+    database = str(getattr(req, "database", "") or "testdb")
+    return _json_response(DecisionResponse(
+        mode="block",
+        error_msg=f"FUNCTION {database}.{function_name} does not exist",
+        error_code=1305,
+        sqlstate="42000",
         explanation=explanation,
     ))
 
@@ -1651,6 +1805,15 @@ def _extract_table(fp: str) -> str:
     if match:
         return match.group(1).split(".")[-1].lower()
     return ""
+
+
+def _extract_function_call(query: str) -> str:
+    """Extract only the supported SELECT ... FROM [schema.]function() form."""
+    match = re.search(
+        r"\bfrom\s+(?:[a-z_][a-z0-9_$]*\.)?([a-z_][a-z0-9_$]*)\s*\(\s*\)",
+        str(query or ""), re.I,
+    )
+    return match.group(1).lower() if match else ""
 
 
 def _parse_id_predicate(query: str) -> int | None:

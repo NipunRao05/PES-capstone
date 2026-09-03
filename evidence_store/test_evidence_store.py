@@ -244,6 +244,10 @@ class EvidenceSafetyTests(unittest.TestCase):
         trap = {
             "session_id": session_id, "timestamp": "2026-08-28T00:00:02+00:00",
             "technique_id": "T1555", "trap_triggered": True,
+            "world_id": "research", "asset_id": "research.function.legacy_token_export",
+            "asset_kind": "function", "trap_id": "RESEARCH-FUNCTION-TOKEN-001",
+            "trap_kind": "credential_function", "strategy_id": "D3",
+            "strategy_registry_version": "strategy-registry-v1",
         }
         repository.ingest_kafka("mitre-events", {**trap, "event_id": "detail"}, 0, 3)
         repository.ingest_kafka("mitre-sessions", {**trap, "event_id": "summary"}, 0, 4)
@@ -255,6 +259,8 @@ class EvidenceSafetyTests(unittest.TestCase):
         self.assertTrue(all(item["timestamp"].endswith("Z") for item in record["connection_events"]))
         self.assertEqual(len(record["trap_events"]), 1)
         self.assertEqual(record["trap_events"][0]["provenance"], "detailed")
+        self.assertEqual(record["trap_events"][0]["trap_id"], "RESEARCH-FUNCTION-TOKEN-001")
+        self.assertEqual(record["trap_events"][0]["asset_kind"], "function")
         self.assertEqual(
             sum(bool(item["logical_trap_interaction"]) for item in record["mitre_events"]), 1
         )

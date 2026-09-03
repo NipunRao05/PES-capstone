@@ -1,0 +1,62 @@
+schema: research
+description: "Fictional research operations database used as an extensible base-world example"
+
+settings:
+  database_name: "research_production"
+  database_aliases: [research, research_prod]
+  charset: "utf8mb4"
+
+tables:
+  projects:
+    exposure_depth: 1
+    row_count: 42
+    description: "Synthetic internal research projects"
+    columns:
+      - {name: id, type: pk_int}
+      - {name: project_code, type: uuid}
+      - {name: project_name, type: sentence}
+      - {name: owner_email, type: email, domain: "@novacore.example"}
+      - {name: status, type: choice, choices: [active, review, archived]}
+      - {name: created_at, type: past_datetime, days_back: 1200}
+
+  service_inventory:
+    exposure_depth: 1
+    row_count: 18
+    description: "Synthetic service catalogue"
+    columns:
+      - {name: id, type: pk_int}
+      - {name: service_name, type: company}
+      - {name: environment, type: choice, choices: [production, staging, development]}
+      - {name: owner_email, type: email, domain: "@novacore.example"}
+      - {name: endpoint, type: url}
+
+  migration_notes:
+    exposure_depth: 2
+    row_count: 15
+    description: "Synthetic legacy migration notes that hint at an unsafe helper function"
+    columns:
+      - {name: id, type: pk_int}
+      - {name: service_name, type: company}
+      - {name: note, type: sentence}
+      - {name: helper_function, type: choice, choices: [legacy_token_export]}
+      - {name: updated_at, type: past_datetime, days_back: 400}
+
+# Declarative set-returning functions contain no executable SQL and no real
+# credentials. The engine generates stable synthetic rows for SELECT * FROM fn().
+functions:
+  legacy_token_export:
+    exposure_depth: 2
+    row_count: 3
+    description: "Deliberately over-permissive legacy helper exposing synthetic service tokens"
+    is_trap: true
+    trap_id: "RESEARCH-FUNCTION-TOKEN-001"
+    trap_kind: "credential_function"
+    strategy_id: "D3"
+    mitre_technique_id: "T1555"
+    risk_score: 12
+    columns:
+      - {name: service_name, type: choice, choices: [artifact-registry, build-runner, model-gateway]}
+      - {name: environment, type: choice, choices: [production, staging]}
+      - {name: service_user, type: email, domain: "@novacore.example"}
+      - {name: access_token, type: api_key}
+      - {name: last_rotated_at, type: past_datetime, days_back: 730}

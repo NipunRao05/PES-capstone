@@ -174,6 +174,20 @@ class AuthoritativeStateTests(unittest.TestCase):
         self.assertEqual(state["mitre_stage"], "collection")
         self.assertEqual(state["risk_score"], 18.5)
 
+    def test_declared_function_trap_uses_structured_identity(self):
+        structured = event(
+            sql="select * from legacy_token_export()", authority="deception",
+        )
+        structured.update({
+            "trap_triggered": True,
+            "trap_id": "RESEARCH-FUNCTION-TOKEN-001",
+            "asset_id": "research.function.legacy_token_export",
+        })
+        self.store.apply_proxy_event(structured)
+        self.assertIn(
+            "RESEARCH-FUNCTION-TOKEN-001", self.state()["triggered_traps"]
+        )
+
     def test_untrusted_state_inputs_are_bounded(self):
         for index in range(600):
             self.store.apply_proxy_event(event(

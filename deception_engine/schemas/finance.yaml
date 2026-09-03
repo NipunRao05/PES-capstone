@@ -3,6 +3,7 @@ description: "Financial services database — enterprise production replica"
 
 settings:
   database_name: "finance_production"
+  database_aliases: [finance, finance_prod]
   charset: "utf8mb4"
 
 tables:

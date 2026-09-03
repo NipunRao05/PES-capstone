@@ -42,6 +42,18 @@ class DecisionResponse:
     profile:     str = ""        # which deception profile was applied
     explanation: str = ""
     is_trap:     bool = False
+    # Structured v2 outcome metadata. ``trap_triggered`` means the attacker
+    # received a successful response from that trap; mere catalogue visibility
+    # must never set it.
+    event_schema_version: str = "deception-decision-v2"
+    world_id:    str = ""
+    asset_id:    str = ""
+    asset_kind:  str = ""
+    trap_triggered: bool = False
+    trap_id:     str = ""
+    trap_kind:   str = ""
+    trap_mitre_technique_id: str = ""
+    trap_risk_score: float = 0.0
     strategy_id: str = "D0"
     strategy_registry_version: str = ""
 

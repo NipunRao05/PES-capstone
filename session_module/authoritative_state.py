@@ -314,6 +314,11 @@ class AuthoritativeStateStore:
         relations = _extract_relations(sql)
         state.discovered_objects.update(relations)
         if authority == "deception":
+            if raw.get("trap_triggered") is True:
+                trap_identity = str(
+                    raw.get("trap_id") or raw.get("asset_id") or "declared_trap"
+                )[:_MAX_METADATA_CHARS]
+                state.triggered_traps.add(trap_identity)
             state.triggered_traps.update(relations & _TRAP_TABLES)
             return
         if authority != "backend":

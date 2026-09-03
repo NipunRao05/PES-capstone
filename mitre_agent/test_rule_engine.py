@@ -65,12 +65,48 @@ class TestRuleEngine(unittest.TestCase):
             phase="data_discovery",
             event_type="query",
             table=table,
+            trap_triggered=True,
         ))
         self.assertTrue(result.is_trap_triggered)
         self.assertGreaterEqual(result.new_risk_score, self.engine.thresholds["critical"])
         self.assertEqual(result.deception_level, 4)
         self.assertEqual(result.matched_techniques[0].rule_id, "R001_trap_table_access")
         self.assertEqual(result.matched_techniques[0].technique_id, "T1213.006")
+
+    def test_structured_function_trap_is_generic(self):
+        event = MitreAgent._parse_query_event({
+            "session_id": "function-trap",
+            "event_type": "query",
+            "query_normalized": "select * from legacy_token_export()",
+            "outcome_verified": True,
+            "success": True,
+            "authority": "deception",
+            "event_schema_version": "deception-decision-v2",
+            "trap_triggered": True,
+            "trap_id": "RESEARCH-FUNCTION-TOKEN-001",
+            "asset_kind": "function",
+        }, "postgres")
+        self.assertTrue(event.trap_triggered)
+        result = self.engine.evaluate(EvalContext(
+            fingerprint=event.query_normalized,
+            phase="data_discovery",
+            event_type="query",
+            trap_triggered=event.trap_triggered,
+        ))
+        self.assertTrue(result.is_trap_triggered)
+
+    def test_failed_structured_trap_guess_does_not_trigger(self):
+        event = MitreAgent._parse_query_event({
+            "session_id": "failed-function-trap",
+            "event_type": "query",
+            "query_normalized": "select * from legacy_token_export()",
+            "outcome_verified": True,
+            "success": False,
+            "authority": "deception",
+            "event_schema_version": "deception-decision-v2",
+            "trap_triggered": True,
+        }, "postgres")
+        self.assertFalse(event.trap_triggered)
 
     def test_unknown_condition_does_not_match(self):
         # A malformed/unknown condition must fail closed, not accidentally match.

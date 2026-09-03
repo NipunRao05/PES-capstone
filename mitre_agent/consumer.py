@@ -437,6 +437,9 @@ class MitreAgent:
                 phase=event.phase,
                 event_type=event.event_type,
                 table=self._extract_table(event.query_normalized),
+                trap_triggered=event.trap_triggered,
+                trap_mitre_technique_id=event.trap_mitre_technique_id,
+                trap_risk_score=event.trap_risk_score,
                 session_id=event.session_id,
                 client_ip=event.client_ip,
                 query_count=sess.query_count,
@@ -460,9 +463,9 @@ class MitreAgent:
                 if tag not in sess.attack_path:
                     sess.attack_path.append(tag)
             if result.is_trap_triggered:
-                table = ctx.table
-                if table and table not in sess.trap_tables:
-                    sess.trap_tables.append(table)
+                trap_asset = event.trap_id or event.asset_id or ctx.table
+                if trap_asset and trap_asset not in sess.trap_tables:
+                    sess.trap_tables.append(trap_asset)
 
             # Update graph builder
             for match in result.matched_techniques:
@@ -503,6 +506,16 @@ class MitreAgent:
                     is_trap_triggered=result.is_trap_triggered,
                     protocol=event.protocol,
                     database=event.database,
+                    event_schema_version=event.event_schema_version,
+                    world_id=event.world_id,
+                    asset_id=event.asset_id,
+                    asset_kind=event.asset_kind,
+                    trap_id=event.trap_id,
+                    trap_kind=event.trap_kind,
+                    trap_mitre_technique_id=event.trap_mitre_technique_id,
+                    trap_risk_score=event.trap_risk_score,
+                    strategy_id=event.strategy_id,
+                    strategy_registry_version=event.strategy_registry_version,
                 )
                 log_fields = (
                     self._short_id(event.session_id), best.technique_id,
@@ -1030,6 +1043,22 @@ class MitreAgent:
         protocol = MitreAgent._normalise_protocol(raw.get("protocol") or source or raw.get("protocol_mode", "db"))
         database = raw.get("database", "")
         session_id = raw.get("session_id") or MitreAgent._fallback_session_id(protocol, client_ip, username, database)
+        # v2 events carry the authoritative result. A failed guess, metadata
+        # listing, or backend response cannot become a trap trigger. Old events
+        # without this field retain the previous name-based compatibility path.
+        if str(raw.get("event_schema_version") or "").strip() == "deception-decision-v2":
+            trap_triggered = (
+                raw.get("trap_triggered") is True
+                and raw.get("outcome_verified") is True
+                and raw.get("success") is True
+                and str(raw.get("authority") or "").strip().lower() == "deception"
+            )
+        else:
+            try:
+                from phase_classifier import is_trap_table_access
+                trap_triggered = is_trap_table_access(raw.get("query_normalized", ""))
+            except Exception:
+                trap_triggered = False
         return QueryEvent(
             session_id=session_id,
             timestamp=ts,
@@ -1045,6 +1074,22 @@ class MitreAgent:
             phase=raw.get("phase", ""),
             bytes_in=int(MitreAgent._safe_float(raw.get("bytes_in", 0), 0.0)),
             bytes_out=int(MitreAgent._safe_float(raw.get("bytes_out", 0), 0.0)),
+            outcome_verified=raw.get("outcome_verified") is True,
+            success=raw.get("success") is True,
+            authority=str(raw.get("authority") or "")[:32].lower(),
+            event_schema_version=str(raw.get("event_schema_version") or "")[:64],
+            world_id=str(raw.get("world_id") or "")[:128],
+            asset_id=str(raw.get("asset_id") or "")[:256],
+            asset_kind=str(raw.get("asset_kind") or "")[:64],
+            trap_triggered=trap_triggered,
+            trap_id=str(raw.get("trap_id") or "")[:128],
+            trap_kind=str(raw.get("trap_kind") or "")[:128],
+            trap_mitre_technique_id=str(raw.get("trap_mitre_technique_id") or "")[:32],
+            trap_risk_score=max(
+                0.0, min(25.0, MitreAgent._safe_float(raw.get("trap_risk_score"), 0.0))
+            ),
+            strategy_id=str(raw.get("strategy_id") or "")[:32].upper(),
+            strategy_registry_version=str(raw.get("strategy_registry_version") or "")[:128],
         )
 
     @staticmethod

@@ -110,6 +110,8 @@ class RuleEngine:
 
             # Technique lookup
             technique_id = rule.get("mitre_technique", "")
+            if rule.get("id") == "R001_trap_table_access" and ctx.trap_mitre_technique_id:
+                technique_id = ctx.trap_mitre_technique_id
             tm = self._build_technique_match(rule, technique_id, ctx)
             if tm:
                 matched_techniques.append(tm)
@@ -197,6 +199,12 @@ class RuleEngine:
             vals = [v.strip().strip('"').strip("'") for v in vals_str.split(",")]
             return ctx.table in vals
 
+        # Successful structured trap outcome supplied by the proxy/deception
+        # authority. This removes trap-name lists from the live v2 path.
+        if condition.startswith("event.trap_triggered =="):
+            val = condition.split("==", 1)[1].strip().lower()
+            return ctx.trap_triggered is (val == "true")
+
         log.debug("Unrecognised match condition: %s", condition)
         return False
 
@@ -271,6 +279,8 @@ class RuleEngine:
     def _compute_score(self, rule: dict, ctx: EvalContext) -> float:
         scoring = rule.get("scoring", {})
         score = float(scoring.get("base", 0))
+        if rule.get("id") == "R001_trap_table_access" and ctx.trap_risk_score > 0:
+            score = min(25.0, ctx.trap_risk_score)
 
         for modifier in scoring.get("modifiers", []):
             if_clause = modifier.get("if", "")

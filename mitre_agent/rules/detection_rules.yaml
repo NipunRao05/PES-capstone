@@ -26,15 +26,13 @@ globals:
 
 rules:
 
-  # ── Trap table access — highest priority ─────────────────────────────────
+  # ── Verified trap asset access — highest priority ────────────────────────
   - id: R001_trap_table_access
     priority: 1
-    description: "Attacker accessed a honeytoken/trap table — critical signal"
+    description: "Attacker received a successful response from a declared trap asset"
     match:
       any:
-        - event.table in ["api_keys_backup", "salary_executives", "prod_credentials",
-                          "admin_tokens", "backup_passwords", "payment_tokens",
-                          "credit_cards_archive", "internal_api_keys", "aws_credentials"]
+        - event.trap_triggered == true
     conditions: {}           # no conditions — trap access is always critical
     scoring:
       base: 10

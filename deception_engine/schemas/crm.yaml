@@ -3,6 +3,7 @@ description: "Customer Relationship Management — enterprise production replica
 
 settings:
   database_name: "crm_production"
+  database_aliases: [crm, crm_prod]
   charset: "utf8mb4"
 
 tables:

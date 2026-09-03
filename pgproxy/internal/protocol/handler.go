@@ -518,7 +518,16 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 					h.deceptionTxDirty = true
 				}
 				success := strings.EqualFold(dec.Mode, "fake")
-				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: success, Authority: "deception", TransactionState: h.postgresTransactionState(), ErrorCode: dec.SQLState})
+				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{
+					Verified: true, Success: success, Authority: "deception",
+					TransactionState: h.postgresTransactionState(), ErrorCode: dec.SQLState,
+					EventSchemaVersion: dec.EventSchemaVersion,
+					WorldID:            dec.WorldID, AssetID: dec.AssetID, AssetKind: dec.AssetKind,
+					TrapTriggered: success && dec.TrapTriggered,
+					TrapID:        dec.TrapID, TrapKind: dec.TrapKind,
+					StrategyID:              dec.StrategyID,
+					StrategyRegistryVersion: dec.StrategyRegistryVersion,
+				})
 				continue
 			}
 		}
@@ -817,21 +826,30 @@ type deceptionDecisionRequest struct {
 }
 
 type deceptionDecisionResponse struct {
-	Mode         string                   `json:"mode"`
-	Rows         []map[string]interface{} `json:"rows"`
-	Count        *int                     `json:"count"`
-	AffectedRows *int                     `json:"affected_rows"`
-	Columns      []string                 `json:"columns"`
-	ColumnTypes  []string                 `json:"column_types"`
-	Tables       []string                 `json:"tables"`
-	Databases    []string                 `json:"databases"`
-	LatencyMS    int                      `json:"latency_ms"`
-	ErrorMsg     string                   `json:"error_msg"`
-	ErrorCode    int                      `json:"error_code"`
-	SQLState     string                   `json:"sqlstate"`
-	Profile      string                   `json:"profile"`
-	Explanation  string                   `json:"explanation"`
-	IsTrap       bool                     `json:"is_trap"`
+	Mode                    string                   `json:"mode"`
+	Rows                    []map[string]interface{} `json:"rows"`
+	Count                   *int                     `json:"count"`
+	AffectedRows            *int                     `json:"affected_rows"`
+	Columns                 []string                 `json:"columns"`
+	ColumnTypes             []string                 `json:"column_types"`
+	Tables                  []string                 `json:"tables"`
+	Databases               []string                 `json:"databases"`
+	LatencyMS               int                      `json:"latency_ms"`
+	ErrorMsg                string                   `json:"error_msg"`
+	ErrorCode               int                      `json:"error_code"`
+	SQLState                string                   `json:"sqlstate"`
+	Profile                 string                   `json:"profile"`
+	Explanation             string                   `json:"explanation"`
+	IsTrap                  bool                     `json:"is_trap"`
+	EventSchemaVersion      string                   `json:"event_schema_version"`
+	WorldID                 string                   `json:"world_id"`
+	AssetID                 string                   `json:"asset_id"`
+	AssetKind               string                   `json:"asset_kind"`
+	TrapTriggered           bool                     `json:"trap_triggered"`
+	TrapID                  string                   `json:"trap_id"`
+	TrapKind                string                   `json:"trap_kind"`
+	StrategyID              string                   `json:"strategy_id"`
+	StrategyRegistryVersion string                   `json:"strategy_registry_version"`
 }
 
 func (h *Handler) deceptionBreakerOpen() bool {

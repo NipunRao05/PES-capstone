@@ -63,6 +63,20 @@ class QueryEvent:
     phase:            str = ""       # from phase_classifier: recon/enumeration/...
     bytes_in:         int = 0
     bytes_out:        int = 0
+    outcome_verified: bool = False
+    success:          bool = False
+    authority:        str = ""
+    event_schema_version: str = ""
+    world_id:         str = ""
+    asset_id:         str = ""
+    asset_kind:       str = ""
+    trap_triggered:   bool = False
+    trap_id:          str = ""
+    trap_kind:        str = ""
+    trap_mitre_technique_id: str = ""
+    trap_risk_score:  float = 0.0
+    strategy_id:      str = ""
+    strategy_registry_version: str = ""
 
 
 # ─── Session profile (from session-profiles topic) ────────────────────────────
@@ -103,6 +117,9 @@ class EvalContext:
     phase:               str
     event_type:          str
     table:               str = ""    # extracted from query_normalized if available
+    trap_triggered:      bool = False
+    trap_mitre_technique_id: str = ""
+    trap_risk_score:     float = 0.0
 
     # From session (accumulated so far)
     session_id:          str = ""
@@ -164,6 +181,16 @@ class MitreEvent:
     is_trap_triggered:   bool = False
     protocol:            str = ""       # mysql/postgres when known
     database:            str = ""
+    event_schema_version: str = ""
+    world_id:            str = ""
+    asset_id:            str = ""
+    asset_kind:          str = ""
+    trap_id:             str = ""
+    trap_kind:           str = ""
+    trap_mitre_technique_id: str = ""
+    trap_risk_score:     float = 0.0
+    strategy_id:         str = ""
+    strategy_registry_version: str = ""
 
 
 # ─── Session-level MITRE summary ──────────────────────────────────────────────

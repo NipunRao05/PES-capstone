@@ -219,7 +219,8 @@ class BehaviorAccumulator:
             r"set\s+session\s+authorization)\b", sql
         ))
         is_destructive = bool(re.match(r"^(?:drop|truncate|delete|alter)\b", sql))
-        is_trap_interest = bool(tables & _TRAP_TABLES)
+        structured_trap = raw.get("trap_triggered") is True
+        is_trap_interest = structured_trap or bool(tables & _TRAP_TABLES)
 
         for attr, matched in (
             ("catalog_query_count", is_catalog),
