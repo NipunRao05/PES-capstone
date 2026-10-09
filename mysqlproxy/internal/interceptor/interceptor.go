@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"github.com/mysqlproxy/internal/principal"
 	"hash/fnv"
 	"regexp"
 	"strings"
@@ -27,13 +28,15 @@ import (
 // QueryEvent is the captured, normalized query with full session metadata.
 // Identical schema to the PostgreSQL proxy's QueryEvent for unified Kafka consumption.
 type QueryEvent struct {
-	SessionID       string
-	Timestamp       time.Time
-	ClientIP        string
-	Username        string
-	Database        string
-	QueryRaw        string
-	QueryNormalized string
+	principal.Context
+	PostReturnExplorationDepth int
+	SessionID                  string
+	Timestamp                  time.Time
+	ClientIP                   string
+	Username                   string
+	Database                   string
+	QueryRaw                   string
+	QueryNormalized            string
 	// Fingerprint is a stable FNV-64a hex hash of QueryNormalized.
 	// Same query shape always → same fingerprint, regardless of literals.
 	Fingerprint      string
@@ -46,15 +49,24 @@ type QueryEvent struct {
 	Authority        string // backend | deception | policy
 	TransactionState string // idle | in_transaction
 	ErrorCode        string
+	StrategyID       string
+	DeceptionProfile string
+	IsTrap           bool
+	SQLState         string
 }
 
 // QueryOutcome is attached only after a deterministic result is known.
 type QueryOutcome struct {
-	Verified         bool
-	Success          bool
-	Authority        string
-	TransactionState string
-	ErrorCode        string
+	PostReturnExplorationDepth int
+	Verified                   bool
+	Success                    bool
+	Authority                  string
+	TransactionState           string
+	ErrorCode                  string
+	StrategyID                 string
+	DeceptionProfile           string
+	IsTrap                     bool
+	SQLState                   string
 }
 
 // ─── Interceptor ─────────────────────────────────────────────────────────────
@@ -104,27 +116,34 @@ func (i *Interceptor) InterceptTextQuery(sess *session.Session, sql string) {
 
 // InterceptTextQueryOutcome captures a COM_QUERY command after its response is known.
 func (i *Interceptor) InterceptTextQueryOutcome(sess *session.Session, sql string, outcome QueryOutcome) {
+	sql = principal.Redact(sql)
 	sql = CleanTextQuery(sql)
 	snap := sess.Snapshot()
 	normalized := NormalizeSQL(sql)
 	i.emit(QueryEvent{
-		SessionID:        snap.ID,
-		Timestamp:        time.Now(),
-		ClientIP:         snap.ClientIP,
-		Username:         snap.Username,
-		Database:         snap.Database,
-		QueryRaw:         sql,
-		QueryNormalized:  normalized,
-		Fingerprint:      FingerprintSQL(normalized),
-		ProtocolMode:     "text",
-		QueryLength:      len(sql),
-		BytesIn:          snap.BytesIn,
-		BytesOut:         snap.BytesOut,
-		OutcomeVerified:  outcome.Verified,
-		Success:          outcome.Success,
-		Authority:        outcome.Authority,
-		TransactionState: outcome.TransactionState,
-		ErrorCode:        outcome.ErrorCode,
+		SessionID:                  snap.ID,
+		Context:                    snap.Context,
+		PostReturnExplorationDepth: outcome.PostReturnExplorationDepth,
+		Timestamp:                  time.Now(),
+		ClientIP:                   snap.ClientIP,
+		Username:                   snap.Username,
+		Database:                   snap.Database,
+		QueryRaw:                   sql,
+		QueryNormalized:            normalized,
+		Fingerprint:                FingerprintSQL(normalized),
+		ProtocolMode:               "text",
+		QueryLength:                len(sql),
+		BytesIn:                    snap.BytesIn,
+		BytesOut:                   snap.BytesOut,
+		OutcomeVerified:            outcome.Verified,
+		Success:                    outcome.Success,
+		Authority:                  outcome.Authority,
+		TransactionState:           outcome.TransactionState,
+		ErrorCode:                  outcome.ErrorCode,
+		StrategyID:                 outcome.StrategyID,
+		DeceptionProfile:           outcome.DeceptionProfile,
+		IsTrap:                     outcome.IsTrap,
+		SQLState:                   outcome.SQLState,
 	})
 	sess.IncrQueryCount()
 }
@@ -132,6 +151,7 @@ func (i *Interceptor) InterceptTextQueryOutcome(sess *session.Session, sql strin
 // InterceptStmtPrepare records the SQL for a COM_STMT_PREPARE command.
 // stmtID is assigned by the backend in the OK response.
 func (i *Interceptor) InterceptStmtPrepare(sessID string, stmtID uint32, sql string) {
+	sql = principal.Redact(sql)
 	key := stmtKey(sessID, stmtID)
 	i.mu.Lock()
 	i.pending[key] = sql
@@ -157,23 +177,29 @@ func (i *Interceptor) InterceptStmtExecuteOutcome(sess *session.Session, stmtID 
 
 	normalized := NormalizeSQL(sql)
 	i.emit(QueryEvent{
-		SessionID:        snap.ID,
-		Timestamp:        time.Now(),
-		ClientIP:         snap.ClientIP,
-		Username:         snap.Username,
-		Database:         snap.Database,
-		QueryRaw:         sql,
-		QueryNormalized:  normalized,
-		Fingerprint:      FingerprintSQL(normalized),
-		ProtocolMode:     "prepared",
-		QueryLength:      len(sql),
-		BytesIn:          snap.BytesIn,
-		BytesOut:         snap.BytesOut,
-		OutcomeVerified:  outcome.Verified,
-		Success:          outcome.Success,
-		Authority:        outcome.Authority,
-		TransactionState: outcome.TransactionState,
-		ErrorCode:        outcome.ErrorCode,
+		SessionID:                  snap.ID,
+		Context:                    snap.Context,
+		PostReturnExplorationDepth: outcome.PostReturnExplorationDepth,
+		Timestamp:                  time.Now(),
+		ClientIP:                   snap.ClientIP,
+		Username:                   snap.Username,
+		Database:                   snap.Database,
+		QueryRaw:                   sql,
+		QueryNormalized:            normalized,
+		Fingerprint:                FingerprintSQL(normalized),
+		ProtocolMode:               "prepared",
+		QueryLength:                len(sql),
+		BytesIn:                    snap.BytesIn,
+		BytesOut:                   snap.BytesOut,
+		OutcomeVerified:            outcome.Verified,
+		Success:                    outcome.Success,
+		Authority:                  outcome.Authority,
+		TransactionState:           outcome.TransactionState,
+		ErrorCode:                  outcome.ErrorCode,
+		StrategyID:                 outcome.StrategyID,
+		DeceptionProfile:           outcome.DeceptionProfile,
+		IsTrap:                     outcome.IsTrap,
+		SQLState:                   outcome.SQLState,
 	})
 	sess.IncrQueryCount()
 }

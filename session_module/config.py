@@ -42,6 +42,8 @@ TOPIC_PG_INPUT           = os.getenv("TOPIC_PG_INPUT",    "pg-query-events")
 TOPIC_MYSQL_SESSION      = os.getenv("TOPIC_MYSQL_SESSION", "mysql-session-events")
 TOPIC_PG_SESSION         = os.getenv("TOPIC_PG_SESSION",    "pg-session-events")
 TOPIC_MITRE_EVENTS       = os.getenv("TOPIC_MITRE_EVENTS",  "mitre-events")
+# MITRE integration temporarily disabled; source retained.
+MITRE_ENABLED = os.getenv("MITRE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 CONSUMER_GROUP           = os.getenv("CONSUMER_GROUP", "session-module-group")
 CONSUMER_AUTO_OFFSET_RESET = os.getenv("CONSUMER_AUTO_OFFSET_RESET", "latest")

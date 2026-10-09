@@ -1,5 +1,39 @@
 # Validation Checkpoint
 
+## MITRE runtime disconnect — 2026-10-08
+
+MITRE integration temporarily disabled; source retained.
+
+- **VERIFIED** on `main`: the default Compose runtime excludes `mitre-agent`.
+  `MITRE_ENABLED=false` gates session/scaling consumers, evidence MITRE-topic
+  subscriptions, and metrics-bridge reads of MITRE actor data. Shared Redis,
+  topic-creation configuration, MITRE handlers/models, and `mitre_agent/` remain.
+- `docker compose config --quiet` and `docker compose --profile mitre config
+  --quiet`: PASS. Default service listing excludes the agent.
+- `docker compose up -d --build`: images built; startup initially hit overlapping
+  containers from `F:\capstone-main`. After user-approved conflict recovery,
+  `docker compose --parallel 1 up -d --no-build` and recreation of the two
+  conflicting services succeeded. All 24 default long-running services are up.
+- Live PostgreSQL/MySQL `SELECT 1` and catalog queries: PASS. Four sessions reached
+  behavioral state and evidence, four session profiles reached scaling with zero
+  consumer lag, and both protocols produced strategy decisions/rewards with
+  empty MITRE state. Session/evidence readiness and scaling health: PASS.
+- Active Redpanda groups contain no MITRE consumers; evidence consumes only five
+  proxy/session topics. Recent affected-service logs contain no errors or MITRE
+  reconnect attempts. No MITRE topics were deleted; on this fresh runtime they
+  were absent when inspected. Existing topic initialization is unchanged.
+- Existing tests: container `python -m pytest -q test_session_module.py
+  test_authoritative_state.py test_behavior_state.py test_async_adaptation.py`
+  (session module): 217 PASS; `python -m unittest -q test_evidence_store`: 16 PASS;
+  `python -m unittest -q test_metrics_bridge`: 5 PASS; scaling `go test
+  ./internal/consumer ./cmd/agent`: PASS. Host pytest/scikit-learn were unavailable;
+  session tests therefore ran in the service image. Disabled/opt-in evidence,
+  session configuration, and metrics dispatch checks: PASS.
+- Restore: set `MITRE_ENABLED=true` and `COMPOSE_PROFILES=mitre` in `.env`, then
+  `docker compose up -d --build`. To disable an already-running MITRE agent,
+  also run `docker compose --profile mitre stop mitre-agent`; a profile alone
+  does not stop existing containers. No GitHub push performed.
+
 Checkpoint date: 2026-09-02
 
 Repository: `F:\b\Capstone-main`
@@ -239,3 +273,30 @@ Latest checkpoint start: main / 727b055 (`i did it`)
 ## Checkpoint decision
 
 Phases 0 through 20 are complete, and Phase 20 is **VERIFIED LIVE**. Phase 19.1 remains **INCOMPLETE / INTERRUPTED** and explicitly operator-deferred; no aggregate Ornith quality claim is made. The next ordered, AI-independent work is Phase 21 replay verification, which was not started during this Phase 20 completion turn.
+
+
+## 2026-10-09 - Bounded persistent deceptive principals
+
+VERIFIED: PostgreSQL SCRAM-SHA-256 and MySQL native-password synthetic logins,
+seeded backend authentication unchanged, reserved fake_ namespace, no physical
+account/privilege creation. Deception Redis AOF retains verifier-only identities,
+permissions, committed managed mutations and exposure across service restart.
+Session transaction state is not durable; rollback/disconnect and concurrent
+commit conflicts were tested. MITRE integration temporarily disabled; source retained.
+
+Modified services: pgproxy, mysqlproxy, deception-engine, session-module,
+evidence-store, metrics-bridge; existing redis-deception volume now uses AOF.
+Tests: both proxy package suites 12/12 each (22 each including subtests), both vet
+checks passed; focused deception 47/47; session state 11/11; evidence 18/18.
+Compose config and diff whitespace validation passed. Both native live protocols
+passed create/authenticate/reconnect/rollback/commit/wrong-password/disable checks;
+backend user catalogs contained zero synthetic accounts. Registry outage failed
+closed with unchanged counters and working seeded authentication. Evidence outage
+did not block authentication. Redis/engine restart and changed-IP reconnect passed.
+Credential-leak and deterministic evidence-link audits passed for exercised paths.
+
+Boundaries: simple/text virtual queries only, testdb and existing managed tables;
+no synthetic object DDL, arbitrary IAM, backend service identity, or unsupported
+native authentication plugins. DROP disables a tombstone. See
+[tests/principals/README.md](tests/principals/README.md) for schema, exact commands,
+file inventory, and validation limitations. Four demonstration accounts are disabled.

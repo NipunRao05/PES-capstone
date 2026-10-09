@@ -5,6 +5,7 @@ package session
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"github.com/pgproxy/internal/principal"
 	"net"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 // Session holds all metadata for one client connection.
 type Session struct {
+	principal.Context
 	mu sync.RWMutex
 
 	ID        string
@@ -173,6 +175,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return SessionSnapshot{
+		Context:    s.Context,
 		ID:         s.ID,
 		ClientIP:   s.ClientIP,
 		Username:   s.Username,
@@ -188,6 +191,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 
 // SessionSnapshot is a point-in-time copy of session metadata.
 type SessionSnapshot struct {
+	principal.Context
 	ID         string
 	ClientIP   string
 	Username   string

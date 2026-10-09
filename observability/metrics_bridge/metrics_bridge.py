@@ -10,7 +10,8 @@ Scraped sources:
   - mysqlproxy:9091/metrics     (MySQL proxy)
   - scaling-agent:9092/metrics  (Scaling agent — also has /metrics/raw native)
 
-Also exposes mitre-events and session data from Redis (mitre-agent writes there).
+MITRE integration temporarily disabled; source retained.
+MITRE actor data from Redis is exposed only when MITRE_ENABLED is enabled.
 """
 
 import json
@@ -32,12 +33,14 @@ PGPROXY_URL      = os.environ.get("PGPROXY_METRICS_URL",      "http://pgproxy:90
 MYSQLPROXY_URL   = os.environ.get("MYSQLPROXY_METRICS_URL",   "http://mysqlproxy:9091/metrics")
 SCALING_URL      = os.environ.get("SCALING_METRICS_URL",      "http://scaling-agent:8080/metrics")
 SCALING_RAW_URL  = os.environ.get("SCALING_RAW_URL",          "http://scaling-agent:8080/metrics/raw")
+PRINCIPAL_METRICS_URL = os.getenv("PRINCIPAL_METRICS_URL", "http://deception-engine:8001/principals/metrics")
 SCALING_EVENTS_URL = os.environ.get("SCALING_EVENTS_URL",     "http://scaling-agent:8080/scale/events")
 
 REDIS_HOST       = os.environ.get("REDIS_HOST",  "redis-mitre")
 REDIS_PORT       = int(os.environ.get("REDIS_PORT", "6379"))
 HTTP_PORT        = int(os.environ.get("PORT", "9100"))
 SCRAPE_TIMEOUT   = float(os.environ.get("SCRAPE_TIMEOUT", "1.0"))
+MITRE_ENABLED = os.getenv("MITRE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 # ── Redis client ──────────────────────────────────────────────────────────────
 
@@ -343,7 +346,16 @@ class MetricsHandler(BaseHTTPRequestHandler):
         scrape_mysqlproxy(pw)
         scrape_scaling_agent(pw)
         scrape_scaling_events(pw)
-        scrape_redis_mitre(pw)
+        values = _get_json(PRINCIPAL_METRICS_URL)
+        for name in ("deceptive_principals_created_total", "deceptive_principals_reused_total",
+                     "deceptive_principal_return_sessions_total"):
+            if isinstance(values.get(name), (int, float)):
+                pw.counter(name, values[name])
+        rate = values.get("deceptive_persistence_reengagement_rate")
+        if isinstance(rate, (int, float)):
+            pw.gauge("deceptive_persistence_reengagement_rate", rate)
+        if MITRE_ENABLED:
+            scrape_redis_mitre(pw)
 
         # Scrape timestamp
         pw.gauge("capstone_bridge_last_scrape_timestamp",

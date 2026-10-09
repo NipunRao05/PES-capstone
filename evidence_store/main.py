@@ -31,6 +31,8 @@ log = logging.getLogger("evidence-store")
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "redpanda:9092")
 KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "evidence-store-v1")
 KAFKA_OFFSET_RESET = os.getenv("KAFKA_OFFSET_RESET", "latest")
+# MITRE integration temporarily disabled; source retained.
+MITRE_ENABLED = os.getenv("MITRE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 KAFKA_TOPICS = tuple(
     topic.strip()
     for topic in os.getenv(
@@ -38,7 +40,7 @@ KAFKA_TOPICS = tuple(
         "mysql-query-events,pg-query-events,mysql-session-events,pg-session-events,"
         "session-profiles,mitre-events,mitre-sessions",
     ).split(",")
-    if topic.strip()
+    if topic.strip() and (MITRE_ENABLED or topic.strip() not in {"mitre-events", "mitre-sessions"})
 )
 REDIS_HOST = os.getenv("REDIS_HOST", "redis-mitre")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
@@ -270,6 +272,17 @@ def validate_artifact_link(
     return session, kind, identity, sanitized
 
 
+def principal_context(payload: dict) -> dict:
+    if not payload.get("deceptive_principal_id"):
+        return {}
+    fields = {name: bounded_text(payload.get(name), 128) for name in
+              ("deceptive_principal_id", "principal_origin", "creator_session_id")
+              if payload.get(name)}
+    if payload.get("deceptive_principal_id"):
+        fields["is_return_session"] = payload.get("is_return_session") in (True, "1")
+    return fields
+
+
 class EvidenceRepository:
     def __init__(self, client: redis.Redis):
         self.client = client
@@ -345,8 +358,9 @@ class EvidenceRepository:
             "protocol": protocol,
             "database_attempted": bounded_text(payload.get("database"), 256),
             "user_attempted": bounded_text(payload.get("username") or payload.get("db_user"), 256),
+            **principal_context(payload),
         }
-        mapping.update({name: value for name, value in optional.items() if value})
+        mapping.update({name: str(int(value)) if isinstance(value, bool) else value for name, value in optional.items() if value})
 
         pipe = self.client.pipeline(transaction=False)
         pipe.hset(key, mapping=mapping)
@@ -410,6 +424,7 @@ class EvidenceRepository:
                 "authority": bounded_text(payload.get("authority"), 32).lower(),
                 "transaction_state": bounded_text(payload.get("transaction_state"), 64),
                 "error_code": bounded_text(payload.get("error_code"), 64),
+                "sqlstate": bounded_text(payload.get("sqlstate"), 5),
                 "bytes_out": safe_nonnegative_int(payload.get("bytes_out")),
             }
             query = {
@@ -422,6 +437,13 @@ class EvidenceRepository:
                 "query_normalized": redact_query(payload.get("query_normalized")),
                 "response": response,
                 "strategy_id": bounded_text(payload.get("strategy_id"), 32).upper(),
+                "deception_profile": bounded_text(payload.get("deception_profile"), 128),
+                "is_trap": payload.get("is_trap") is True,
+                "trap_id": bounded_text(payload.get("trap_id"), 256),
+                "asset_id": bounded_text(payload.get("asset_id"), 256),
+                "world_id": bounded_text(payload.get("world_id"), 256),
+                **principal_context(payload),
+                "post_return_exploration_depth": safe_nonnegative_int(payload.get("post_return_exploration_depth")),
                 "source_topic": topic,
                 "source_partition": partition,
                 "source_offset": offset,
@@ -444,6 +466,7 @@ class EvidenceRepository:
                 "protocol": bounded_text(payload.get("protocol"), 32).lower(),
                 "database": bounded_text(payload.get("database"), 256),
                 "user_attempted": bounded_text(payload.get("username") or payload.get("db_user"), 256),
+            **principal_context(payload),
                 "auth_success": payload.get("success") if "success" in payload else None,
                 "close_reason": bounded_text(payload.get("close_reason"), 256),
                 "query_count": payload.get("query_count"),
@@ -452,6 +475,15 @@ class EvidenceRepository:
                 "source_offset": offset,
                 "provenance": "summary" if topic == "mitre-sessions" else "detailed",
             }
+            for field in ("principal_id", "principal_origin", "created_by_session_id", "created_by_principal_id",
+                          "parent_session_id", "child_session_id", "relationship", "reason"):
+                if payload.get(field):
+                    event[field] = bounded_text(payload[field], 256)
+            if payload.get("event_type") == "session_link":
+                event["confidence"] = safe_float(payload.get("confidence"))
+            for field in ("time_to_first_reuse_seconds", "return_session_number"):
+                if field in payload:
+                    event[field] = max(0, safe_float(payload[field]))
             self._append_once(session_id, "session_events", event_id, event, MAX_STAGE_EVENTS)
 
         elif topic in {"mitre-events", "mitre-sessions"}:
@@ -623,6 +655,7 @@ class EvidenceRepository:
         result = {
             "schema_version": int(record.get("schema_version", "1")),
             "session_id": record.get("session_id", session_id),
+            **principal_context(record),
             "trace_id": record.get("trace_id", ""),
             "source_ip_hash": record.get("source_ip_hash", ""),
             "fingerprint": record.get("fingerprint", latest_query.get("fingerprint", "")),

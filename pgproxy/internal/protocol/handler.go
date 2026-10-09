@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pgproxy/internal/principal"
 	"io"
 	"log/slog"
 	"net"
@@ -31,10 +32,14 @@ import (
 
 // Handler manages the protocol conversation between one client and one backend.
 type Handler struct {
-	clientConn  net.Conn
-	backendConn net.Conn
-	logger      *slog.Logger
-	backendAddr string
+	virtual                bool
+	principalAuthToken     []byte
+	principalAuthSalt      []byte
+	principalExtendedError bool
+	clientConn             net.Conn
+	backendConn            net.Conn
+	logger                 *slog.Logger
+	backendAddr            string
 
 	// pgproto3 wrappers — initialised AFTER the raw startup exchange completes
 	clientBackend   *pgproto3.Backend
@@ -80,6 +85,7 @@ func (h *Handler) Run(ctx context.Context) error {
 			if h.pub != nil {
 				snap := h.sess.Snapshot()
 				h.pub.EmitSessionEnd(publisher.SessionEndEvent{
+					Context:     h.sess.Context,
 					EventType:   "session_end",
 					SessionID:   snap.ID,
 					Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
@@ -105,6 +111,7 @@ func (h *Handler) Run(ctx context.Context) error {
 	if h.pub != nil && h.sess != nil {
 		snap := h.sess.Snapshot()
 		h.pub.EmitSessionStart(publisher.SessionStartEvent{
+			Context:    h.sess.Context,
 			EventType:  "session_start",
 			SessionID:  snap.ID,
 			Timestamp:  snap.StartedAt.UTC().Format(time.RFC3339Nano),
@@ -119,7 +126,13 @@ func (h *Handler) Run(ctx context.Context) error {
 		h.notifyDeceptionSession(ctx, "start")
 	}
 
-	if err := h.proxyLoop(ctx); err != nil {
+	var loopErr error
+	if h.virtual {
+		loopErr = h.principalLoop(ctx)
+	} else {
+		loopErr = h.proxyLoop(ctx)
+	}
+	if err := loopErr; err != nil {
 		closeReason = "error"
 		return err
 	}
@@ -200,6 +213,10 @@ func (h *Handler) handleStartup() error {
 	h.logger = h.logger.With("username", username, "database", database, "session_id", h.sess.ID)
 	h.logger.Debug("startup received", "params_len", len(startupRaw)-8)
 
+	if principal.Reserved(username) {
+		return h.authenticatePrincipal()
+	}
+
 	// ── Step 2: negotiate SSL with backend, then send startup verbatim ───────
 	if err := h.connectToBackend(startupRaw); err != nil {
 		return fmt.Errorf("backend connect: %w", err)
@@ -273,6 +290,7 @@ func (h *Handler) relayAuthRaw() error {
 			// Emit successful auth event
 			if h.pub != nil && h.sess != nil {
 				h.pub.EmitAuth(publisher.AuthEvent{
+					Context:    h.sess.Context,
 					EventType:  "auth",
 					SessionID:  h.sess.ID,
 					Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
@@ -289,6 +307,7 @@ func (h *Handler) relayAuthRaw() error {
 			// Emit failed auth event before returning error
 			if h.pub != nil && h.sess != nil {
 				h.pub.EmitAuth(publisher.AuthEvent{
+					Context:    h.sess.Context,
 					EventType:  "auth",
 					SessionID:  h.sess.ID,
 					Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
@@ -451,6 +470,30 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 			return fmt.Errorf("receive client message: %w", err)
 		}
 
+		if h.principalExtendedError {
+			if _, ok := clientMsg.(*pgproto3.Terminate); ok {
+				return nil
+			}
+			if _, ok := clientMsg.(*pgproto3.Sync); ok {
+				h.principalExtendedError = false
+				if err := h.sendToClient(&pgproto3.ReadyForQuery{TxStatus: h.currentTxStatus()}); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if q, ok := clientMsg.(*pgproto3.Query); ok && principal.AccountSQL(q.String) {
+			if err := h.servePrincipalQuery(ctx, q.String); err != nil {
+				return err
+			}
+			continue
+		}
+		if q, ok := clientMsg.(*pgproto3.Parse); ok && principal.AccountSQL(q.Query) {
+			if err := h.rejectPrincipalExtended(); err != nil {
+				return err
+			}
+			continue
+		}
 		h.logger.Debug("client→proxy", "type", fmt.Sprintf("%T", clientMsg))
 
 		// Phase 3: intercept SQL and emit to publisher via interceptor's internal channel
@@ -482,7 +525,7 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 				}
 			}
 			if q, ok := clientMsg.(*pgproto3.Query); ok {
-				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.postgresTransactionState(), ErrorCode: "blocked"})
+				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.postgresTransactionState(), ErrorCode: errResp.Code})
 			}
 			continue
 		}
@@ -497,7 +540,7 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 					return fmt.Errorf("send aborted transaction response: %w", err)
 				}
 				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{
-					Verified: true, Success: false, Authority: "protocol",
+					Verified: true, Success: false, Authority: "policy",
 					TransactionState: "failed_transaction", ErrorCode: "25P02",
 				})
 				continue
@@ -518,7 +561,18 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 					h.deceptionTxDirty = true
 				}
 				success := strings.EqualFold(dec.Mode, "fake")
-				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: success, Authority: "deception", TransactionState: h.postgresTransactionState(), ErrorCode: dec.SQLState})
+				errorCode := ""
+				if !success {
+					errorCode = dec.SQLState
+					if errorCode == "" {
+						errorCode = "42601" // same fallback sent by sendPostgresDeceptionError
+					}
+				}
+				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{
+					Verified: true, Success: success, Authority: "deception",
+					TransactionState: h.postgresTransactionState(), ErrorCode: errorCode,
+					StrategyID: dec.StrategyID, DeceptionProfile: dec.Profile, IsTrap: dec.IsTrap,
+				})
 				continue
 			}
 		}
@@ -830,6 +884,7 @@ type deceptionDecisionResponse struct {
 	ErrorCode    int                      `json:"error_code"`
 	SQLState     string                   `json:"sqlstate"`
 	Profile      string                   `json:"profile"`
+	StrategyID   string                   `json:"strategy_id"`
 	Explanation  string                   `json:"explanation"`
 	IsTrap       bool                     `json:"is_trap"`
 }
@@ -918,6 +973,13 @@ func (h *Handler) notifyDeceptionTransaction(ctx context.Context, action string)
 }
 
 func (h *Handler) notifyDeceptionSession(ctx context.Context, action string) {
+	if h.virtual {
+		if action == "end" {
+			var reply principal.Reply
+			_ = principal.Call(ctx, "end", map[string]interface{}{"session_id": safeSessionID(h)}, &reply)
+		}
+		return
+	}
 	if action != "start" && action != "end" {
 		return
 	}

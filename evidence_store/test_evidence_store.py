@@ -260,6 +260,49 @@ class EvidenceSafetyTests(unittest.TestCase):
         )
         self.assertEqual(canonical_timestamp("1788000000"), "2026-08-29T10:40:00Z")
 
+    def test_principal_links_and_return_measurements(self):
+        repo = EvidenceRepository(MemoryRedis())
+        context = dict(deceptive_principal_id="DP-opaque", principal_origin="attacker_created_deceptive",
+                       creator_session_id="creator", is_return_session=True)
+        payload = dict(event_type="session_link", session_id="return", principal_id="DP-opaque",
+                       parent_session_id="creator", child_session_id="return", confidence=1.0,
+                       relationship="credential_persistence", reason="authenticated using attacker-created deceptive principal",
+                       timestamp="2026-10-08T10:00:00Z", protocol="postgres", **context)
+        repo.ingest_kafka("pg-session-events", payload, 0, 91)
+        repo.ingest_kafka("pg-query-events", dict(session_id="return", protocol="postgres", is_trap=True,
+                          post_return_exploration_depth=3, **context), 0, 92)
+        result = repo.get_session("return")
+        self.assertEqual(result["deceptive_principal_id"], "DP-opaque")
+        self.assertTrue(result["is_return_session"])
+        self.assertEqual(result["connection_events"][0]["parent_session_id"], "creator")
+        self.assertEqual(result["connection_events"][0]["confidence"], 1.0)
+        self.assertEqual(result["queries"][0]["post_return_exploration_depth"], 3)
+        self.assertTrue(result["queries"][0]["is_trap"])
+
+    def test_old_and_enriched_query_events(self):
+        repository = EvidenceRepository(MemoryRedis())
+        for protocol, topic in (("postgres", "pg-query-events"), ("mysql", "mysql-query-events")):
+            old = {"event_type": "query", "session_id": protocol, "protocol": protocol,
+                   "timestamp": "2026-10-08T00:00:00Z", "query_raw": "SELECT 1"}
+            repository.ingest_kafka(topic, old, 0, 1)
+            enriched = {**old, "event_id": "enriched-" + protocol,
+                        "outcome_verified": True, "success": False, "authority": "deception",
+                        "error_code": "mysql_1146" if protocol == "mysql" else "42P01",
+                        "sqlstate": "42S02" if protocol == "mysql" else "",
+                        "strategy_id": "D3", "deception_profile": "high_value_target", "is_trap": True,
+                        "trap_id": "fixture-trap", "asset_id": "fixture-asset", "world_id": "fixture-world"}
+            repository.ingest_kafka(topic, enriched, 0, 2)
+            queries = repository.get_session(protocol)["queries"]
+            self.assertEqual(len(queries), 2)
+            legacy = next(q for q in queries if not q["response"]["outcome_verified"])
+            self.assertEqual(legacy["deception_profile"], "")
+            self.assertEqual(legacy["trap_id"], "")
+            current = next(q for q in queries if q["response"]["outcome_verified"])
+            for key in ("strategy_id", "deception_profile", "is_trap", "trap_id", "asset_id", "world_id"):
+                self.assertEqual(current[key], enriched[key])
+            for key in ("outcome_verified", "success", "authority", "error_code", "sqlstate"):
+                self.assertEqual(current["response"][key], enriched[key])
+
     def test_phase20_end_to_end_trace_contract(self):
         repository = EvidenceRepository(MemoryRedis())
         session_id = "phase20-trace"

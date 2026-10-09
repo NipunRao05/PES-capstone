@@ -13,6 +13,7 @@ across multiple queries in the same session (consistency probes pass).
 """
 
 from __future__ import annotations
+from principal_runtime import install as install_principals, principal_seed
 
 import dataclasses
 import json
@@ -157,6 +158,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Deception Engine", lifespan=lifespan)
+import sys
+install_principals(app, sys.modules[__name__])
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -1257,7 +1260,7 @@ async def _handle_count(
     _exposure.record_table_access(req.session_id, table, table_depth)
 
     base_count = _generator.generate_count(
-        table_def.get("row_count", 100), req.session_id, table
+        table_def.get("row_count", 100), (principal_seed.get() or req.session_id), table
     )
     delta = _mutations.get_count_delta(req.session_id, table)
     count = max(0, base_count + delta)
@@ -1297,7 +1300,7 @@ async def _handle_select(
     # Use the same deterministic effective count as COUNT(*) so pagination
     # probes cannot easily detect a mismatch between count and rows.
     base_count = _generator.generate_count(
-        table_def.get("row_count", 100), req.session_id, table
+        table_def.get("row_count", 100), (principal_seed.get() or req.session_id), table
     )
     limit, offset = _parse_limit_offset(req.query_normalized)
     row_id = _parse_id_predicate(req.query_normalized)
@@ -1312,7 +1315,7 @@ async def _handle_select(
         schema_tables = _schema_loader.get_all_tables(schema_name)
         employee_def = schema_tables.get("employees", {})
         employee_count = _generator.generate_count(
-            employee_def.get("row_count", 0), req.session_id, "employees"
+            employee_def.get("row_count", 0), (principal_seed.get() or req.session_id), "employees"
         )
         available_limit = min(effective_limit, max(0, base_count - offset))
         rows = _generator.generate_organization_rows(
@@ -1320,7 +1323,7 @@ async def _handle_select(
             table_name=table,
             schema_tables=schema_tables,
             employee_count=employee_count,
-            session_id=req.session_id,
+            session_id=(principal_seed.get() or req.session_id),
             limit=available_limit,
             offset=offset,
         )
@@ -1328,7 +1331,7 @@ async def _handle_select(
         rows = _generator.generate_rows(
             columns=columns_def,
             row_count=base_count,
-            session_id=req.session_id,
+            session_id=(principal_seed.get() or req.session_id),
             table_name=table,
             limit=effective_limit,
             offset=offset,
@@ -1628,13 +1631,13 @@ def _fake_insert_row(req: DecisionRequest, schema_name: str, table: str) -> dict
         return {}
     columns_def = _schema_loader.get_columns(schema_name, table)
     base_count = _generator.generate_count(
-        table_def.get("row_count", 100), req.session_id, table
+        table_def.get("row_count", 100), (principal_seed.get() or req.session_id), table
     )
     inserted_count = len(_mutations.get_inserted_rows(req.session_id, table))
     rows = _generator.generate_rows(
         columns=columns_def,
         row_count=base_count + inserted_count + 1,
-        session_id=req.session_id,
+        session_id=(principal_seed.get() or req.session_id),
         table_name=table,
         limit=1,
         offset=base_count + inserted_count,
@@ -1740,7 +1743,7 @@ def _row_id_exists(
     if not table_def or row_id < 1:
         return False
     base_count = _generator.generate_count(
-        table_def.get("row_count", 100), req.session_id, table
+        table_def.get("row_count", 100), (principal_seed.get() or req.session_id), table
     )
     exists = row_id <= base_count or any(
         row.get("id") == row_id

@@ -21,6 +21,7 @@ import logging
 import time
 
 import redis
+from principal_runtime import principal_seed
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ class MutationStore:
             state["last_modified"] = time.time()
             self._redis.setex(key, REDIS_TTL_SECONDS, json.dumps(state))
         except Exception as e:
+            if principal_seed.get():
+                raise
             log.error("MutationStore record_insert failed: %s", e)
 
     def record_delete(
@@ -80,6 +83,8 @@ class MutationStore:
             state["last_modified"] = time.time()
             self._redis.setex(key, REDIS_TTL_SECONDS, json.dumps(state))
         except Exception as e:
+            if principal_seed.get():
+                raise
             log.error("MutationStore record_delete failed: %s", e)
 
     def record_update(
@@ -104,6 +109,8 @@ class MutationStore:
             state["last_modified"] = time.time()
             self._redis.setex(key, REDIS_TTL_SECONDS, json.dumps(state))
         except Exception as e:
+            if principal_seed.get():
+                raise
             log.error("MutationStore record_update failed: %s", e)
 
     def get_count_delta(self, session_id: str, table_name: str) -> int:
@@ -120,6 +127,8 @@ class MutationStore:
                 value = state.get("count_delta", 0)
                 return int(value)
         except Exception as e:
+            if principal_seed.get():
+                raise
             log.error("MutationStore get_count_delta failed: %s", e)
         return 0
 
@@ -138,6 +147,8 @@ class MutationStore:
                 if isinstance(rows, list):
                     return [r for r in rows if isinstance(r, dict)]
         except Exception as e:
+            if principal_seed.get():
+                raise
             log.error("MutationStore get_inserted_rows failed: %s", e)
         return []
 
@@ -149,6 +160,8 @@ class MutationStore:
             raw = self._redis.get(self._key(session_id, table_name))
             state = json.loads(raw) if raw else self._empty_state()
         except Exception as e:
+            if principal_seed.get():
+                raise
             log.error("MutationStore apply_rows failed to load state: %s", e)
             return [dict(row) for row in rows]
 
@@ -201,6 +214,8 @@ class MutationStore:
                         self._redis.setex(key, REDIS_TTL_SECONDS, prior)
             self._redis.delete(tx_key)
         except Exception as e:
+            if principal_seed.get():
+                raise
             log.error("MutationStore finalize_transaction failed: %s", e)
             raise
 
@@ -210,6 +225,8 @@ class MutationStore:
         try:
             return self._redis.exists(key) > 0
         except Exception:
+            if principal_seed.get():
+                raise
             return False
 
     def cleanup_session(self, session_id: str) -> None:
@@ -221,6 +238,8 @@ class MutationStore:
                 self._redis.delete(*keys)
             self._redis.delete(REDIS_TX_KEY_PREFIX + session_id)
         except Exception as e:
+            if principal_seed.get():
+                raise
             log.error("MutationStore cleanup_session failed: %s", e)
 
     # ─── Helpers ──────────────────────────────────────────────────────────

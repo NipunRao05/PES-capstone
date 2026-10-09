@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pgproxy/internal/principal"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -24,8 +25,13 @@ import (
 // ─── Event Schemas ────────────────────────────────────────────────────────────
 
 // RawEvent is the full per-execution query event.
+// authority is the canonical result source; success is meaningful only when outcome_verified.
+// Empty deception IDs have no authoritative producer; never infer them from SQL.
+// PostgreSQL error_code is the SQLSTATE; extended executions remain unverified.
 // Kafka key: session_id (guarantees ordering within a session)
 type RawEvent struct {
+	PostReturnExplorationDepth int `json:"post_return_exploration_depth,omitempty"`
+	principal.Context
 	EventType        string `json:"event_type"` // "query"
 	Protocol         string `json:"protocol"`
 	SessionID        string `json:"session_id"`
@@ -45,11 +51,19 @@ type RawEvent struct {
 	Authority        string `json:"authority,omitempty"`
 	TransactionState string `json:"transaction_state,omitempty"`
 	ErrorCode        string `json:"error_code,omitempty"`
+	StrategyID       string `json:"strategy_id"`
+	DeceptionProfile string `json:"deception_profile"`
+	IsTrap           bool   `json:"is_trap"`
+	// No authoritative ID producer exists on this branch; these remain empty.
+	TrapID  string `json:"trap_id"`
+	AssetID string `json:"asset_id"`
+	WorldID string `json:"world_id"`
 }
 
 // AuthEvent is published on every authentication attempt (success or failure).
 // Kafka topic: pg-session-events, key: session_id
 type AuthEvent struct {
+	principal.Context
 	EventType  string `json:"event_type"` // "auth"
 	Protocol   string `json:"protocol"`
 	SessionID  string `json:"session_id"`
@@ -65,6 +79,7 @@ type AuthEvent struct {
 // SessionStartEvent is published when a session is fully established.
 // Kafka topic: pg-session-events, key: session_id
 type SessionStartEvent struct {
+	principal.Context
 	EventType  string `json:"event_type"` // "session_start"
 	Protocol   string `json:"protocol"`
 	SessionID  string `json:"session_id"`
@@ -79,6 +94,7 @@ type SessionStartEvent struct {
 // SessionEndEvent is published when a session closes.
 // Kafka topic: pg-session-events, key: session_id
 type SessionEndEvent struct {
+	principal.Context
 	EventType   string `json:"event_type"` // "session_end"
 	Protocol    string `json:"protocol"`
 	SessionID   string `json:"session_id"`
@@ -284,25 +300,33 @@ func (p *Publisher) ingestLoop(ctx context.Context, events <-chan interceptor.Qu
 				return
 			}
 			raw := RawEvent{
-				EventType:        "query",
-				Protocol:         "postgres",
-				SessionID:        qe.SessionID,
-				Timestamp:        qe.Timestamp.UTC().Format(time.RFC3339Nano),
-				ClientIP:         qe.ClientIP,
-				Username:         qe.Username,
-				Database:         qe.Database,
-				QueryRaw:         qe.QueryRaw,
-				QueryNormalized:  qe.QueryNormalized,
-				Fingerprint:      qe.Fingerprint,
-				ProtocolMode:     qe.ProtocolMode,
-				QueryLength:      qe.QueryLength,
-				BytesIn:          qe.BytesIn,
-				BytesOut:         qe.BytesOut,
-				OutcomeVerified:  qe.OutcomeVerified,
-				Success:          qe.Success,
-				Authority:        qe.Authority,
-				TransactionState: qe.TransactionState,
-				ErrorCode:        qe.ErrorCode,
+				EventType:                  "query",
+				Protocol:                   "postgres",
+				SessionID:                  qe.SessionID,
+				Context:                    qe.Context,
+				PostReturnExplorationDepth: qe.PostReturnExplorationDepth,
+				Timestamp:                  qe.Timestamp.UTC().Format(time.RFC3339Nano),
+				ClientIP:                   qe.ClientIP,
+				Username:                   qe.Username,
+				Database:                   qe.Database,
+				QueryRaw:                   qe.QueryRaw,
+				QueryNormalized:            qe.QueryNormalized,
+				Fingerprint:                qe.Fingerprint,
+				ProtocolMode:               qe.ProtocolMode,
+				QueryLength:                qe.QueryLength,
+				BytesIn:                    qe.BytesIn,
+				BytesOut:                   qe.BytesOut,
+				OutcomeVerified:            qe.OutcomeVerified,
+				Success:                    qe.Success,
+				Authority:                  qe.Authority,
+				TransactionState:           qe.TransactionState,
+				ErrorCode:                  qe.ErrorCode,
+				StrategyID:                 qe.StrategyID,
+				DeceptionProfile:           qe.DeceptionProfile,
+				IsTrap:                     qe.IsTrap,
+			}
+			if raw.Authority == "" {
+				raw.Authority = "unknown"
 			}
 			select {
 			case p.rawBuf <- raw:
@@ -629,6 +653,9 @@ func (p *Publisher) closeWriters() {
 
 func extractSessionID(e interface{}) string {
 	switch v := e.(type) {
+	case map[string]interface{}:
+		sid, _ := v["session_id"].(string)
+		return sid
 	case AuthEvent:
 		return v.SessionID
 	case SessionStartEvent:
@@ -668,5 +695,14 @@ func (p *Publisher) PublishFailureStats() PublisherFailureStats {
 		RawEventsDropped:     atomic.LoadInt64(&p.rawEventsDropped),
 		DedupEventsDropped:   atomic.LoadInt64(&p.dedupEventsDropped),
 		SessionEventsDropped: atomic.LoadInt64(&p.sessionEventsDropped),
+	}
+}
+
+// EmitPrincipal uses the existing best-effort session stream after authoritative changes.
+func (p *Publisher) EmitPrincipal(e map[string]interface{}) {
+	select {
+	case p.sessionBuf <- e:
+	default:
+		atomic.AddInt64(&p.sessionEventsDropped, 1)
 	}
 }

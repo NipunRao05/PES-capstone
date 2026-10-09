@@ -39,6 +39,7 @@ logger.Info("starting scaling agent",
 
 cons := consumer.New(consumer.Config{
 Brokers:              brokers,
+MitreEnabled:         getBool("MITRE_ENABLED", false),
 TopicMitreEvents:     getEnv("TOPIC_MITRE_EVENTS", "mitre-events"),
 TopicSessionProfiles: getEnv("TOPIC_SESSION_PROFILES", "session-profiles"),
 GroupID:              getEnv("CONSUMER_GROUP", "scaling-agent"),

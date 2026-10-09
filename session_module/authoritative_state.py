@@ -104,6 +104,10 @@ def _extract_create_columns(sql: str, relation: str) -> set[str]:
 @dataclass
 class AuthoritativeSessionState:
     session_id: str
+    deceptive_principal_id: str = ""
+    principal_origin: str = ""
+    creator_session_id: str = ""
+    is_return_session: bool = False
     protocol: str = ""
     persona_id: str = "deterministic-baseline"
     strategy_id: str = "D0"
@@ -232,6 +236,10 @@ class AuthoritativeStateStore:
 
     @staticmethod
     def _refresh_metadata(state: AuthoritativeSessionState, raw: dict) -> None:
+        if raw.get("deceptive_principal_id"):
+            for name in ("deceptive_principal_id", "principal_origin", "creator_session_id"):
+                setattr(state, name, str(raw.get(name) or getattr(state, name))[:128])
+            state.is_return_session = raw.get("is_return_session") is True
         state.protocol = str(raw.get("protocol") or state.protocol)[:32].lower().replace("postgresql", "postgres")
         state.database = str(raw.get("database") or state.database)[:_MAX_METADATA_CHARS]
         state.user = str(raw.get("username") or raw.get("db_user") or state.user)[:_MAX_METADATA_CHARS]

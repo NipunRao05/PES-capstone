@@ -45,6 +45,31 @@ class AuthoritativeStateTests(unittest.TestCase):
         self.assertIsNotNone(result)
         return result
 
+    def test_principal_context_is_explicit_and_ip_independent(self):
+        first = event(session_id="return-1")
+        first.update(deceptive_principal_id="DP-opaque", principal_origin="attacker_created_deceptive",
+                     creator_session_id="creator", is_return_session=True, client_ip="192.0.2.1")
+        self.store.apply_proxy_event(first)
+        second = dict(first, session_id="return-2", client_ip="198.51.100.1")
+        self.store.apply_proxy_event(second)
+        self.assertEqual(self.store.get("return-1")["deceptive_principal_id"],
+                         self.store.get("return-2")["deceptive_principal_id"])
+        self.store.apply_proxy_event(event(session_id="legacy"))
+        self.assertEqual(self.store.get("legacy")["deceptive_principal_id"], "")
+
+    def test_legacy_and_optional_query_metadata(self):
+        old = event(sql="select 1")
+        for key in ("outcome_verified", "success", "authority", "error_code"):
+            old.pop(key)
+        self.store.apply_proxy_event(old)
+        self.assertEqual(self.state()["unverified_query_count"], 1)
+        enriched = event(sql="select 1")
+        enriched.update(strategy_id="D1", deception_profile="fake_schema",
+                        trap_id="", asset_id="", world_id="", sqlstate="", is_trap=False)
+        self.store.apply_proxy_event(enriched)
+        self.assertEqual(self.state()["outcome_verified_count"], 1)
+        self.assertEqual(self.state()["database_authority"], "backend")
+
     def test_required_state_contract_and_lifecycle(self):
         self.store.apply_proxy_event({
             "event_type": "session_start",

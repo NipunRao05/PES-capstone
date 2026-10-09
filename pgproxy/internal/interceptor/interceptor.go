@@ -6,6 +6,7 @@ package interceptor
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"github.com/pgproxy/internal/principal"
 	"hash/fnv"
 	"regexp"
 	"strings"
@@ -18,13 +19,15 @@ import (
 
 // QueryEvent represents a captured query and its metadata.
 type QueryEvent struct {
-	SessionID       string
-	Timestamp       time.Time
-	ClientIP        string
-	Username        string
-	Database        string
-	QueryRaw        string
-	QueryNormalized string
+	principal.Context
+	PostReturnExplorationDepth int
+	SessionID                  string
+	Timestamp                  time.Time
+	ClientIP                   string
+	Username                   string
+	Database                   string
+	QueryRaw                   string
+	QueryNormalized            string
 	// Fingerprint is a stable FNV-64a hex hash of QueryNormalized.
 	// Identical query shapes always produce the same fingerprint,
 	// regardless of literal values or parameter bindings.
@@ -39,15 +42,22 @@ type QueryEvent struct {
 	Authority        string // backend | deception | policy
 	TransactionState string // idle | in_transaction | failed_transaction
 	ErrorCode        string
+	StrategyID       string
+	DeceptionProfile string
+	IsTrap           bool
 }
 
 // QueryOutcome is attached only after a deterministic result is known.
 type QueryOutcome struct {
-	Verified         bool
-	Success          bool
-	Authority        string
-	TransactionState string
-	ErrorCode        string
+	PostReturnExplorationDepth int
+	Verified                   bool
+	Success                    bool
+	Authority                  string
+	TransactionState           string
+	ErrorCode                  string
+	StrategyID                 string
+	DeceptionProfile           string
+	IsTrap                     bool
 }
 
 // Interceptor captures query events from the protocol stream.
@@ -98,26 +108,32 @@ func (i *Interceptor) InterceptSimple(sess *session.Session, sql string) {
 
 // InterceptSimpleOutcome captures a simple query after its response is known.
 func (i *Interceptor) InterceptSimpleOutcome(sess *session.Session, sql string, outcome QueryOutcome) {
+	sql = principal.Redact(sql)
 	snap := sess.Snapshot()
 	normalized := NormalizeSQL(sql)
 	event := QueryEvent{
-		SessionID:        snap.ID,
-		Timestamp:        time.Now(),
-		ClientIP:         snap.ClientIP,
-		Username:         snap.Username,
-		Database:         snap.Database,
-		QueryRaw:         sql,
-		QueryNormalized:  normalized,
-		Fingerprint:      FingerprintSQL(normalized),
-		ProtocolMode:     "simple",
-		QueryLength:      len(sql),
-		BytesIn:          snap.BytesIn,
-		BytesOut:         snap.BytesOut,
-		OutcomeVerified:  outcome.Verified,
-		Success:          outcome.Success,
-		Authority:        outcome.Authority,
-		TransactionState: outcome.TransactionState,
-		ErrorCode:        outcome.ErrorCode,
+		SessionID:                  snap.ID,
+		Context:                    snap.Context,
+		PostReturnExplorationDepth: outcome.PostReturnExplorationDepth,
+		Timestamp:                  time.Now(),
+		ClientIP:                   snap.ClientIP,
+		Username:                   snap.Username,
+		Database:                   snap.Database,
+		QueryRaw:                   sql,
+		QueryNormalized:            normalized,
+		Fingerprint:                FingerprintSQL(normalized),
+		ProtocolMode:               "simple",
+		QueryLength:                len(sql),
+		BytesIn:                    snap.BytesIn,
+		BytesOut:                   snap.BytesOut,
+		OutcomeVerified:            outcome.Verified,
+		Success:                    outcome.Success,
+		Authority:                  outcome.Authority,
+		TransactionState:           outcome.TransactionState,
+		ErrorCode:                  outcome.ErrorCode,
+		StrategyID:                 outcome.StrategyID,
+		DeceptionProfile:           outcome.DeceptionProfile,
+		IsTrap:                     outcome.IsTrap,
 	}
 
 	sess.IncrQueryCount()
@@ -126,6 +142,7 @@ func (i *Interceptor) InterceptSimpleOutcome(sess *session.Session, sql string, 
 
 // InterceptParse captures a Parse message (extended protocol step 1).
 func (i *Interceptor) InterceptParse(sess *session.Session, stmtName, query string) {
+	query = principal.Redact(query)
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -175,6 +192,7 @@ func (i *Interceptor) InterceptExecute(sess *session.Session, portalName string,
 	normalized := NormalizeSQL(state.query)
 	event := QueryEvent{
 		SessionID:       snap.ID,
+		Context:         snap.Context,
 		Timestamp:       time.Now(),
 		ClientIP:        snap.ClientIP,
 		Username:        snap.Username,

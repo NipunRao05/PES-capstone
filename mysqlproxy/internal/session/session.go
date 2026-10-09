@@ -6,6 +6,7 @@ package session
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"github.com/mysqlproxy/internal/principal"
 	"net"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ const (
 
 // Session holds all per-connection state for one MySQL client.
 type Session struct {
+	principal.Context
 	mu sync.RWMutex
 
 	ID        string
@@ -158,6 +160,7 @@ func (s *Session) IncrQueryCount() { s.queryCount.Add(1) }
 func (s *Session) Snapshot() Snapshot {
 	s.mu.RLock()
 	snap := Snapshot{
+		Context:       s.Context,
 		ID:            s.ID,
 		ClientIP:      s.ClientIP,
 		Username:      s.Username,
@@ -176,6 +179,7 @@ func (s *Session) Snapshot() Snapshot {
 
 // Snapshot is a point-in-time copy of session metadata.
 type Snapshot struct {
+	principal.Context
 	ID            string
 	ClientIP      string
 	Username      string

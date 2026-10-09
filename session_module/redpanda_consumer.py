@@ -10,7 +10,7 @@ Consumes SQL events from TWO sources simultaneously:
 Gap 3 fix: select @@... queries are no longer silently discarded.
 They are emitted as event_type='recon_probe' with a phase tag and enter
 the SessionEngine feature pipeline so recon-only sessions still produce
-profiles for downstream MITRE/deception/scaling consumers.
+profiles for downstream deception/scaling consumers (MITRE is opt-in).
 """
 
 import json
@@ -389,12 +389,14 @@ if __name__ == "__main__":
     )
     pg_session_thread.start()
 
-    mitre_thread = threading.Thread(
-        target=run_consumer,
-        args=(config.OWN_REDPANDA_BOOTSTRAP, config.TOPIC_MITRE_EVENTS, "MITRE", storage, state_store, adaptation),
-        daemon=True,
-    )
-    mitre_thread.start()
+    mitre_thread = None
+    if config.MITRE_ENABLED:
+        mitre_thread = threading.Thread(
+            target=run_consumer,
+            args=(config.OWN_REDPANDA_BOOTSTRAP, config.TOPIC_MITRE_EVENTS, "MITRE", storage, state_store, adaptation),
+            daemon=True,
+        )
+        mitre_thread.start()
     state_store.ready = True
 
     logger.info("Session module running. Press Ctrl+C to stop.")
@@ -410,7 +412,8 @@ if __name__ == "__main__":
         # the worker sentinel. Joins are bounded because consumers use
         # consumer_timeout_ms and re-check shutdown_event.
         for thread in (mysql_thread, pg_thread, mysql_session_thread, pg_session_thread, mitre_thread):
-            thread.join(timeout=5)
+            if thread is not None:
+                thread.join(timeout=5)
 
         adaptation.stop()
 

@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mysqlproxy/internal/principal"
 	"io"
 	"log/slog"
 	"net"
@@ -106,10 +107,14 @@ var deceptionBreaker = struct {
 
 // Handler manages the full lifecycle of one MySQL client↔backend pair.
 type Handler struct {
-	clientConn  net.Conn
-	backendConn net.Conn
-	logger      *slog.Logger
-	backendAddr string
+	virtual                bool
+	principalAuthToken     []byte
+	principalAuthSalt      []byte
+	principalExtendedError bool
+	clientConn             net.Conn
+	backendConn            net.Conn
+	logger                 *slog.Logger
+	backendAddr            string
 
 	sess *session.Session
 
@@ -161,6 +166,7 @@ func (h *Handler) Run(ctx context.Context) error {
 			if h.pub != nil {
 				snap := h.sess.Snapshot()
 				h.pub.EmitSessionEnd(publisher.SessionEndEvent{
+					Context:     h.sess.Context,
 					EventType:   "session_end",
 					SessionID:   snap.ID,
 					Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
@@ -201,11 +207,18 @@ func (h *Handler) Run(ctx context.Context) error {
 	h.sess.SetConnectionID(connID)
 
 	// Step 3: relay the auth result (OK or ERR) from backend to client
-	if err := h.relayAuthResult(); err != nil {
+	var authErr error
+	if h.virtual {
+		authErr = h.authenticatePrincipal()
+	} else {
+		authErr = h.relayAuthResult()
+	}
+	if err := authErr; err != nil {
 		closeReason = "error"
 		// Emit failed auth event
 		if h.pub != nil {
 			h.pub.EmitAuth(publisher.AuthEvent{
+				Context:    h.sess.Context,
 				EventType:  "auth",
 				SessionID:  h.sess.ID,
 				Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
@@ -223,6 +236,7 @@ func (h *Handler) Run(ctx context.Context) error {
 	// Auth succeeded — emit auth + session_start
 	if h.pub != nil {
 		h.pub.EmitAuth(publisher.AuthEvent{
+			Context:    h.sess.Context,
 			EventType:  "auth",
 			SessionID:  h.sess.ID,
 			Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
@@ -233,6 +247,7 @@ func (h *Handler) Run(ctx context.Context) error {
 			Success:    true,
 		})
 		h.pub.EmitSessionStart(publisher.SessionStartEvent{
+			Context:    h.sess.Context,
 			EventType:  "session_start",
 			SessionID:  h.sess.ID,
 			Timestamp:  h.sess.StartedAt.UTC().Format(time.RFC3339Nano),
@@ -253,7 +268,13 @@ func (h *Handler) Run(ctx context.Context) error {
 	h.logger.Debug("session established", "connection_id", connID)
 
 	// Step 4: command loop
-	if err := h.commandLoop(ctx); err != nil {
+	var loopErr error
+	if h.virtual {
+		loopErr = h.principalLoop(ctx)
+	} else {
+		loopErr = h.commandLoop(ctx)
+	}
+	if err := loopErr; err != nil {
 		closeReason = "error"
 		return err
 	}
@@ -414,7 +435,7 @@ func (h *Handler) relayClientHandshake(serverCaps uint32, authPlugin string, aut
 		return "", "", 0, fmt.Errorf("read client handshake: %w", err)
 	}
 
-	if len(raw) < 4 {
+	if len(raw) < 32 {
 		return "", "", 0, fmt.Errorf("client handshake too short")
 	}
 
@@ -449,11 +470,15 @@ func (h *Handler) relayClientHandshake(serverCaps uint32, authPlugin string, aut
 		p = p[nullIdx+1:]
 	}
 
+	h.virtual = principal.Reserved(username)
+	var authToken []byte
+
 	// auth response length + data
 	if len(p) > 0 {
 		authRespLen := int(p[0])
 		p = p[1:]
 		if len(p) >= authRespLen {
+			authToken = append([]byte(nil), p[:authRespLen]...)
 			p = p[authRespLen:]
 		}
 	}
@@ -466,6 +491,12 @@ func (h *Handler) relayClientHandshake(serverCaps uint32, authPlugin string, aut
 		}
 	}
 
+	if h.virtual {
+		_ = h.backendConn.Close()
+		h.principalAuthToken = authToken
+		h.principalAuthSalt = append([]byte(nil), authData...)
+		return username, database, clientCaps, nil
+	}
 	// Forward the handshake response to the backend unchanged
 	if err := h.sendPacket(h.backendConn, raw, 1); err != nil {
 		return "", "", 0, fmt.Errorf("forward client handshake: %w", err)
@@ -616,6 +647,12 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 
 		case comQuery:
 			sql := cleanMySQLQueryPayload(payload)
+			if principal.AccountSQL(sql) {
+				if err := h.servePrincipalQuery(ctx, sql); err != nil {
+					return err
+				}
+				continue
+			}
 			h.logger.Debug("COM_QUERY", "sql", truncate(sql, 200))
 			// Query-level proxy log evidence.
 			// This makes proxy logs show the actual SQL received by the proxy.
@@ -636,7 +673,7 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 				if err := h.sendBlockResponse(shapeCtx); err != nil {
 					return err
 				}
-				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.mysqlTransactionState(), ErrorCode: "blocked"})
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.mysqlTransactionState(), ErrorCode: mysqlErrorCode(shapeCtx.BlockPacket()), SQLState: mysqlSQLState(shapeCtx.BlockPacket())})
 				continue
 			}
 			// Synchronous deception-engine response synthesis.
@@ -655,11 +692,16 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 					return fmt.Errorf("send deception-engine fake result: %w", err)
 				}
 				success := strings.EqualFold(dec.Mode, "fake")
-				errorCode := ""
+				errorCode, sqlState := "", ""
 				if !success {
-					errorCode = fmt.Sprintf("mysql_%d", dec.ErrorCode)
+					code, state := normalizeMySQLDeceptionError(dec.ErrorCode, dec.SQLState)
+					errorCode, sqlState = fmt.Sprintf("mysql_%d", code), state
 				}
-				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: success, Authority: "deception", TransactionState: h.mysqlTransactionState(), ErrorCode: errorCode})
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{
+					Verified: true, Success: success, Authority: "deception",
+					TransactionState: h.mysqlTransactionState(), ErrorCode: errorCode, SQLState: sqlState,
+					StrategyID: dec.StrategyID, DeceptionProfile: dec.Profile, IsTrap: dec.IsTrap,
+				})
 				continue
 			}
 
@@ -669,7 +711,7 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 				if err := h.sendMySQLDeceptionError(1146, "42S02", "Table doesn't exist"); err != nil {
 					return fmt.Errorf("send hidden table response: %w", err)
 				}
-				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "deception", TransactionState: h.mysqlTransactionState(), ErrorCode: "mysql_1146"})
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "deception", TransactionState: h.mysqlTransactionState(), ErrorCode: "mysql_1146", SQLState: "42S02"})
 				continue
 			}
 
@@ -687,6 +729,12 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 			h.logger.Debug("database changed", "db", db)
 
 		case comChangeUser:
+			if end := indexByte(payload, 0); end >= 0 && principal.Reserved(string(payload[:end])) {
+				if err := h.sendMySQLDeceptionError(1045, "28000", "Reconnect to authenticate this account"); err != nil {
+					return err
+				}
+				continue
+			}
 			// Fix 4: COM_CHANGE_USER re-runs a full auth exchange.
 			// Forward the command, relay the embedded auth round-trips, then
 			// update the session with the new username/database.
@@ -710,6 +758,12 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 
 		case comStmtPrepare:
 			sql := string(payload)
+			if principal.AccountSQL(sql) {
+				if err := h.sendMySQLDeceptionError(1235, "0A000", "Use a single text query for this operation"); err != nil {
+					return err
+				}
+				continue
+			}
 			h.logger.Debug("COM_STMT_PREPARE", "sql", truncate(sql, 200))
 			stmtID, err := h.handleStmtPrepare(ctx, cmdPkt, sql)
 			if err != nil {
@@ -735,7 +789,7 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 					return err
 				}
 				if h.intercept != nil {
-					h.intercept.InterceptStmtExecuteOutcome(h.sess, stmtID, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.mysqlTransactionState(), ErrorCode: "blocked"})
+					h.intercept.InterceptStmtExecuteOutcome(h.sess, stmtID, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.mysqlTransactionState(), ErrorCode: mysqlErrorCode(shapeCtx.BlockPacket()), SQLState: mysqlSQLState(shapeCtx.BlockPacket())})
 				}
 				continue
 			}
@@ -934,6 +988,7 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 		case packetERR:
 			h.lastQueryOutcome.Success = false
 			h.lastQueryOutcome.ErrorCode = mysqlErrorCode(pkt)
+			h.lastQueryOutcome.SQLState = mysqlSQLState(pkt)
 			h.lastQueryOutcome.TransactionState = h.mysqlTransactionState()
 			return h.sendPacket(h.clientConn, pkt, seqNum)
 
@@ -1030,6 +1085,11 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 					continue
 				}
 
+				if len(rowPkt) > 0 && rowPkt[0] == packetERR {
+					h.lastQueryOutcome.Success = false
+					h.lastQueryOutcome.ErrorCode = mysqlErrorCode(rowPkt)
+					h.lastQueryOutcome.SQLState = mysqlSQLState(rowPkt)
+				}
 				if isResultSetTerminator(rowPkt) {
 					h.updateMySQLStatus(rowPkt)
 					// End of rows — always forward terminator
@@ -1078,9 +1138,16 @@ func (h *Handler) updateMySQLStatus(pkt []byte) {
 	h.lastQueryOutcome.TransactionState = h.mysqlTransactionState()
 }
 
+func mysqlSQLState(pkt []byte) string {
+	if len(pkt) >= 9 && pkt[0] == packetERR && pkt[3] == '#' {
+		return string(pkt[4:9])
+	}
+	return ""
+}
+
 func mysqlErrorCode(pkt []byte) string {
 	if len(pkt) < 3 || pkt[0] != packetERR {
-		return "mysql_error"
+		return ""
 	}
 	return fmt.Sprintf("mysql_%d", uint16(pkt[1])|uint16(pkt[2])<<8)
 }
@@ -1226,7 +1293,7 @@ func (h *Handler) sendMySQLTrapRows() error {
 		seq++
 	}
 
-	if err := h.sendPacket(h.clientConn, mysqlEOFPacket(), seq); err != nil {
+	if err := h.sendPacket(h.clientConn, h.deceptionEOFPacket(), seq); err != nil {
 		return err
 	}
 	seq++
@@ -1239,7 +1306,7 @@ func (h *Handler) sendMySQLTrapRows() error {
 		seq++
 	}
 
-	if err := h.sendPacket(h.clientConn, mysqlEOFPacket(), seq); err != nil {
+	if err := h.sendPacket(h.clientConn, h.deceptionEOFPacket(), seq); err != nil {
 		return err
 	}
 
@@ -1764,6 +1831,7 @@ type deceptionDecisionResponse struct {
 	ErrorCode    int                      `json:"error_code"`
 	SQLState     string                   `json:"sqlstate"`
 	Profile      string                   `json:"profile"`
+	StrategyID   string                   `json:"strategy_id"`
 	Explanation  string                   `json:"explanation"`
 	IsTrap       bool                     `json:"is_trap"`
 }
@@ -1946,7 +2014,7 @@ func (h *Handler) sendMySQLDeceptionResult(dec *deceptionDecisionResponse) error
 	}
 
 	// EOF after column definitions.
-	if err := h.sendPacket(h.clientConn, mysqlEOFPacket(), seq); err != nil {
+	if err := h.sendPacket(h.clientConn, h.deceptionEOFPacket(), seq); err != nil {
 		return err
 	}
 	seq++
@@ -1960,7 +2028,7 @@ func (h *Handler) sendMySQLDeceptionResult(dec *deceptionDecisionResponse) error
 	}
 
 	// EOF after rows.
-	if err := h.sendPacket(h.clientConn, mysqlEOFPacket(), seq); err != nil {
+	if err := h.sendPacket(h.clientConn, h.deceptionEOFPacket(), seq); err != nil {
 		return err
 	}
 
@@ -1971,6 +2039,9 @@ func (h *Handler) sendMySQLDeceptionResult(dec *deceptionDecisionResponse) error
 }
 
 func (h *Handler) sendMySQLDeceptionOK(affectedRows int) error {
+	if h.virtual {
+		return h.principalOK(affectedRows)
+	}
 	if affectedRows < 0 {
 		affectedRows = 0
 	}
@@ -1981,13 +2052,18 @@ func (h *Handler) sendMySQLDeceptionOK(affectedRows int) error {
 	return h.sendPacket(h.clientConn, pkt, 1)
 }
 
-func (h *Handler) sendMySQLDeceptionError(code int, sqlState, message string) error {
+func normalizeMySQLDeceptionError(code int, sqlState string) (int, string) {
 	if code <= 0 || code > 65535 {
 		code = 1064
 	}
 	if len(sqlState) != 5 {
 		sqlState = "42000"
 	}
+	return code, sqlState
+}
+
+func (h *Handler) sendMySQLDeceptionError(code int, sqlState, message string) error {
+	code, sqlState = normalizeMySQLDeceptionError(code, sqlState)
 	if message == "" {
 		message = "You have an error in your SQL syntax"
 	}
@@ -1998,6 +2074,13 @@ func (h *Handler) sendMySQLDeceptionError(code int, sqlState, message string) er
 }
 
 func (h *Handler) notifyDeceptionSession(ctx context.Context, action string) {
+	if h.virtual {
+		if action == "end" {
+			var reply principal.Reply
+			_ = principal.Call(ctx, "end", map[string]interface{}{"session_id": safeSessionID(h)}, &reply)
+		}
+		return
+	}
 	if h.sess == nil || (action != "start" && action != "end") {
 		return
 	}
@@ -2345,3 +2428,11 @@ func scrambleSHA1(password string, seed []byte) []byte {
 
 // Ensure scrambleSHA1 is referenced to avoid compiler complaint
 var _ = scrambleSHA1
+
+func (h *Handler) deceptionEOFPacket() []byte {
+	if !h.virtual {
+		return mysqlEOFPacket()
+	}
+	status := h.principalStatus()
+	return []byte{0xfe, 0, 0, byte(status), byte(status >> 8)}
+}

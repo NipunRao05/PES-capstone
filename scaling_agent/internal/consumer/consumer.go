@@ -178,6 +178,7 @@ func deriveConfidence(p SessionProfile) float64 {
 // Config holds consumer configuration.
 type Config struct {
 	Brokers              []string
+	MitreEnabled         bool
 	TopicMitreEvents     string
 	TopicSessionProfiles string
 	TopicDeadLetter      string
@@ -250,9 +251,11 @@ func New(cfg Config, logger *slog.Logger) *Consumer {
 // Signals returns the read-only channel of parsed SessionSignals.
 func (c *Consumer) Signals() <-chan scorer.SessionSignal { return c.out }
 
-// Start launches both consumer goroutines. Non-blocking.
+// Start launches enabled consumer goroutines. Non-blocking.
 func (c *Consumer) Start(ctx context.Context) {
-	go c.consumeMitreEvents(ctx)
+	if c.cfg.MitreEnabled {
+		go c.consumeMitreEvents(ctx)
+	}
 	go c.consumeSessionProfiles(ctx)
 }
 

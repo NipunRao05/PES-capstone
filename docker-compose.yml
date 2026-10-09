@@ -1,4 +1,7 @@
 # version: "3.9"
+# MITRE integration temporarily disabled; source retained.
+# Restore with MITRE_ENABLED=true and COMPOSE_PROFILES=mitre in .env, then
+# docker compose up -d --build. Retained MITRE topics and shared Redis stay intact.
 
 services:
 
@@ -9,6 +12,7 @@ services:
     environment:
       KAFKA_BROKERS: "redpanda:9092"
       KAFKA_GROUP_ID: "evidence-store-v1"
+      MITRE_ENABLED: "${MITRE_ENABLED:-false}"
       KAFKA_OFFSET_RESET: "latest"
       KAFKA_TOPICS: "mysql-query-events,pg-query-events,mysql-session-events,pg-session-events,session-profiles,mitre-events,mitre-sessions"
       REDIS_HOST: "redis-mitre"
@@ -340,6 +344,7 @@ services:
 
   redis-deception:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always"]
     volumes:
       - redisdeception:/data
 
@@ -371,6 +376,7 @@ services:
       KAFKA_DEDUP_TOPIC: "pg-query-dedup"
       KAFKA_SESSION_TOPIC: "pg-session-events"
       DECEPTION_ENGINE_URL: "http://deception-engine:8001/decide"
+      DECEPTIVE_PRINCIPAL_HMAC_SECRET: ${DECEPTIVE_PRINCIPAL_HMAC_SECRET:-}
     depends_on:
       postgres:
         condition: service_started
@@ -398,6 +404,7 @@ services:
       KAFKA_DEDUP_TOPIC: "mysql-query-dedup"
       KAFKA_SESSION_TOPIC: "mysql-session-events"
       DECEPTION_ENGINE_URL: "http://deception-engine:8001/decide"
+      DECEPTIVE_PRINCIPAL_HMAC_SECRET: ${DECEPTIVE_PRINCIPAL_HMAC_SECRET:-}
     depends_on:
       mysql:
         condition: service_started
@@ -418,6 +425,7 @@ services:
       MYSQL_REDPANDA_BOOTSTRAP: "redpanda:9092"
       PG_REDPANDA_BOOTSTRAP: "redpanda:9092"
       TOPIC_MYSQL_INPUT: "mysql-query-events"
+      MITRE_ENABLED: "${MITRE_ENABLED:-false}"
       TOPIC_PG_INPUT: "pg-query-events"
       TOPIC_MYSQL_SESSION: "mysql-session-events"
       TOPIC_PG_SESSION: "pg-session-events"
@@ -460,6 +468,7 @@ services:
       - "127.0.0.1:8001:8001"
     environment:
       REDIS_HOST: "redis-deception"
+      DECEPTIVE_PRINCIPAL_HMAC_SECRET: ${DECEPTIVE_PRINCIPAL_HMAC_SECRET:-}
       REDIS_PORT: "6379"
       KAFKA_BROKERS: "redpanda:9092"
       PORT: "8001"
@@ -480,6 +489,7 @@ services:
     restart: unless-stopped
 
   mitre-agent:
+    profiles: ["mitre"]
     build:
       context: ./mitre_agent
       dockerfile: Dockerfile
@@ -520,6 +530,7 @@ services:
       TOPIC_MITRE_EVENTS: "mitre-events"
       TOPIC_SESSION_PROFILES: "session-profiles"
       CONSUMER_GROUP: "scaling-agent"
+      MITRE_ENABLED: "${MITRE_ENABLED:-false}"
       HTTP_ADDR: "0.0.0.0:8080"
       LOG_LEVEL: "info"
       DIAL_TIMEOUT: "10s"
@@ -547,6 +558,7 @@ services:
       MYSQLPROXY_METRICS_URL: "http://mysqlproxy:9091/metrics"
       DECEPTION_ENGINE_METRICS_URL: "http://deception-engine:8001/metrics"
       MITRE_AGENT_METRICS_URL: "http://mitre-agent:8002/metrics"
+      MITRE_ENABLED: "${MITRE_ENABLED:-false}"
       SESSION_MODULE_METRICS_URL: "http://session-module:8000/metrics"
       REDPANDA_METRICS_URL: "http://redpanda:9644/metrics"
       SCALING_METRICS_URL: "http://scaling-agent:8080/metrics"
@@ -563,8 +575,6 @@ services:
       mysqlproxy:
         condition: service_started
       deception-engine:
-        condition: service_started
-      mitre-agent:
         condition: service_started
       session-module:
         condition: service_started
