@@ -1,5 +1,300 @@
 # AGENTS.md
 
+## Active handoff — 2026-10-09
+
+Read this section first. It supersedes conflicting execution instructions in the
+historical roadmap below and in the originally pasted cleanup prompt.
+
+### Scope and approval boundary
+
+- The initial checkpoint was a documentation/setup handoff only. The user requested:
+  "for now, just update the agents.md properly" so they can manually commit and
+  resume with refreshed tokens. Do not claim the cleanup is implemented.
+- The current implementation workstream on resume is **deterministic configuration
+  and observability cleanup**, described below. It replaces the old instruction
+  to proceed directly to dynamic Phase D2.
+- All other roadmap work is **DO NOT START — explicit user approval required**:
+  steering, commitment/world-ledger development, intervention, learned live
+  selection, generative AI, adaptive experiments, public/cloud deployment, and
+  unrelated later phases. Previous design approval is not execution approval.
+- Preserve existing implementations and historical evidence. Historical VERIFIED
+  entries do not prove current runtime health or authorize feature activation.
+- The pasted cleanup prompt said not to update AGENTS.md until review. The user's
+  latest direct request explicitly supersedes that restriction for this handoff.
+- Do not launch a test/validation campaign. Functional testing is reserved for the
+  user. Provide manual verification commands when implementation is ready.
+
+### Repository and Git rules
+
+Repository: `NipunRao05/PES-capstone`. Local root: `F:\b\Capstone-main`.
+Observed current branch: `feature/config-observability`; HEAD: `2c95ba9`.
+The user created the branch from the deceptive-principals baseline. Work on the
+current branch; inspect identity without changing it.
+
+The local working tree, including untracked local configuration, is authoritative.
+Do not replace local work with GitHub content or create a competing config system.
+Do not create/switch/check out branches, create worktrees, merge, rebase, reset,
+automatically stash, clean, stage, commit, push, or create a PR for this task.
+The user will review and commit manually; later explicit instructions can change
+that scope. Preserve unrelated edits.
+
+At the beginning of a resumed session, inspect:
+
+```powershell
+$git = "C:\Program Files\Git\cmd\git.exe"
+& $git status --short
+& $git log --oneline -10
+docker compose -f docker-compose.yml ps
+```
+
+These are read-only observations, not functional validation. Inspect relevant
+local diffs and untracked files before editing. Never print `.env` secret values.
+
+### Current system contract
+
+Supported mode: `deterministic_rule_based`.
+
+```text
+Attacker -> PostgreSQL/MySQL proxy -> deterministic rules + authoritative state
+         -> Deception Engine or controlled backend -> attacker
+Proxy/service events -> Redpanda -> Session & Behavior / Evidence / Scaling /
+                                   Observability
+```
+
+Rules define safe allowed behavior; state defines authoritative facts; a
+**deterministic rule** selects the current response. SQL engines remain the
+physical database authority. Preserve bounded virtual deceptive state and never
+turn synthetic principals into physical database accounts. An optional future
+selector may choose only rule-approved actions, but must not be implemented now.
+
+Preserve the baseline in `2c95ba9` (committed implementation; not re-tested here):
+MITRE runtime disconnected with source retained; persistent deceptive principals;
+PostgreSQL SCRAM and MySQL mysql_native_password virtual authentication;
+principal-scoped persistence; creator -> principal -> return-session correlation;
+Deceptive Persistence Re-engagement metrics; enriched verified-outcome events.
+Do not change authentication security semantics, deterministic responses, physical
+DB passthrough, or working protocol/state handling.
+
+### Current implementation workstream on resume
+
+Complete one focused cleanup: configuration management, canonical feature flags,
+fail-fast preflight, effective config introspection, meaningful Prometheus metrics,
+Loki structured logging, and one useful Grafana operations/research dashboard.
+This section defines required work, not a completion record.
+
+1. **Audit local configuration first.** Inspect `docker-compose.yml`, `.env`
+   (without exposing secrets), `.env.example`, `config/` if present, `scripts/`,
+   both proxies' env parsing, and deception/session/evidence/scaling configuration.
+   Inspect `observability/`, Prometheus targets/rules, Grafana provisioning and
+   dashboards, Loki, Promtail, metrics bridge, and service `/metrics` producers.
+   Find duplicate settings, conflicting defaults, hard-coded flags/URLs,
+   mandatory optional dependencies, stale options, and secrets mixed with policy.
+   Search env reads, MITRE/LLM flags, adaptation, learning, experiments, principal
+   settings, Redis/Redpanda addresses/topics, profiles, and `depends_on`.
+2. **Reuse existing local structure.** Separate feature enablement, deterministic
+   policy, and infrastructure/secrets. If no equivalent exists, prefer
+   `config/features.yaml`, `config/deception.yaml`, `config/observability.yaml`.
+   Keep `.env` primarily for secrets and deployment addresses/ports. Do not build
+   a config service, new database, remote flag system, or hot reload.
+3. **One canonical feature model.** Resolve compatible legacy environment flags
+   through that model with documented precedence/conflict handling. An env flag
+   must not silently override a disabled canonical feature. Observability config
+   may describe categories/settings but must not duplicate feature authority.
+4. **Complete runtime gating.** Disabled optional features must not start by
+   default, be required by dependencies/readiness, receive mandatory waits,
+   trigger reconnect loops, be scraped as expected services, or appear unhealthy
+   in Grafana. Use simple Compose profiles or equivalent gating. Derive feature
+   dependencies from code; reject invalid combinations rather than silently
+   enabling dependencies. Preserve dormant source and specialized dashboards.
+5. **One lightweight loader/validator and preflight entry point.** Extend an
+   existing helper if suitable. Otherwise consider `scripts/honeypot.py` with
+   `config-check` and `config-status`; these names are proposals until created.
+   Preflight must work without Docker startup. Validate required files, YAML,
+   keys (unknown keys rejected or explicitly warned), boolean types, numeric
+   ranges, ports, nonempty addresses, dependencies, incompatible options, and
+   enabled-feature secrets. Disabled features must not require their secrets.
+   Preserve HMAC security: base64 decoding to at least 32 bytes. Errors must name
+   the invalid setting and expected constraint without revealing values.
+6. **Effective status.** Show resolved mode and enabled/disabled features with no
+   passwords, HMAC material, verifiers, backend credentials, or private Redis
+   information. Keep configured enablement distinct from observed health.
+7. **Deterministic cleanup.** Audit `ADAPTATION_ENDPOINT`, operator mode, learned
+   selection, experiment assignment/state, and AI selection wiring. Disable
+   adaptive requirements and activity in current mode without deleting future
+   code or implementing steering/intervention.
+8. **Document the implemented result in `CONFIGURATION.md`.** Cover file
+   responsibilities, every feature/default/dependency, enable/disable procedure,
+   compatibility precedence, profiles, exact preflight/status commands, and
+   observability roles. Do not describe proposed commands as already available.
+
+Target defaults (requirements, not a claim about the current Compose runtime):
+
+| Group | Feature | Default |
+| --- | --- | --- |
+| Mode | deterministic_rule_based | selected |
+| Core | postgres_proxy, mysql_proxy, deception_engine | enabled |
+| Analysis | session_behavior, evidence_store | enabled |
+| Deception | deceptive_principals | enabled |
+| Infrastructure | scaling, sandbox_replay | enabled |
+| Observability | enabled, prometheus, grafana, loki | enabled |
+| Optional future | mitre, live_learning, dynamic_steering, intervention, generative_ai, local_llm | disabled |
+
+Audit `mitre-agent`, `ai-agent`, `llm-agent`, `local-llm`, learning/adaptation,
+replay, scaling and observability runtime wiring. Observability being disabled
+must not stop the core honeypot. Features not yet safely supported must not gain
+execution authority simply because a flag is set.
+
+### Observability requirements for this workstream
+
+Audit each retained metric's producer, authoritative source, semantics, type,
+labels, duplication and inactive-feature ownership before modifying it.
+
+- Prometheus owns aggregate counts/rates, health and latency. Redpanda owns domain
+  events; Evidence Store owns detailed historical/correlated evidence; Loki owns
+  operational logs; Grafana visualizes these sources.
+- Remove/replace per-session scaling Prometheus series after confirming local
+  usage. No session/principal IDs, usernames, client IPs, query text (including
+  normalized SQL), arbitrary object names, secrets or attacker-controlled strings
+  in Prometheus labels. Prefer bounded protocol/authority/success labels and
+  registry-bounded strategy/profile values.
+- Make MITRE metrics, alerts, bridge output and dashboards dormant when disabled.
+  Gate AI/LLM readiness scrapes. Rename non-MITRE scaling metrics that retain
+  misleading MITRE names; keep aliases only where compatibility requires them.
+- Platform: actual scrape/readiness/backend health, Redis/Redpanda errors,
+  consumer lag, processing failures/latency, and real queues only. Reuse existing
+  infrastructure collectors rather than duplicating them in the metrics bridge.
+- Traffic: active/total/rejected connections; auth attempts/success/failure;
+  queries and verified success/failure; backend/deception/policy authority;
+  authoritative processing latency.
+- Deception: responses, passthrough, policy rejections, traps, decisions,
+  failures/fallbacks, decision latency; only bounded strategy/profile labels.
+- Sessions: active/completed sessions, duration and queries/session histograms,
+  authoritative depth/exploration distributions, profiles and pipeline latency/lag.
+- Persistence: preserve `deceptive_principals_created_total`,
+  `deceptive_principals_reused_total`, `deceptive_principal_return_sessions_total`,
+  `deceptive_persistence_reengagement_rate`. Created counts distinct successfully
+  created attacker-origin principals; reused counts distinct such principals
+  successfully authenticating in a different session. Rate = reused / created
+  with a safe zero-created case. Add time-to-first-reuse histogram only if
+  authoritative timestamps are readily available. No username/principal labels.
+- Evidence: ingest counts/errors/latency, session links, principal creation/auth
+  evidence, and backlog only where a real queue exists.
+- Scaling: actual input pressure/load, target replicas, scale-up/down/hold or
+  cooldown decisions, failures, safe mode and autoscaling state. Show actual
+  replicas only from an authoritative source; a target is not a physical count.
+- Never fabricate metrics, queue depths, Kubernetes state or research results.
+
+Normalize structured log bodies where practical: timestamp, level, service,
+component, event, protocol, authority, success, latency_ms, error_category.
+Use low-cardinality Loki labels: service, level, environment, optionally protocol.
+Session/principal IDs, usernames, IPs and query context may only be in bodies
+when useful and sanitized. Never log plaintext passwords, verifiers, SCRAM/HMAC
+secrets or authentication material, including secrets embedded in query text.
+Keep config/startup, backend, deception, Redis, Redpanda, principal-registry,
+evidence and scaling errors diagnosable.
+
+Primary dashboard: **Honeypot Operations & Research Overview**. Make it the
+meaningful deterministic default; retain useful specialized dashboards. Rows:
+
+1. Runtime mode and platform health: enabled core/backends/Redpanda/Redis, errors,
+   major latency; never show disabled optional services as broken.
+2. Live database activity: connections, query rate, auth activity/failures,
+   verified outcomes and protocol split.
+3. Deception effectiveness: response authority, deception rate, traps, decision
+   latency and failures/fallbacks, bounded profile mix where meaningful.
+4. Session & behavior: active/completed, duration, queries/session, depth,
+   profiles and pipeline/consumer lag where produced correctly.
+5. Deceptive persistence: created, reused, return sessions, re-engagement rate,
+   first-reuse distribution if available.
+6. Evidence pipeline: ingest, failures, latency, links, principal evidence,
+   real backlog only.
+7. Scaling & resources: pressure, targets, authoritative actual replicas,
+   decisions, safe/autoscaling modes and available CPU/memory collectors.
+8. Log investigation: concise Loki warnings/errors and proxy/deception,
+   Redis/Redpanda and startup/config failures.
+
+Each panel must answer a question with explicit names, correct time units,
+percentages for ratios, appropriate counter rates, histograms for distributions
+and gauges for current state. Omit unavailable metrics instead of inventing data.
+
+### Verification limits and implementation completion report
+
+Do not run pytest, unittest, go test/vet, integration/persistence/virtual-auth
+checks, attack simulations, scaling/load tests, benchmarks, smoke tests, long
+validation, or `docker compose up` for this workstream. Do not start/rebuild/
+restart services as a substitute for tests. Inspect and edit source/config only;
+review diffs for accidental changes. Supply commands for the user, unexecuted.
+Mark implementation as untested until real evidence exists; do not promote
+historical status to VERIFIED. A functional failure is not established merely
+because no tests were run.
+
+When the cleanup is actually implemented, report: local config discovered;
+problems; final structure; feature/default/dependency/runtime-effect table;
+deterministic behavior; preflight checks and exact check/status commands;
+optional-service/Compose changes; observability findings; metric groups;
+cardinality fixes; Loki model; dashboard rows/panels; changed files; unexecuted
+manual verification commands; remaining debt. This documentation-only checkpoint
+must not be reported as completion of those implementation deliverables.
+
+### Small implementation pass — 2026-10-09
+
+The user subsequently authorized small implementation tasks to conserve credits.
+Added `scripts/honeypot.py` (limited offline config-check/config-status),
+`scripts/config-requirements.txt`, and `CONFIGURATION.md`. The helper reads the
+existing Compose/.env sources; no competing feature model was introduced.
+It validates limited YAML structure, baseline secret/port/flag requirements and
+reports configured service activation plus remaining adaptation/AI wiring.
+It does not prove runtime health or complete canonical configuration validation.
+Promtail no longer indexes container_id or technique_id and prefers the stable
+Compose service name. Existing compose_service selectors remain intact.
+
+All implementation remains UNTESTED at user request. No preflight/test execution,
+service restart, dependency install, commit or push. Full runtime gating, canonical
+feature dependencies, per-session metric/dashboard migration, logging redaction
+and the primary dashboard remain PENDING. See CONFIGURATION.md for exact manual
+commands, audited findings and the next implementation steps.
+
+### Initial checkpoint (historical observations) and continuation context
+
+Observed on 2026-10-09 (read-only inspection, no functional campaign):
+
+- Initial tracked/untracked status was clean. Branch `feature/config-observability`,
+  HEAD `2c95ba9` (`feat: disconnect MITRE and add virtual auth with persistent
+  deceptive principals`). No Git mutation performed.
+- Existing locations found: `.env`, `.env.example`, `docker-compose.yml`,
+  `session_module/config.py`, `local_llm/config.py`, `scripts/`,
+  `observability/prometheus.yml`, `observability/capstone_alert_rules.yml`,
+  `observability/json_exporter.yml`, `observability/metrics_bridge/`,
+  `observability/grafana/`, `observability/loki/loki-config.yaml`,
+  `observability/promtail.yaml`. No top-level `config/` was found in this inventory.
+  Full configuration and metric audits remain PENDING; re-inspect local files.
+- Compose text still sets `ADAPTATION_OPERATOR_MODE: RULE_ADAPTIVE` and an
+  adaptation endpoint; MITRE and local-AI profiles exist. This is a cleanup lead,
+  not proof of attacker-facing adaptation.
+- Compose status showed Evidence Store, scaling-agent and sandbox-replay-engine
+  restarting. Other listed services included running proxies, deception,
+  session, metrics, Prometheus and AI/LLM services; sandbox DBs were healthy.
+  Being Up is not functional verification. Diagnose only as relevant to the
+  authorized cleanup; no repair or health claim was made here.
+- This checkpoint changes only AGENTS.md. No feature configuration, loader,
+  preflight/status command, dashboard or runtime gating is implemented by it.
+
+On the user's next request to continue, start with the local configuration and
+observability audit above, then implement that cleanup within its limits. Do not
+resume dynamic Phase D2 or any older phase automatically. Preserve this handoff,
+record actual files changed and remaining work as implementation progresses, and
+leave staging/commit to the user.
+
+---
+
+## Historical architecture, validation records and deferred roadmap
+
+The material below is retained for provenance and long-term design. Its phase
+sequence, historical VERIFIED labels, suggested services, tests, Git examples and
+"next" steps do not override the active handoff above. Historical completed work
+stays historical; unimplemented roadmap items require explicit user approval.
+
+
 ## Project: Hybrid Adaptive & Evolving Database Honeypot Platform
 
 This file is the execution handoff for Codex or any code-generation agent working on this repository.
@@ -10,7 +305,7 @@ The target system is:
 
 > **A state-grounded hybrid adaptive and evolving database honeypot that preserves deterministic rule-based safety and protocol correctness, adapts deception strategies to attacker behavior, learns from historical outcomes, proposes new deception capabilities for human review, safely validates new decoys, scales under attack pressure, replays captured behavior in a sandbox, generates hardening recommendations, and produces evidence-grounded blue-team/research reports.**
 
-The approved next-generation dynamic design is documented in:
+The historically approved next-generation design (execution deferred pending user approval) is documented in:
 
 ```text
 TWO_STAGE_DYNAMIC_HONEYPOT_PLAN.md
@@ -385,9 +680,9 @@ to attackers.
 
 ---
 
-# 6. Current Conservative Status
+# 6. Historical Conservative Status (not current runtime verification)
 
-Before Codex starts new development, verify the repository and update this table.
+Retain this historical table as evidence context. Current scope/status is in the active handoff; do not run a validation campaign or upgrade these labels during the current workstream.
 
 ```text
 Database deception layer                 VERIFIED historically
@@ -444,7 +739,7 @@ Final research validation package        PENDING
 
 # 7. Execution Phases
 
-Do the following phases in order.
+Deferred roadmap only: after explicit user approval, follow the applicable dependency order. Do not execute these phases automatically during the current workstream.
 
 ---
 
@@ -2971,64 +3266,17 @@ The project must be able to run all modes from operator configuration.
 
 # 12. Git Policy
 
-Do not push partial/broken work.
-
-For each phase:
-
-```powershell
-$git = "C:\Program Files\Git\cmd\git.exe"
-
-& $git status --short
-
-# run phase acceptance tests
-
-& $git add <changed-files>
-& $git commit -m "<clear phase message>"
-
-# push only when user explicitly approves
-```
-
-Suggested commit style:
-
-```text
-Verify current project checkpoint
-Freeze deterministic honeypot baseline
-Add authoritative deception session state
-Refactor rules into deception strategy registry
-Add behavior-state feature extraction
-Add adaptive policy guard
-Add rule-based strategy agent
-Add asynchronous deception adaptation
-Add strategy reward telemetry
-Add controlled attack workloads
-Add contextual bandit shadow mode
-Enable bounded learned strategy selection
-Add retrospective learning agent
-Add deception coverage-gap proposals
-Add blue-team strategy review workflow
-Add strategy validation pipeline
-Add local CPU LLM runtime
-Add validated synthetic decoy generation
-Complete evidence store
-Complete sandbox replay agent
-Add hardening validation agent
-Add evidence-grounded analyst agent
-Persist adaptive policy state
-Add event idempotency safeguards
-Add adaptive operator controls
-Add adaptive deception dashboards
-Validate KEDA physical scaling
-Add comparative adaptive honeypot experiments
-Add resource feasibility experiments
-Prepare public honeypot security gate
-Add final research validation artifacts
-```
+The user owns staging and committing for the current workstream. Do not stage,
+commit, push, create a PR, change branches, create worktrees, merge, rebase, reset,
+stash automatically or clean. Use read-only status/log/diff inspection and leave
+reviewable local edits. A later explicit user request is required to change this
+scope. Historical phase completion never grants implicit commit/push permission.
 
 ---
 
-# 13. Immediate Next Step for Codex
+# 13. Historical Continuation Record (superseded by active handoff)
 
-Current verified checkpoint:
+Historical verification checkpoint (not re-tested on 2026-10-09):
 
 ~~~text
 Phase 0 — Verify Current Checkpoint              VERIFIED
@@ -3068,7 +3316,7 @@ VERIFIED as of 2026-09-01. `DYNAMIC_D1_IMPLEMENTATION.md` records the contracts,
 restart/idempotency evidence, regressions, exact-final-image baseline, and
 security gate. Dynamic execution authority remains disabled.
 
-The next dynamic phase is **D2 - Attack graph, path registry, and commitment
+If the user later approves dynamic development, its next planned phase is **D2 - Attack graph, path registry, and commitment
 ledger**. It must remain non-attacker-facing until its consistency acceptance
 tests pass. The existing Phase 21 replay,
 Phase 22 hardening, and Phase 23 analyst work remain required and are integrated

@@ -1,0 +1,2 @@
+# Offline config-check/config-status only; matches the existing deception dependency.
+PyYAML==6.0.1

@@ -18,12 +18,17 @@ scrape_configs:
             values: ["running"]
 
     relabel_configs:
-      # Use container name as the service label
+      # Fallback service label for containers without Compose metadata
       - source_labels: [__meta_docker_container_name]
         regex: /(.*)
         target_label: service
 
-      # Use compose service name if available
+      # Prefer a stable service label across Compose container replacements.
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        regex: (.+)
+        target_label: service
+
+      # Retain compose_service for existing dashboard selectors
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
         target_label: compose_service
 
@@ -31,9 +36,7 @@ scrape_configs:
       - source_labels: [__meta_docker_container_label_com_docker_compose_project]
         target_label: compose_project
 
-      # Keep container ID for correlation
-      - source_labels: [__meta_docker_container_id]
-        target_label: container_id
+      # Container IDs stay in discovery metadata; never index them as Loki labels.
 
       # Read Docker JSON log file for each discovered container.
       - source_labels: [__meta_docker_container_id]
@@ -62,8 +65,6 @@ scrape_configs:
       # Promote level to a Loki label for fast filtering
       - labels:
           level:
-          technique_id:
-
       # Drop debug logs from proxies in normal operation (too noisy)
       - drop:
           source: level
