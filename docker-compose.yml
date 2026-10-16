@@ -1,7 +1,8 @@
-# version: "3.9"
+# Template consumed by scripts/honeypot.py; do not start directly.
+name: ${HONEYPOT_CONFIGURED:?Use python scripts/honeypot.py compose up -d --build}
 # MITRE integration temporarily disabled; source retained.
-# Restore with MITRE_ENABLED=true and COMPOSE_PROFILES=mitre in .env, then
-# docker compose up -d --build. Retained MITRE topics and shared Redis stay intact.
+# Future services remain in this template for review; the canonical launcher
+# excludes them in deterministic mode. Do not use profiles to bypass config.
 
 services:
 
@@ -175,6 +176,7 @@ services:
     restart: unless-stopped
 
   ai-agent:
+    profiles: ["future-ai"]
     build:
       context: ./ai_agent
     container_name: capstone-ai-agent
@@ -209,6 +211,7 @@ services:
     restart: unless-stopped
 
   llm-agent:
+    profiles: ["future-ai"]
     build:
       context: ./llm_agent
     container_name: capstone-llm-agent
@@ -240,6 +243,7 @@ services:
     restart: unless-stopped
 
   llm-agent-api:
+    profiles: ["future-ai"]
     image: nginx:1.27-alpine
     container_name: capstone-llm-agent-api
     user: "101:101"
@@ -439,7 +443,9 @@ services:
       STATE_API_PORT: "8003"
       STATE_MAX_SESSIONS: "5000"
       ADAPTATION_ENDPOINT: "http://deception-engine:8001/strategy/next"
-      ADAPTATION_OPERATOR_MODE: "RULE_ADAPTIVE"
+      ADAPTATION_OPERATOR_MODE: "SAFE_MODE"
+      ADAPTATION_ENABLED: "false"
+      EXPERIMENT_ENABLED: "false"
       ADAPTATION_TIMEOUT_SECONDS: "0.5"
       ADAPTATION_QUEUE_SIZE: "2048"
       LEARNED_SELECTION_MIN_CONFIDENCE: "0.75"
@@ -659,7 +665,7 @@ services:
       GF_SECURITY_CSRF_TRUSTED_ORIGINS: "localhost:3000,127.0.0.1:3000"
       GF_SECURITY_CSRF_ALWAYS_CHECK: "false"
       GF_PATHS_PROVISIONING: "/etc/grafana/provisioning"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/live_attack_feed.json"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/operations_overview.json"
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro

@@ -36,7 +36,7 @@ from experiment_assignment import (
 import config
 
 from prometheus_client import start_http_server
-from metrics import events_processed_total, events_dropped_total, events_failed_total
+from metrics import events_processed_total, events_dropped_total, events_failed_total, event_backlog, pipeline_seconds
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 event_queue = queue.Queue(maxsize=config.EVENT_QUEUE_MAX_SIZE)
 shutdown_event = threading.Event()
+event_backlog.set_function(event_queue.qsize)
 
 
 def _normalise_protocol(value: str) -> str:
@@ -162,7 +163,8 @@ def event_worker(engine: SessionEngine):
             if event is None:
                 return
             try:
-                engine.process_event(event)
+                with pipeline_seconds.time():
+                    engine.process_event(event)
                 events_processed_total.inc()
             except Exception as e:
                 events_failed_total.labels(stage="session_engine").inc()
@@ -256,14 +258,16 @@ def run_consumer(bootstrap: str, topic: str, label: str, storage: RedpandaSessio
                             snapshot = state_store.get_adaptation_snapshot(raw.get("session_id"))
                             if snapshot:
                                 state_store.observe_strategy_outcomes(snapshot)
-                            adaptation.schedule(raw.get("session_id"))
+                            if adaptation is not None:
+                                adaptation.schedule(raw.get("session_id"))
                             continue
                         state_store.apply_proxy_event(raw, label)
                         snapshot = state_store.get_adaptation_snapshot(raw.get("session_id"))
                         if snapshot:
                             state_store.observe_strategy_outcomes(snapshot)
                         if str(raw.get("event_type") or "").lower() in {"query", "session_end"}:
-                            adaptation.schedule(raw.get("session_id"))
+                            if adaptation is not None:
+                                adaptation.schedule(raw.get("session_id"))
                     except Exception as e:
                         events_failed_total.labels(stage="state_projection").inc()
                         logger.error("[%s] State projection failed: %s", label, e, exc_info=True)
@@ -281,10 +285,7 @@ def run_consumer(bootstrap: str, topic: str, label: str, storage: RedpandaSessio
                     if event is None:
                         continue
 
-                    logger.info(
-                        f"[{label}] {event.source_ip} | {event.db_user} | "
-                        f"{event.event_type} | {event.query_fingerprint[:60]}"
-                    )
+                    logger.debug("proxy event mapped: protocol=%s event=%s", event.protocol, event.event_type)
                     try:
                         event_queue.put(event, timeout=2)
                     except queue.Full:
@@ -321,37 +322,41 @@ if __name__ == "__main__":
 
     storage = RedpandaSessionStore()
     engine = SessionEngine(storage)
-    experiment_persistence = None
-    try:
-        experiment_persistence = RedisExperimentPersistence(
-            config.EXPERIMENT_REDIS_HOST,
-            config.EXPERIMENT_REDIS_PORT,
-            config.EXPERIMENT_REDIS_DB,
-            config.EXPERIMENT_REDIS_KEY_PREFIX,
-            config.EXPERIMENT_REDIS_TIMEOUT_SECONDS,
-            config.EXPERIMENT_REDIS_PASSWORD,
+    experiment_controller = None
+    if config.EXPERIMENT_ENABLED:
+        experiment_persistence = None
+        try:
+            experiment_persistence = RedisExperimentPersistence(
+                config.EXPERIMENT_REDIS_HOST,
+                config.EXPERIMENT_REDIS_PORT,
+                config.EXPERIMENT_REDIS_DB,
+                config.EXPERIMENT_REDIS_KEY_PREFIX,
+                config.EXPERIMENT_REDIS_TIMEOUT_SECONDS,
+                config.EXPERIMENT_REDIS_PASSWORD,
+            )
+        except Exception as exc:
+            logger.error("Experiment persistence initialization failed closed: %s", exc)
+        experiment_controller = ExperimentAssignmentController(
+            experiment_persistence,
+            explicit_secret=config.EXPERIMENT_ASSIGNMENT_SECRET,
+            persistence_required=config.EXPERIMENT_PERSISTENCE_REQUIRED,
+            max_processed_events=config.EXPERIMENT_MAX_PROCESSED_EVENTS,
         )
-    except Exception as exc:
-        logger.error("Experiment persistence initialization failed closed: %s", exc)
-    experiment_controller = ExperimentAssignmentController(
-        experiment_persistence,
-        explicit_secret=config.EXPERIMENT_ASSIGNMENT_SECRET,
-        persistence_required=config.EXPERIMENT_PERSISTENCE_REQUIRED,
-        max_processed_events=config.EXPERIMENT_MAX_PROCESSED_EVENTS,
-    )
     state_store = AuthoritativeStateStore(
         config.STATE_MAX_SESSIONS,
         learned_confidence_threshold=config.LEARNED_SELECTION_MIN_CONFIDENCE,
         learned_minimum_updates=config.LEARNED_SELECTION_MIN_UPDATES,
         experiment_controller=experiment_controller,
     )
-    adaptation = AsyncStrategyAdapter(
-        state_store,
-        config.ADAPTATION_ENDPOINT,
-        config.ADAPTATION_OPERATOR_MODE,
-        config.ADAPTATION_TIMEOUT_SECONDS,
-        config.ADAPTATION_QUEUE_SIZE,
-    )
+    adaptation = None
+    if config.ADAPTATION_ENABLED:
+        adaptation = AsyncStrategyAdapter(
+            state_store,
+            config.ADAPTATION_ENDPOINT,
+            config.ADAPTATION_OPERATOR_MODE,
+            config.ADAPTATION_TIMEOUT_SECONDS,
+            config.ADAPTATION_QUEUE_SIZE,
+        )
     state_api = start_state_api(state_store, config.STATE_API_HOST, config.STATE_API_PORT)
     logger.info(f"Authoritative state API at http://{config.STATE_API_HOST}:{config.STATE_API_PORT}")
 
@@ -415,7 +420,8 @@ if __name__ == "__main__":
             if thread is not None:
                 thread.join(timeout=5)
 
-        adaptation.stop()
+        if adaptation is not None:
+            adaptation.stop()
 
         clustering.stop()
         clustering.join(timeout=10)
@@ -431,6 +437,7 @@ if __name__ == "__main__":
         state_api.shutdown()
         state_api.server_close()
         engine.shutdown()
-        experiment_controller.close()
+        if experiment_controller is not None:
+            experiment_controller.close()
         storage.close()
         logger.info("Goodbye.")

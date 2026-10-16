@@ -15,6 +15,8 @@ MITRE actor data from Redis is exposed only when MITRE_ENABLED is enabled.
 """
 
 import json
+import math
+from itertools import islice
 import logging
 import os
 import time
@@ -34,7 +36,6 @@ MYSQLPROXY_URL   = os.environ.get("MYSQLPROXY_METRICS_URL",   "http://mysqlproxy
 SCALING_URL      = os.environ.get("SCALING_METRICS_URL",      "http://scaling-agent:8080/metrics")
 SCALING_RAW_URL  = os.environ.get("SCALING_RAW_URL",          "http://scaling-agent:8080/metrics/raw")
 PRINCIPAL_METRICS_URL = os.getenv("PRINCIPAL_METRICS_URL", "http://deception-engine:8001/principals/metrics")
-SCALING_EVENTS_URL = os.environ.get("SCALING_EVENTS_URL",     "http://scaling-agent:8080/scale/events")
 
 REDIS_HOST       = os.environ.get("REDIS_HOST",  "redis-mitre")
 REDIS_PORT       = int(os.environ.get("REDIS_PORT", "6379"))
@@ -44,9 +45,26 @@ MITRE_ENABLED = os.getenv("MITRE_ENABLED", "false").strip().lower() in {"1", "tr
 
 # ── Redis client ──────────────────────────────────────────────────────────────
 
+SCALING_ENABLED = os.getenv("SCALING_ENABLED", "true").lower() == "true"
+PRINCIPALS_ENABLED = os.getenv("DECEPTIVE_PRINCIPALS_ENABLED", "true").lower() == "true"
+try:
+    CONFIGURED_FEATURES = json.loads(os.getenv("HONEYPOT_FEATURES", "{}"))
+except (TypeError, ValueError):
+    CONFIGURED_FEATURES = {}
+if not isinstance(CONFIGURED_FEATURES, dict):
+    CONFIGURED_FEATURES = {}
+KNOWN_FEATURES = {
+    "core.postgres_proxy", "core.mysql_proxy", "core.deception_engine",
+    "analysis.session_behavior", "analysis.evidence_store", "deception.deceptive_principals",
+    "infrastructure.scaling", "infrastructure.sandbox_replay", "observability.enabled",
+    "observability.prometheus", "observability.grafana", "observability.loki",
+    "optional_future.mitre", "optional_future.live_learning", "optional_future.dynamic_steering",
+    "optional_future.intervention", "optional_future.generative_ai", "optional_future.local_llm",
+}
+
 try:
     _redis = redis.Redis(host=REDIS_HOST, port=REDIS_PORT,
-                         decode_responses=True, socket_timeout=2)
+                         decode_responses=True, socket_timeout=2) if MITRE_ENABLED else None
 except Exception:
     _redis = None
 
@@ -57,7 +75,8 @@ def _get_json(url: str) -> dict:
     try:
         r = requests.get(url, timeout=SCRAPE_TIMEOUT)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
     except Exception as e:
         log.debug("scrape failed %s: %s", url, e)
         return {}
@@ -89,11 +108,15 @@ class PrometheusWriter:
         self._declared.add(name)
 
     def gauge(self, name: str, value, labels: dict = None, help_text: str = ""):
+        if type(value) not in (int, float) or not math.isfinite(value):
+            return
         self._declare(name, "gauge", help_text)
         label_str = self._label_str(labels)
         self._lines.append(f"{name}{label_str} {value}")
 
     def counter(self, name: str, value, labels: dict = None, help_text: str = ""):
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            return
         self._declare(name, "counter", help_text)
         label_str = self._label_str(labels)
         self._lines.append(f"{name}{label_str} {value}")
@@ -121,6 +144,8 @@ class PrometheusWriter:
 
 def scrape_pgproxy(pw: PrometheusWriter):
     data = _get_json(PGPROXY_URL)
+    if not {"active_connections", "total_connections", "backend_healthy"} <= data.keys():
+        data = {}
     pw.gauge("capstone_bridge_scrape_success", 1 if data else 0, labels={"service": "pgproxy"}, help_text="1 if bridge scrape succeeded")
     if not data:
         return
@@ -131,6 +156,8 @@ def scrape_pgproxy(pw: PrometheusWriter):
                help_text="Total PG proxy connections")
     pw.counter(f"{prefix}_rejected_connections", data.get("rejected_connections", 0))
     pw.counter(f"{prefix}_backend_dial_errors",  data.get("backend_dial_errors", 0))
+    pw.counter(f"{prefix}_deception_fallbacks_total", data.get("deception_fallbacks_total"),
+               help_text="Failed decision calls falling back to the existing proxy path")
     pw.counter(f"{prefix}_cancel_requests",      data.get("cancel_requests", 0))
     pw.gauge(f"{prefix}_backend_healthy",
              1 if data.get("backend_healthy") else 0,
@@ -139,6 +166,8 @@ def scrape_pgproxy(pw: PrometheusWriter):
 
 def scrape_mysqlproxy(pw: PrometheusWriter):
     data = _get_json(MYSQLPROXY_URL)
+    if not {"active_connections", "total_connections", "backend_healthy"} <= data.keys():
+        data = {}
     pw.gauge("capstone_bridge_scrape_success", 1 if data else 0, labels={"service": "mysqlproxy"}, help_text="1 if bridge scrape succeeded")
     if not data:
         return
@@ -149,6 +178,8 @@ def scrape_mysqlproxy(pw: PrometheusWriter):
                help_text="Total MySQL proxy connections")
     pw.counter(f"{prefix}_rejected_connections", data.get("rejected_connections", 0))
     pw.counter(f"{prefix}_backend_dial_errors",  data.get("backend_dial_errors", 0))
+    pw.counter(f"{prefix}_deception_fallbacks_total", data.get("deception_fallbacks_total"),
+               help_text="Failed decision calls falling back to the existing proxy path")
     pw.counter(f"{prefix}_kill_requests",        data.get("kill_requests", 0))
     pw.gauge(f"{prefix}_backend_healthy",
              1 if data.get("backend_healthy") else 0,
@@ -157,10 +188,13 @@ def scrape_mysqlproxy(pw: PrometheusWriter):
 
 def scrape_scaling_agent(pw: PrometheusWriter) -> dict:
     data = _get_json(SCALING_URL)
+    if not {"current_replicas", "scale_pressure", "control"} <= data.keys():
+        data = {}
     pw.gauge("capstone_bridge_scrape_success", 1 if data else 0, labels={"service": "scaling-agent"}, help_text="1 if bridge scrape succeeded")
     if not data:
         return {}
     prefix = "capstone_scaling"
+    pw.gauge("capstone_scaling_desired_replicas", data["current_replicas"], help_text="Logical desired replica target; not actual pod count")
     pw.gauge(f"{prefix}_current_replicas",   data.get("current_replicas", 0),
              help_text="Current honeypot replica target")
     pw.gauge(f"{prefix}_scale_pressure",     data.get("scale_pressure", 0),
@@ -174,9 +208,9 @@ def scrape_scaling_agent(pw: PrometheusWriter) -> dict:
     pw.counter(f"{prefix}_scale_down_events", data.get("scale_down_events", 0),
                help_text="Total scale-down decisions")
     pw.counter(f"{prefix}_trap_triggers",    data.get("trap_triggers", 0),
-               help_text="Deprecated alias for the canonical MITRE trap-trigger counter")
-    pw.counter("capstone_mitre_trap_triggers_total", data.get("trap_triggers", 0),
-               help_text="Canonical persisted trap-trigger count from scaling-agent")
+               help_text="Compatibility alias for scaling trap signal count")
+    pw.counter("capstone_scaling_trap_signals_total", data.get("trap_triggers", 0),
+               help_text="Persisted trap signals processed by scaling-agent, not MITRE classifications")
     pw.counter(f"{prefix}_duplicate_events_total", data.get("duplicate_events", 0),
                help_text="Duplicate or replayed Kafka events ignored")
     pw.gauge(f"{prefix}_processed_event_ids", data.get("processed_event_count", 0),
@@ -185,7 +219,7 @@ def scrape_scaling_agent(pw: PrometheusWriter) -> dict:
              help_text="Global mean of EWMA-smoothed scale scores")
     pw.gauge(f"{prefix}_scorer_std_dev",     data.get("scorer_std_dev", 0),
              help_text="Global std dev of scale scores (Z-score base)")
-    pw.counter(f"{prefix}_scorer_count",     data.get("scorer_count", 0),
+    pw.gauge(f"{prefix}_scorer_count",     data.get("scorer_count", 0),
                help_text="Total samples in rolling statistics")
     control = data.get("control") or {}
     manual_target = control.get("manual_replica_target")
@@ -204,37 +238,6 @@ def scrape_scaling_agent(pw: PrometheusWriter) -> dict:
     return data
 
 
-def scrape_scaling_events(pw: PrometheusWriter):
-    """Expose per-session scaling event details as labelled metrics."""
-    data = _get_json(SCALING_EVENTS_URL)
-    if not data or not data.get("events"):
-        return
-    events = data["events"]
-    # Latest event per unique session
-    seen = {}
-    for ev in events:
-        sid = ev.get("session_id", "")[:8]
-        seen[sid] = ev
-
-    for sid, ev in seen.items():
-        labels = {"session_id": sid}
-        pw.gauge("capstone_session_raw_score",
-                 ev.get("raw_score", 0), labels=labels,
-                 help_text="Raw scale_score for session")
-        pw.gauge("capstone_session_smoothed_score",
-                 ev.get("smoothed_score", 0), labels=labels,
-                 help_text="EWMA-smoothed scale_score for session")
-        pw.gauge("capstone_session_replica_target",
-                 ev.get("replica_target", 0), labels=labels,
-                 help_text="Replica target suggested by this session")
-        pw.gauge("capstone_session_z_score",
-                 ev.get("z_score", 0), labels=labels,
-                 help_text="Z-score anomaly signal for session")
-        pw.gauge("capstone_session_is_noise",
-                 1 if ev.get("is_noise") else 0, labels=labels,
-                 help_text="1 if session was suppressed as bot flood")
-
-
 def scrape_redis_mitre(pw: PrometheusWriter):
     """Read actor profile summaries from Redis.
 
@@ -247,7 +250,7 @@ def scrape_redis_mitre(pw: PrometheusWriter):
         pw.gauge("capstone_bridge_scrape_success", 0, labels={"service": "redis-mitre"}, help_text="1 if bridge scrape succeeded")
         return
     try:
-        keys = list(_redis.scan_iter("actor:*", count=200))[:500]
+        keys = list(islice(_redis.scan_iter("actor:*", count=200), 500))
         pw.gauge("capstone_bridge_scrape_success", 1, labels={"service": "redis-mitre"}, help_text="1 if bridge scrape succeeded")
         pw.gauge("capstone_mitre_actor_count", len(keys),
                  help_text="Number of unique attacker IPs tracked in Redis")
@@ -339,14 +342,16 @@ class MetricsHandler(BaseHTTPRequestHandler):
         pw = PrometheusWriter()
 
         # Always include the native Prometheus output from scaling agent first
-        native = _get_text(SCALING_RAW_URL)
+        native = ""  # Do not duplicate native metrics already represented by the bridge.
 
         # Then add bridge metrics
         scrape_pgproxy(pw)
         scrape_mysqlproxy(pw)
-        scrape_scaling_agent(pw)
-        scrape_scaling_events(pw)
-        values = _get_json(PRINCIPAL_METRICS_URL)
+        if SCALING_ENABLED:
+            scrape_scaling_agent(pw)
+        values = _get_json(PRINCIPAL_METRICS_URL) if PRINCIPALS_ENABLED else {}
+        if PRINCIPALS_ENABLED:
+            pw.gauge("capstone_bridge_scrape_success", 1 if values else 0, labels={"service": "deceptive-principals"})
         for name in ("deceptive_principals_created_total", "deceptive_principals_reused_total",
                      "deceptive_principal_return_sessions_total"):
             if isinstance(values.get(name), (int, float)):
@@ -356,6 +361,14 @@ class MetricsHandler(BaseHTTPRequestHandler):
             pw.gauge("deceptive_persistence_reengagement_rate", rate)
         if MITRE_ENABLED:
             scrape_redis_mitre(pw)
+
+        mode = "deterministic_rule_based" if os.getenv("HONEYPOT_MODE") == "deterministic_rule_based" else "unconfigured"
+        pw.gauge("honeypot_runtime_info", 1, labels={"mode": mode},
+                 help_text="Configured mode, not an attestation of service readiness")
+        for feature in sorted(KNOWN_FEATURES):
+            value = CONFIGURED_FEATURES.get(feature)
+            if type(value) is bool:
+                pw.gauge("honeypot_feature_enabled", int(value), labels={"feature": feature})
 
         # Scrape timestamp
         pw.gauge("capstone_bridge_last_scrape_timestamp",

@@ -67,12 +67,9 @@ $pgShell = 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h pgproxy -p 5432 -U postgres 
     '-c "ROLLBACK" ' +
     ('-c "SELECT to_regclass(''public.{0}'') IS NULL" ' -f $pgRolled) +
     ('-c "CREATE ROLE {0} NOLOGIN" ' -f $pgRole) +
-    ('-c "GRANT SELECT ON {0} TO {1}" ' -f $pgTable, $pgRole) +
     ('-c "SET ROLE {0}" ' -f $pgRole) +
     ('-c "SELECT count(*) FROM {0}" ' -f $pgTable) +
     '-c "RESET ROLE" ' +
-    ('-c "REVOKE SELECT ON {0} FROM {1}" ' -f $pgTable, $pgRole) +
-    ('-c "DROP ROLE {0}" ' -f $pgRole) +
     ('-c "SELECT table_name FROM information_schema.tables WHERE table_name=''{0}''" ' -f $pgTable) +
     ('-c "DROP TABLE {0}" ' -f $pgTable) +
     ('-c "SELECT * FROM {0}"' -f $pgTable)
@@ -103,7 +100,12 @@ Assert-True ($myOutput -match "(?m)^1\r?$") "MySQL rollback count is not one"
 Assert-True ($myOutput -match "(?m)^id\s+int") "MySQL schema discovery evidence missing"
 Assert-True ($myOutput -match "doesn't exist") "MySQL DROP failure evidence missing"
 
-$pgState = Get-ProjectedSession -ObjectName $pgTable -Protocol "postgres" -MinVerified 18
+# Current policy rejects non-fake account DDL. Verify rejection did not create
+# a physical account; do not weaken the runtime policy for this historical test.
+$roleCount = docker compose -f $ComposeFile exec -T postgres psql -U postgres -d testdb -Atc "SELECT count(*) FROM pg_roles WHERE rolname='$pgRole'"
+Assert-True ($LASTEXITCODE -eq 0 -and "$roleCount".Trim() -eq "0") "Rejected role unexpectedly exists in the physical backend"
+
+$pgState = Get-ProjectedSession -ObjectName $pgTable -Protocol "postgres" -MinVerified 16
 $myState = Get-ProjectedSession -ObjectName $myTable -Protocol "mysql" -MinVerified 12
 
 $requiredFields = @(
@@ -117,9 +119,9 @@ foreach ($field in $requiredFields) {
     Assert-True ($pgState.PSObject.Properties.Name -contains $field) "missing state field: $field"
 }
 
-Assert-True ($pgState.outcome_verified_count -ge 18) "PostgreSQL confirmed outcome count is incomplete"
+Assert-True ($pgState.outcome_verified_count -ge 16) "PostgreSQL confirmed outcome count is incomplete"
 Assert-True ($pgState.unverified_query_count -eq 0) "PostgreSQL simple-query session contains unverified events"
-Assert-True ($pgState.failed_query_count -eq 1) "PostgreSQL failed query was not recorded exactly once"
+Assert-True ($pgState.failed_query_count -eq 3) "PostgreSQL must record denied role creation, failed SET ROLE and SELECT after DROP"
 Assert-True ($pgState.transaction_state -eq "idle") "PostgreSQL transaction did not return to idle"
 Assert-True ($pgState.role -eq "postgres") "PostgreSQL role did not reset"
 Assert-True ($pgState.dropped_objects -contains $pgTable) "PostgreSQL DROP was not projected"
@@ -143,7 +145,7 @@ Assert-True (-not ($myState.visible_tables -contains $myTable)) "Dropped MySQL t
     postgres_failed_queries = $pgState.failed_query_count
     mysql_failed_queries = $myState.failed_query_count
     transaction_validation = "PASS"
-    role_permission_validation = "PASS"
+    account_policy_isolation = "PASS"
     schema_discovery_validation = "PASS"
     state_consistency_validation = "PASS"
 } | ConvertTo-Json -Depth 4

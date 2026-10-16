@@ -15,6 +15,7 @@ import logging
 from dataclasses import asdict
 from kafka import KafkaProducer
 import config
+from metrics import publish_results
 
 PRODUCER_ACK_TIMEOUT = float(getattr(config, "PRODUCER_ACK_TIMEOUT_SECONDS", 10))
 
@@ -67,9 +68,11 @@ class RedpandaSessionStore:
             try:
                 future = self.producer.send(topic, key=key, value=value)
                 future.get(timeout=PRODUCER_ACK_TIMEOUT)
+                publish_results.labels("success").inc()
                 self.publish_successes += 1
                 return True
             except Exception as e:
+                publish_results.labels("failed").inc()
                 last_error = e
                 logger.error(
                     "[Storage] Kafka publish attempt failed: topic=%s key=%s attempt=%d/%d error=%s",

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mysqlproxy/internal/operational"
 	"log/slog"
 	"net"
 	"net/http"
@@ -51,7 +52,7 @@ type Config struct {
 	HTTPAddr string
 
 	// Phase 3: Kafka
-	KafkaBrokers []string
+	KafkaBrokers      []string
 	KafkaTopic        string
 	KafkaDedupTopic   string
 	KafkaSessionTopic string
@@ -91,6 +92,7 @@ type Metrics struct {
 }
 
 type metricsSnapshot struct {
+	DeceptionFallbacks  int64 `json:"deception_fallbacks_total"`
 	ActiveConnections   int64 `json:"active_connections"`
 	TotalConnections    int64 `json:"total_connections"`
 	RejectedConnections int64 `json:"rejected_connections"`
@@ -327,6 +329,7 @@ func (m *Manager) startHTTPServer(ctx context.Context) {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		snap := metricsSnapshot{
+			DeceptionFallbacks:  operational.DeceptionFallbacks.Load(),
 			ActiveConnections:   m.metrics.ActiveConnections.Load(),
 			TotalConnections:    m.metrics.TotalConnections.Load(),
 			RejectedConnections: m.metrics.RejectedConns.Load(),

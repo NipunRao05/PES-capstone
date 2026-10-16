@@ -944,6 +944,9 @@ runtime: Runtime | None = None
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if os.getenv("HONEYPOT_SERVICE"):
+        from safe_logging import install
+        install()
     global runtime
     runtime = Runtime()
     try:

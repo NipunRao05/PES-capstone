@@ -31,3 +31,6 @@ phase*_after_*.txt
 .env
 .env.*
 !.env.example
+
+# Generated local deployment artifacts and tooling; never commit.
+.runtime/

@@ -1,5 +1,71 @@
 # AGENTS.md
 
+## Live verification checkpoint — 2026-10-16
+
+The latest user request explicitly supersedes earlier no-test/no-startup rules:
+run tests, make the local project work, and supply an executable Markdown runbook.
+The user also approved aligning database account passwords with the current .env.
+
+- RUN_LOCAL.md is the primary startup/check guide; VERIFICATION_RESULTS.md records
+  actual passes, initial failures, fixes and coverage limits. CONFIGURATION.md
+  remains the feature/policy reference. Older UNTESTED statements below are historical.
+- 339 Python tests and all three Go module suites passed. Native PostgreSQL/MySQL
+  principal lifecycle, transaction/persistence, restart and disable checks passed.
+  Physical SQL/state integration passed with current account-isolation semantics.
+- Fixed Prometheus nested read-only mounts. Nine enabled scrape targets were UP;
+  53 primary dashboard expressions executed; Grafana datasources and Loki delivery
+  passed. scripts/verify_runtime.py and scripts/verify_state.py reproduce key checks.
+- PostgreSQL/MySQL existing passwords were aligned with .env with user approval.
+  MySQL recovery used a network-isolated temporary container; existing plugins and
+  data were retained. .env and the principal HMAC were not changed. No volume reset.
+- Stack left running. fake_check_20261016 test principals are disabled; synthetic
+  evidence/tombstones intentionally persist. Temporary physical test tables dropped.
+- Current edits remain uncommitted on feature/config-observability, HEAD 2ab1e04.
+  Preserve user file cmds.txt. No staging, commit, push or branch changes.
+- No blanket defect-free claim: no load/soak, full replay job, live optional-feature
+  matrix or browser visual acceptance. Deferred adaptive roadmap stays deferred.
+
+---
+
+
+## Current implementation checkpoint — 2026-10-16
+
+This section supersedes the older documentation-only/small-pass status below.
+The authorized deterministic configuration and observability cleanup now has a
+code implementation; runtime/functional verification remains UNTESTED.
+Work stays on feature/config-observability (observed HEAD 2ab1e04). All current
+edits are uncommitted for the user to review and commit manually.
+
+- Canonical features/policy/observability live in config/*.yaml; scripts/configuration.py
+  validates and generates ignored .runtime artifacts. scripts/honeypot.py provides
+  config-check, config-status, prepare and guarded compose operations.
+- Root docker-compose.yml is a guarded source template. Use the launcher as
+  documented in CONFIGURATION.md; historical direct Compose startup/ps examples
+  below are superseded. No service startup, rebuild or restart was performed.
+- Optional services/dependencies/scrapes/alerts/dashboards and unused volumes are
+  omitted from the generated deployment. Future flags are rejected. Session
+  adaptation/experiment workers and evidence adaptive polling are disabled.
+- Added bounded native pipeline metrics, proxy fallback counters, aggregate bridge
+  telemetry, JSON operational logging/redaction and the feature-aware eight-row
+  Honeypot Operations & Research Overview dashboard. Preserved principal metric
+  semantics and source for dormant specialized dashboards/features.
+- .env is unchanged. Previous real preflight stopped at a placeholder
+  POSTGRES_PASSWORD; user must align synthetic credentials with existing DB
+  accounts before startup. Never print secrets, replace .env, reset volumes or
+  rotate the principal HMAC as a shortcut.
+- Quick offline syntax/artifact/diff checks and formatting were performed, using
+  temporary dummy credentials only in process for rendering. PyYAML was installed
+  locally in ignored .runtime/tooling. No functional test suites or live checks.
+- CONFIGURATION.md contains defaults/dependencies, compatibility rules, exact
+  manual commands, changed areas, metric semantics and remaining verification/debt.
+  Do not repeat the implementation or promote it to VERIFIED without evidence.
+- Preserve the user's no-test-campaign and manual Git boundaries. The next step
+  is user-run configuration/deployment/protocol verification, then targeted fixes
+  based on findings. Do not automatically start the deferred adaptive roadmap.
+
+---
+
+
 ## Active handoff — 2026-10-09
 
 Read this section first. It supersedes conflicting execution instructions in the

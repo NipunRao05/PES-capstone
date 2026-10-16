@@ -16,6 +16,8 @@ scrape_configs:
         filters:
           - name: status
             values: ["running"]
+          - name: label
+            values: ["com.docker.compose.project=capstone-main"]
 
     relabel_configs:
       # Fallback service label for containers without Compose metadata
@@ -62,11 +64,12 @@ scrape_configs:
             database: database
           source: output
 
+      # Normalize Go uppercase and Python lowercase levels without unbounded labels.
+      - template:
+          source: level
+          template: '{{ $v := ToLower .Value }}{{ if or (eq $v "debug") (eq $v "info") (eq $v "warning") (eq $v "warn") (eq $v "error") (eq $v "critical") }}{{ $v }}{{ else }}unknown{{ end }}'
+
       # Promote level to a Loki label for fast filtering
       - labels:
           level:
-      # Drop debug logs from proxies in normal operation (too noisy)
-      - drop:
-          source: level
-          expression: "debug"
-          drop_counter_reason: debug_log_dropped
+      # Log verbosity is controlled by config/observability.yaml at the producer.

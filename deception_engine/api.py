@@ -29,7 +29,8 @@ from types import SimpleNamespace
 import redis
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 from exposure import ExposureTracker
 from generator import DataGenerator
@@ -130,6 +131,9 @@ _strategy_agent: RuleOnlyStrategyAgent = RuleOnlyStrategyAgent(_policy_guard)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if os.getenv("HONEYPOT_SERVICE"):
+        from safe_logging import install
+        install()
     global _redis_client, _schema_loader, _generator, _exposure, _mutations, _strategy_registry, _policy_guard, _strategy_agent
     _redis_client = redis.Redis(
         host=REDIS_HOST, port=REDIS_PORT,
@@ -511,6 +515,32 @@ def _enforce_decide_rate_limit(request: Request, raw_body: dict, payload: dict) 
                 "reason": "rate limiter unavailable",
             },
         )
+
+
+DEPENDENCY_UP = Gauge("honeypot_dependency_up", "Last scrape-time dependency state", ("service", "dependency"))
+DECISION_REQUESTS = Counter("honeypot_decision_requests_total", "Decision HTTP requests by result", ("result",))
+DECISION_LATENCY = Histogram("honeypot_decision_seconds", "Decision HTTP processing time", buckets=(.001,.005,.01,.025,.05,.1,.25,.5,1,2,5))
+
+
+@app.middleware("http")
+async def decision_telemetry(request, call_next):
+    if request.url.path != "/decide":
+        return await call_next(request)
+    started = time.perf_counter()
+    result = "failed"
+    try:
+        response = await call_next(request)
+        result = "success" if response.status_code < 400 else "rejected" if response.status_code < 500 else "failed"
+        return response
+    finally:
+        DECISION_REQUESTS.labels(result).inc()
+        DECISION_LATENCY.observe(time.perf_counter() - started)
+
+
+@app.get("/metrics")
+def operational_metrics():
+    DEPENDENCY_UP.labels("deception-engine", "redis").set(int(_redis_ready()))
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health")
@@ -1785,7 +1815,7 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     uvicorn.run(
-        "api:app",
+        app,
         host="0.0.0.0",
         port=int(os.environ.get("PORT", "8001")),
         reload=False,

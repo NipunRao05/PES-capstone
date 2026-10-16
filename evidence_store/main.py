@@ -20,6 +20,9 @@ import requests
 from fastapi import FastAPI, HTTPException, Query
 from kafka import KafkaConsumer
 from pydantic import BaseModel, Field
+from fastapi.responses import Response
+from prometheus_client import Gauge, generate_latest, CONTENT_TYPE_LATEST
+import telemetry
 
 
 logging.basicConfig(
@@ -33,6 +36,8 @@ KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "evidence-store-v1")
 KAFKA_OFFSET_RESET = os.getenv("KAFKA_OFFSET_RESET", "latest")
 # MITRE integration temporarily disabled; source retained.
 MITRE_ENABLED = os.getenv("MITRE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+SCALING_ENABLED = os.getenv("SCALING_ENABLED", "true").lower() == "true"
+ADAPTATION_ENABLED = os.getenv("ADAPTATION_ENABLED", "false").lower() == "true"
 KAFKA_TOPICS = tuple(
     topic.strip()
     for topic in os.getenv(
@@ -450,6 +455,7 @@ class EvidenceRepository:
             }
             appended = self._append_once(session_id, "queries", event_id, query, MAX_QUERY_EVENTS)
             if appended:
+                telemetry.query(payload, topic)
                 self.client.hset(
                     self._record_key(session_id),
                     mapping={
@@ -484,7 +490,8 @@ class EvidenceRepository:
             for field in ("time_to_first_reuse_seconds", "return_session_number"):
                 if field in payload:
                     event[field] = max(0, safe_float(payload[field]))
-            self._append_once(session_id, "session_events", event_id, event, MAX_STAGE_EVENTS)
+            if self._append_once(session_id, "session_events", event_id, event, MAX_STAGE_EVENTS):
+                telemetry.session(payload, topic)
 
         elif topic in {"mitre-events", "mitre-sessions"}:
             technique_id = bounded_text(payload.get("technique_id"), 64)
@@ -762,6 +769,7 @@ class EvidenceConsumer(threading.Thread):
                             break
                         payload = decode_json_object(message.value)
                         if payload is None:
+                            telemetry.INGEST.labels("malformed").inc()
                             log.warning(
                                 "Ignoring malformed or non-object evidence event: topic=%s partition=%s offset=%s",
                                 message.topic,
@@ -770,19 +778,24 @@ class EvidenceConsumer(threading.Thread):
                             )
                             continue
                         try:
-                            self.repository.ingest_kafka(
+                            started = time.perf_counter()
+                            accepted = self.repository.ingest_kafka(
                                 message.topic,
                                 payload,
                                 message.partition,
                                 message.offset,
                             )
+                            telemetry.INGEST.labels("processed" if accepted else "ignored").inc()
                         except Exception:
+                            telemetry.INGEST.labels("failed").inc()
                             log.exception(
                                 "Evidence ingestion failed: topic=%s partition=%s offset=%s",
                                 message.topic,
                                 message.partition,
                                 message.offset,
                             )
+                        finally:
+                            telemetry.LATENCY.observe(time.perf_counter() - started)
             except Exception as exc:
                 self.connected = False
                 self.last_error = str(exc)
@@ -943,20 +956,22 @@ class Runtime:
         self.repository = EvidenceRepository(self.redis)
         self.stop_event = threading.Event()
         self.consumer = EvidenceConsumer(self.repository, self.stop_event)
-        self.poller = ScalingEventPoller(self.repository, self.stop_event)
-        self.adaptive_poller = AdaptiveEvidencePoller(self.repository, self.stop_event)
+        self.poller = ScalingEventPoller(self.repository, self.stop_event) if SCALING_ENABLED else None
+        self.adaptive_poller = AdaptiveEvidencePoller(self.repository, self.stop_event) if ADAPTATION_ENABLED else None
 
     def start(self) -> None:
         self.consumer.start()
-        self.poller.start()
-        self.adaptive_poller.start()
+        for poller in (self.poller, self.adaptive_poller):
+            if poller is not None:
+                poller.start()
 
     def close(self) -> None:
         self.stop_event.set()
         self.consumer.close()
         self.consumer.join(timeout=3)
-        self.poller.join(timeout=3)
-        self.adaptive_poller.join(timeout=3)
+        for poller in (self.poller, self.adaptive_poller):
+            if poller is not None:
+                poller.join(timeout=3)
         self.redis.close()
 
 
@@ -981,6 +996,9 @@ runtime: Runtime | None = None
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if os.getenv("HONEYPOT_SERVICE"):
+        from safe_logging import install
+        install()
     global runtime
     runtime = Runtime()
     runtime.start()
@@ -1000,6 +1018,21 @@ def require_runtime() -> Runtime:
     return runtime
 
 
+DEPENDENCY_UP = Gauge("honeypot_dependency_up", "Last scrape-time dependency state", ("service", "dependency"))
+
+
+@app.get("/metrics")
+def metrics():
+    active = runtime
+    try:
+        redis_ok = active is not None and bool(active.redis.ping())
+    except Exception:
+        redis_ok = False
+    DEPENDENCY_UP.labels("evidence-store", "redis").set(int(redis_ok))
+    DEPENDENCY_UP.labels("evidence-store", "redpanda_consumer").set(int(active is not None and active.consumer.connected))
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
     return {"status": "ok", "timestamp": utc_now()}
@@ -1015,20 +1048,19 @@ def readyz() -> dict[str, Any]:
     ready = (
         redis_ok
         and active.consumer.connected
-        and active.poller.available
-        and active.adaptive_poller.available
+        and (active.poller is None or active.poller.available)
+        and (active.adaptive_poller is None or active.adaptive_poller.available)
     )
     return {
         "ready": ready,
         "timestamp": utc_now(),
         "dependencies": {
             "redis": "ok" if redis_ok else "unavailable",
-            "redpanda": "ok" if active.consumer.connected else active.consumer.last_error or "connecting",
-            "scaling_agent": "ok" if active.poller.available else active.poller.last_error or "connecting",
+            "redpanda": "ok" if active.consumer.connected else "unavailable",
+            "scaling_agent": "disabled" if active.poller is None else ("ok" if active.poller.available else "unavailable"),
             "session_module": (
-                "ok"
-                if active.adaptive_poller.available
-                else active.adaptive_poller.last_error or "connecting"
+                "disabled" if active.adaptive_poller is None else
+                ("ok" if active.adaptive_poller.available else "unavailable")
             ),
         },
     }

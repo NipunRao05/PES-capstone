@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pgproxy/internal/operational"
 	"github.com/pgproxy/internal/principal"
 	"io"
 	"log/slog"
@@ -552,7 +553,7 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 					"profile", dec.Profile,
 					"columns", dec.Columns,
 					"rows", len(dec.Rows),
-					"query", truncateSQL(q.String, 300),
+					"query_bytes", len(q.String),
 				)
 				if err := h.sendPostgresDeceptionResult(dec, q.String); err != nil {
 					return fmt.Errorf("send deception-engine fake result: %w", err)
@@ -725,7 +726,7 @@ func (h *Handler) drainBackendResponses(ctx context.Context, trigger pgproto3.Fr
 			h.lastQueryOutcome.Success = false
 			h.lastQueryOutcome.ErrorCode = m.Code
 			h.lastQueryOutcome.TransactionState = h.postgresTransactionState()
-			h.logger.Debug("backend error response", "msg", m.Message)
+			h.logger.Debug("backend error response", "sqlstate", m.Code)
 			if !needsRFQ {
 				return nil
 			}
@@ -1067,6 +1068,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
+		operational.DeceptionFallbacks.Add(1)
 		h.logger.Warn("deception-engine unavailable; passthrough", "err", err)
 		h.recordDeceptionFailure(protocol, err.Error())
 		return nil, false
@@ -1075,6 +1077,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg := fmt.Sprintf("non-2xx status %d", resp.StatusCode)
+		operational.DeceptionFallbacks.Add(1)
 		h.logger.Warn("deception-engine non-2xx; passthrough", "status", resp.StatusCode)
 		h.recordDeceptionFailure(protocol, msg)
 		return nil, false
@@ -1082,6 +1085,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	var dec deceptionDecisionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dec); err != nil {
+		operational.DeceptionFallbacks.Add(1)
 		h.logger.Warn("deception response decode failed; passthrough", "err", err)
 		h.recordDeceptionFailure(protocol, err.Error())
 		return nil, false

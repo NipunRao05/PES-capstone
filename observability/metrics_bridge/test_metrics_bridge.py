@@ -59,6 +59,8 @@ class TestMetricsBridge(unittest.TestCase):
     def test_scaling_agent_exports_canonical_persisted_trap_counter(self):
         pw = mb.PrometheusWriter()
         with patch.object(mb, "_get_json", return_value={
+            "current_replicas": 3,
+            "scale_pressure": 0.5,
             "trap_triggers": 7,
             "duplicate_events": 5,
             "processed_event_count": 2,
@@ -73,7 +75,8 @@ class TestMetricsBridge(unittest.TestCase):
             data = mb.scrape_scaling_agent(pw)
         rendered = pw.render()
         self.assertEqual(data["trap_triggers"], 7)
-        self.assertIn("capstone_mitre_trap_triggers_total 7", rendered)
+        self.assertIn("capstone_scaling_trap_signals_total 7", rendered)
+        self.assertNotIn("capstone_mitre_trap_triggers_total", rendered)
         self.assertIn("capstone_scaling_trap_triggers 7", rendered)
         self.assertIn("capstone_scaling_duplicate_events_total 5", rendered)
         self.assertIn("capstone_scaling_processed_event_ids 2", rendered)

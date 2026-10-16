@@ -10,7 +10,7 @@ from feature_extractor import (
 )
 import config
 
-from metrics import active_sessions, sessions_closed_total, session_entropy, session_depth_score
+from metrics import active_sessions, sessions_closed_total, session_entropy, session_depth_score, session_duration_seconds, session_queries, session_depth
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +255,9 @@ class SessionEngine:
         )
 
         sessions_closed_total.inc()
+        session_duration_seconds.observe(duration)
+        session_queries.observe(session.query_count)
+        session_depth.observe(depth_score)
         session_entropy.set(entropy)
         session_depth_score.set(depth_score)
 

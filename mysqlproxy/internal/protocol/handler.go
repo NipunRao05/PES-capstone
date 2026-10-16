@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mysqlproxy/internal/operational"
 	"github.com/mysqlproxy/internal/principal"
 	"io"
 	"log/slog"
@@ -653,9 +654,9 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 				}
 				continue
 			}
-			h.logger.Debug("COM_QUERY", "sql", truncate(sql, 200))
+			h.logger.Debug("COM_QUERY", "query_bytes", len(sql))
 			// Query-level proxy log evidence.
-			// This makes proxy logs show the actual SQL received by the proxy.
+			// Query content belongs to the sanitized evidence pipeline, not operational logs.
 			if h.sess != nil {
 				snap := h.sess.Snapshot()
 				h.logger.Info(
@@ -665,7 +666,7 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 					"session_id", snap.ID,
 					"username", snap.Username,
 					"database", snap.Database,
-					"query_raw", truncate(sql, 300),
+					"query_bytes", len(sql),
 				)
 			}
 
@@ -686,7 +687,7 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 					"profile", dec.Profile,
 					"columns", dec.Columns,
 					"rows", len(dec.Rows),
-					"query", truncate(sql, 300),
+					"query_bytes", len(sql),
 				)
 				if err := h.sendMySQLDeceptionResult(dec); err != nil {
 					return fmt.Errorf("send deception-engine fake result: %w", err)
@@ -764,7 +765,7 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 				}
 				continue
 			}
-			h.logger.Debug("COM_STMT_PREPARE", "sql", truncate(sql, 200))
+			h.logger.Debug("COM_STMT_PREPARE", "query_bytes", len(sql))
 			stmtID, err := h.handleStmtPrepare(ctx, cmdPkt, sql)
 			if err != nil {
 				return err
@@ -1940,6 +1941,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
+		operational.DeceptionFallbacks.Add(1)
 		h.logger.Warn("deception-engine unavailable; passthrough", "err", err)
 		h.recordDeceptionFailure(protocol, err.Error())
 		return nil, false
@@ -1948,6 +1950,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg := fmt.Sprintf("non-2xx status %d", resp.StatusCode)
+		operational.DeceptionFallbacks.Add(1)
 		h.logger.Warn("deception-engine non-2xx; passthrough", "status", resp.StatusCode)
 		h.recordDeceptionFailure(protocol, msg)
 		return nil, false
@@ -1955,6 +1958,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	var dec deceptionDecisionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dec); err != nil {
+		operational.DeceptionFallbacks.Add(1)
 		h.logger.Warn("deception response decode failed; passthrough", "err", err)
 		h.recordDeceptionFailure(protocol, err.Error())
 		return nil, false

@@ -1,0 +1,26 @@
+# The only feature authority. Apply changes through scripts/honeypot.py.
+mode: deterministic_rule_based
+core:
+  postgres_proxy: true
+  mysql_proxy: true
+  deception_engine: true
+analysis:
+  session_behavior: true
+  evidence_store: true
+deception:
+  deceptive_principals: true
+infrastructure:
+  scaling: true
+  sandbox_replay: true
+observability:
+  enabled: true
+  prometheus: true
+  grafana: true
+  loki: true
+optional_future:
+  mitre: false
+  live_learning: false
+  dynamic_steering: false
+  intervention: false
+  generative_ai: false
+  local_llm: false

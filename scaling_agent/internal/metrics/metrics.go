@@ -208,7 +208,7 @@ func (s *Server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("scaling_agent_scorer_std_dev %f", stdDev),
 
 		"# HELP scaling_agent_scorer_sample_count Total samples in rolling stats",
-		"# TYPE scaling_agent_scorer_sample_count counter",
+		"# TYPE scaling_agent_scorer_sample_count gauge",
 		fmt.Sprintf("scaling_agent_scorer_sample_count %d", count),
 
 		"# HELP scaling_agent_state_persistence_enabled Whether Redis state persistence is enabled",

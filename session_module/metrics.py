@@ -1,4 +1,4 @@
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 # =========================
 # Event metrics
@@ -56,5 +56,12 @@ session_depth_score = Gauge(
 cluster_sessions_total = Counter(
     "cluster_sessions_total",
     "Number of sessions assigned to clusters",
-    ["cluster_id"]
+    ["classification"]
 )
+# Process-local aggregates; session IDs and cluster IDs do not become labels.
+session_duration_seconds = Histogram("honeypot_session_duration_seconds", "Closed-session active duration", buckets=(1,5,15,30,60,120,300,900,3600))
+session_queries = Histogram("honeypot_session_queries", "Queries per closed session", buckets=(0,1,2,5,10,20,50,100,500,1000))
+session_depth = Histogram("honeypot_session_depth", "Depth score per closed session", buckets=(0,.1,.25,.5,.75,1,2,5,10,50))
+pipeline_seconds = Histogram("honeypot_session_pipeline_seconds", "Session engine processing time", buckets=(.001,.005,.01,.025,.05,.1,.25,.5,1,2,5))
+event_backlog = Gauge("honeypot_session_queue_depth", "Events currently waiting in the real session queue")
+publish_results = Counter("honeypot_session_publish_total", "Kafka publish attempts by result", ("result",))

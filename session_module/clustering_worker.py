@@ -192,7 +192,7 @@ class ClusteringWorker(threading.Thread):
                     persona=persona,
                     original_payload=batch[i],
                 )
-                cluster_sessions_total.labels(cluster_id=str(label)).inc()
+                cluster_sessions_total.labels(classification="noise" if int(label) == -1 else "assigned").inc()
 
             logger.info(f"[Clustering] Done — {len(batch)} sessions, {len(set(labels))} clusters found.")
 
@@ -225,6 +225,6 @@ class ClusteringWorker(threading.Thread):
                     persona=persona,
                     original_payload=record,
                 )
-                cluster_sessions_total.labels(cluster_id="-1").inc()
+                cluster_sessions_total.labels(classification="noise").inc()
             except Exception as e:
                 logger.error(f"[Clustering] Failed to publish sparse profile: {e}", exc_info=True)

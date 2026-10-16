@@ -5,3 +5,4 @@ faker==19.13.0
 redis==5.0.1
 pytest==7.4.4
 httpx==0.26.0
+prometheus-client

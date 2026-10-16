@@ -243,3 +243,31 @@ groups:
         annotations:
           summary: "PostgreSQL proxy connection spike"
           description: "pgproxy connection rate exceeded 1 connection/sec for more than 1 minute."
+
+  - name: deterministic-pipeline-health
+    interval: 15s
+    rules:
+      - alert: HoneypotDependencyUnavailable
+        expr: honeypot_dependency_up == 0
+        for: 30s
+        labels:
+          severity: warning
+          component: pipeline
+        annotations:
+          summary: "{{ $labels.service }} dependency {{ $labels.dependency }} is unavailable"
+      - alert: HoneypotEvidenceIngestFailures
+        expr: increase(honeypot_evidence_ingest_total{result="failed"}[5m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+          component: evidence-store
+        annotations:
+          summary: "Evidence processing failed; inspect sanitized operational logs"
+      - alert: HoneypotDecisionFailures
+        expr: increase(honeypot_decision_requests_total{result="failed"}[5m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+          component: deception-engine
+        annotations:
+          summary: "Deception decision requests are failing"

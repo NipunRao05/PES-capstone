@@ -1,0 +1,13 @@
+# Settings only; feature enablement belongs to features.yaml.
+scrape_interval_seconds: 15
+scrape_timeout_seconds: 10
+bridge_timeout_seconds: 1
+log_level: INFO
+categories:
+  platform: true
+  traffic: true
+  deception: true
+  sessions: true
+  persistence: true
+  evidence: true
+  scaling: true

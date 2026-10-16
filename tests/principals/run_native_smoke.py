@@ -18,10 +18,10 @@ parser.add_argument('--name',default='fake_compro1')
 parser.add_argument('--protocol',choices=['postgres','mysql'])
 args=parser.parse_args()
 root=Path(__file__).resolve().parents[2]
-env={}
-for line in (root/'.env').read_text(encoding='utf-8').splitlines():
-    if '=' in line and not line.lstrip().startswith('#'):
-        key,value=line.split('=',1);env[key.strip()]=value.strip().strip('"').strip("'")
+sys.path.insert(0, str(root/'scripts'))
+from configuration import read_environment
+env=read_environment()
+
 docker=shutil.which('docker') or str(Path(os.environ['LOCALAPPDATA'])/'Programs/DockerDesktop/resources/bin/docker.exe')
 image=subprocess.check_output([docker,'inspect','--format','{{.Config.Image}}','capstone-sandbox-replay-engine'],text=True).strip()
 networks=json.loads(subprocess.check_output([docker,'inspect','--format','{{json .NetworkSettings.Networks}}','capstone-main-pgproxy-1'],text=True))

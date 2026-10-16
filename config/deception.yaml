@@ -1,0 +1,13 @@
+# Deterministic policy; secrets and deployment overrides stay in .env.
+session:
+  timeout_seconds: 10
+  max_active: 1000
+  queue_size: 10000
+decision:
+  max_query_bytes: 65536
+  rate_limit_enabled: true
+  rate_window_seconds: 60
+  per_session: 120
+  per_client: 300
+  global_limit: 3000
+  fail_open: true

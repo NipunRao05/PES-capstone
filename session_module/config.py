@@ -70,7 +70,7 @@ STATE_API_HOST           = os.getenv("STATE_API_HOST", "0.0.0.0")
 STATE_API_PORT           = int(os.getenv("STATE_API_PORT", 8003))
 STATE_MAX_SESSIONS       = int(os.getenv("STATE_MAX_SESSIONS", 5000))
 ADAPTATION_ENDPOINT      = os.getenv("ADAPTATION_ENDPOINT", "http://deception-engine:8001/strategy/next")
-ADAPTATION_OPERATOR_MODE = os.getenv("ADAPTATION_OPERATOR_MODE", "RULE_ADAPTIVE")
+ADAPTATION_OPERATOR_MODE = os.getenv("ADAPTATION_OPERATOR_MODE", "SAFE_MODE")
 ADAPTATION_TIMEOUT_SECONDS = float(os.getenv("ADAPTATION_TIMEOUT_SECONDS", "0.5"))
 ADAPTATION_QUEUE_SIZE    = int(os.getenv("ADAPTATION_QUEUE_SIZE", "2048"))
 LEARNED_SELECTION_MIN_CONFIDENCE = float(
@@ -105,3 +105,7 @@ EXPERIMENT_MAX_PROCESSED_EVENTS = int(
 
 # Kafka producer ack wait for low-volume session/profile outputs.
 PRODUCER_ACK_TIMEOUT_SECONDS = float(os.getenv("PRODUCER_ACK_TIMEOUT_SECONDS", "10"))
+
+# Optional background facilities default off outside the canonical launcher too.
+ADAPTATION_ENABLED = os.getenv("ADAPTATION_ENABLED", "false").lower() == "true"
+EXPERIMENT_ENABLED = os.getenv("EXPERIMENT_ENABLED", "false").lower() == "true"

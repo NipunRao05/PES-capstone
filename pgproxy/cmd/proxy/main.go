@@ -14,12 +14,12 @@ import (
 
 func main() {
 	logLevel := slog.LevelInfo
-	if os.Getenv("LOG_LEVEL") == "debug" {
-		logLevel = slog.LevelDebug
-	}
+	_ = logLevel.UnmarshalText([]byte(strings.ToUpper(getEnv("LOG_LEVEL", "info"))))
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
+		Level:       logLevel,
+		ReplaceAttr: safeLogAttr,
 	}))
+	logger = logger.With("service", "pgproxy", "component", "proxy", "event", "service_log")
 	slog.SetDefault(logger)
 
 	cfg := connection.Config{
