@@ -132,9 +132,7 @@ func (h *Handler) servePrincipalQuery(ctx context.Context, sql string) error {
 // PostgreSQL requires discarding subsequent messages through Sync after this error.
 func (h *Handler) rejectPrincipalExtended() error {
 	h.principalExtendedError = true
-	if h.currentTxStatus() == 'T' {
-		h.sess.SetTxStatus('E')
-	}
+	h.markSyntheticTransactionFailed()
 	return h.sendToClient(&pgproto3.ErrorResponse{Severity: "ERROR", Code: "0A000", Message: "Use a single simple query for this operation"})
 }
 

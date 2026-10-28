@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 from principal_registry import PrincipalRegistry, PrincipalError, PREFIX, SESSION_TTL, now
+from principal_state import PrincipalTransactionContext, PrincipalTransactionConflict
 
 principal_seed = ContextVar("principal_seed", default="")
 
@@ -61,10 +62,7 @@ def install(app, api):
             if action == "query":
                 return await query(reg, api, request, body)
             if action == "end":
-                reg.redis.delete(PREFIX + "session:" + sid)
-                api._exposure.cleanup_session(sid)
-                api._mutations.cleanup_session(sid)
-                api._generator.cleanup_session(sid)
+                end_session(reg, api, sid)
                 return {"status": "ok"}
             raise PrincipalError("Unsupported operation")
         except PrincipalError as exc:
@@ -81,6 +79,18 @@ def install(app, api):
             raise HTTPException(503, "Account metrics unavailable")
 
 
+def end_session(reg, api, sid):
+    """Discard the binding and working state; never promote on disconnect.
+
+    Both proxies call /principals/end from Run's deferred cleanup. Keep deletion
+    first and the existing best-effort cleanup order, including repeated ends.
+    """
+    reg.redis.delete(PREFIX + "session:" + sid)
+    api._exposure.cleanup_session(sid)
+    api._mutations.cleanup_session(sid)
+    api._generator.cleanup_session(sid)
+
+
 async def query(reg, api, request, body):
     sid = body["session_id"]
     session_key = PREFIX + "session:" + sid
@@ -93,6 +103,7 @@ async def query(reg, api, request, body):
         binding = json.loads(reg.redis.get(session_key) or "null")
         if not binding:
             raise PrincipalError("Session expired", "28000", 1045)
+        transaction = PrincipalTransactionContext(binding)
         record = reg.load(binding["key"])
         if not record["enabled"]:
             raise PrincipalError("Account disabled", "28000", 1045)
@@ -106,16 +117,33 @@ async def query(reg, api, request, body):
             reg.redis.delete(session_key)
             raise PrincipalError("Session state expired; reconnect required", "28000", 1045)
 
-        if binding["tx"]:
-            expected = binding.get("mutation_keys")
+        if transaction.active:
+            expected = transaction.expected_mutation_keys
             if expected is None or any(reg.redis.get(key) is None for key in expected):
                 expired_state()
+
+        def abort_statement():
+            was_failed = transaction.failed
+            transaction.record_query_failure(record["protocol"])
+            if transaction.failed and not was_failed:
+                reg.check_deadline()
+                reg.redis.setex(session_key, SESSION_TTL, json.dumps(binding))
+
+        # The trusted proxy can reject a statement locally (e.g. extended SQL),
+        # without the registry having seen it. Reconcile before any promotion.
+        if record["protocol"] == "postgres" and body.get("transaction_state") == "failed_transaction":
+            abort_statement()
         sql = body.get("sql", "").strip().rstrip(";").strip()
         if len(sql) > 65536 or not sql or ";" in sql or "/*" in sql or "--" in sql:
+            if record["protocol"] == "postgres":
+                if transaction.failed:
+                    return failure(PrincipalError("Transaction is aborted", "25P02", 1192)) | {"tx_status": "E"}
+                abort_statement()
+                return failure(PrincipalError("Unsupported statement", "42601", 1064)) | {"tx_status": transaction.state.value}
             raise PrincipalError("Unsupported statement", "42601", 1064)
         normalized = sql.lower()
         tx_command = normalized in {"begin", "start transaction", "commit", "rollback"}
-        if binding["failed"] and normalized not in {"rollback", "commit"}:
+        if transaction.failed and normalized not in {"rollback", "commit"}:
             return failure(PrincipalError("Transaction is aborted", "25P02", 1192)) | {"tx_status": "E"}
 
         def restore():
@@ -139,32 +167,33 @@ async def query(reg, api, request, body):
                     expired_state()
                 overlays[key.split(":", 2)[2]] = value
             if len(json.dumps(overlays)) > 1024 * 1024:
+                abort_statement()
                 raise PrincipalError("Account state limit exceeded", "54000", 1114)
             record["persistent_mutations"] = overlays
             record["world_revision"] += 1
 
-        if not binding["tx"]:
+        if not transaction.active:
             restore()
-            binding["revision"] = record["world_revision"]
+            transaction.refresh_revision(record["world_revision"])
         if record["protocol"] == "mysql" and normalized in {"set names utf8mb4", "set names utf8", "set names utf8mb4 collate utf8mb4_general_ci"}:
             result = success(command_tag="SET", affected_rows=0)
         elif tx_command:
             tag = normalized.upper()
             if normalized in {"begin", "start transaction"}:
-                binding["tx"] = True
+                transaction.begin()
                 tag = "BEGIN"
             else:
-                if normalized == "commit" and binding["tx"] and not binding["failed"]:
-                    if binding["revision"] != record["world_revision"]:
-                        binding["failed"] = True
+                def discard_snapshot():
+                    api._mutations.finalize_transaction(sid, "commit")
+
+                if normalized == "commit":
+                    try:
+                        tag = transaction.commit(record["world_revision"], promote, discard_snapshot, restore)
+                    except PrincipalTransactionConflict:
                         reg.redis.setex(session_key, SESSION_TTL, json.dumps(binding))
                         return failure(PrincipalError("Concurrent state change; rollback required", "40001", 1213)) | {"tx_status": "E"}
-                    promote()
-                elif normalized == "commit" and binding["failed"]:
-                    tag = "ROLLBACK"
-                binding["tx"], binding["failed"] = False, False
-                api._mutations.finalize_transaction(sid, "commit")
-                restore()
+                else:
+                    tag = transaction.rollback(discard_snapshot, restore)
             result = success(command_tag=tag, affected_rows=0)
         else:
             verb = normalized.split()[0].upper()
@@ -176,21 +205,24 @@ async def query(reg, api, request, body):
                     response = await api.decide(request, {"session_id": sid,
                         "query_normalized": sql, "query_raw": sql, "protocol": record["protocol"],
                         "username": record["username"], "database": "testdb", "deception_level": 1,
-                        "transaction_state": "in_transaction" if binding["tx"] else "idle"})
+                        "transaction_state": "in_transaction" if transaction.active else "idle"})
                     result = json.loads(response.body)
+                except HTTPException:
+                    abort_statement()
+                    raise
                 finally:
                     principal_seed.reset(token)
                 if result.get("mode") != "fake" and result.get("mode") != "block":
                     result = failure(PrincipalError("Unsupported synthetic operation"))
-                if result.get("mode") == "fake" and not binding["tx"] and verb in {"INSERT", "UPDATE", "DELETE"}:
+                if result.get("mode") == "fake" and not transaction.active and verb in {"INSERT", "UPDATE", "DELETE"}:
                     promote()
-            if result.get("mode") != "fake" and binding["tx"] and record["protocol"] == "postgres":
-                binding["failed"] = True
+            if result.get("mode") != "fake":
+                transaction.record_query_failure(record["protocol"])
             record["exposure_depth"] = max(record["exposure_depth"], api._exposure.get_depth(sid))
         reg.check_deadline()
         record["updated_at"] = now()
         keys = working_keys()
-        binding["mutation_keys"] = keys if binding["tx"] else []
+        transaction.track_working_keys(keys)
         # One atomic durable write precedes the proxy's success response.
         with reg.redis.pipeline(transaction=True) as pipe:
             # Keep working overlays alive at least as long as the refreshed binding.
@@ -201,6 +233,6 @@ async def query(reg, api, request, body):
             pipe.set(binding["key"], json.dumps(record))
             pipe.setex(session_key, SESSION_TTL, json.dumps(binding))
             pipe.execute()
-        result["tx_status"] = "E" if binding["failed"] else "T" if binding["tx"] else "I"
+        result["tx_status"] = transaction.state.value
         result["post_return_exploration_depth"] = record["exposure_depth"]
         return result

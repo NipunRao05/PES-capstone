@@ -56,6 +56,9 @@ type Handler struct {
 	authMethod       string
 	lastQueryOutcome interceptor.QueryOutcome
 	deceptionTxDirty bool
+	// A local SQL error must gate the still-healthy native transaction until
+	// a full rollback. Native ReadyForQuery remains the backend status authority.
+	syntheticTxFailed bool
 }
 
 // NewHandler constructs a protocol handler.
@@ -483,6 +486,36 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 			}
 			continue
 		}
+		if h.syntheticTxFailed {
+			switch m := clientMsg.(type) {
+			case *pgproto3.Query:
+				if deceptionTransactionAction(m.String) == "" {
+					if err := h.sendPostgresAbortedTransaction(); err != nil {
+						return err
+					}
+					h.emitSimpleOutcome(m.String, interceptor.QueryOutcome{Verified: true, Success: false,
+						Authority: "policy", TransactionState: "failed_transaction", ErrorCode: "25P02"})
+					continue
+				}
+			case *pgproto3.Terminate:
+				return nil // Closing the native socket rolls back, never commits.
+			case *pgproto3.Sync:
+				if err := h.sendToClient(&pgproto3.ReadyForQuery{TxStatus: 'E'}); err != nil {
+					return err
+				}
+				continue
+			case *pgproto3.Flush:
+				continue
+			default:
+				// Preserve extended-protocol error recovery: discard through Sync.
+				h.principalExtendedError = true
+				if err := h.sendToClient(&pgproto3.ErrorResponse{Severity: "ERROR", Code: "25P02",
+					Message: "current transaction is aborted, commands ignored until end of transaction block"}); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		if q, ok := clientMsg.(*pgproto3.Query); ok && principal.AccountSQL(q.String) {
 			if err := h.servePrincipalQuery(ctx, q.String); err != nil {
 				return err
@@ -514,8 +547,13 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 		shapingDecision := h.shaper.Decide(fingerprint)
 		shapeCtx := shaper.NewShapeContext(shapingDecision)
 
-		if shapingDecision.ShouldBlock {
+		recoveringTransaction := false
+		if q, ok := clientMsg.(*pgproto3.Query); ok {
+			recoveringTransaction = h.syntheticTxFailed && deceptionTransactionAction(q.String) != ""
+		}
+		if shapingDecision.ShouldBlock && !recoveringTransaction {
 			errResp := shapeCtx.BlockResponse()
+			h.markSyntheticTransactionFailed()
 			if err := h.sendToClient(errResp); err != nil {
 				return fmt.Errorf("send block response: %w", err)
 			}
@@ -524,6 +562,8 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 				if err := h.sendToClient(rfq); err != nil {
 					return fmt.Errorf("send rfq after block: %w", err)
 				}
+			} else {
+				h.principalExtendedError = true
 			}
 			if q, ok := clientMsg.(*pgproto3.Query); ok {
 				h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.postgresTransactionState(), ErrorCode: errResp.Code})
@@ -591,7 +631,13 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 		if _, ok := clientMsg.(*pgproto3.Query); ok {
 			h.lastQueryOutcome = interceptor.QueryOutcome{Verified: true, Success: true, Authority: "backend", TransactionState: h.postgresTransactionState()}
 		}
-		if err := h.sendToBackend(clientMsg); err != nil {
+		backendMsg := clientMsg
+		if q, ok := clientMsg.(*pgproto3.Query); ok && h.syntheticTxFailed && deceptionTransactionAction(q.String) == "commit" {
+			// The backend has not seen the local SQL error. Roll it back rather
+			// than committing native writes while discarding the fake overlay.
+			backendMsg = &pgproto3.Query{String: "ROLLBACK"}
+		}
+		if err := h.sendToBackend(backendMsg); err != nil {
 			return fmt.Errorf("forward to backend: %w", err)
 		}
 
@@ -635,6 +681,7 @@ func (h *Handler) postgresTransactionState() string {
 func (h *Handler) drainBackendResponses(ctx context.Context, trigger pgproto3.FrontendMessage, shapeCtx *shaper.ShapeContext) error {
 	needsRFQ := needsReadyForQuery(trigger)
 	latencyApplied := false
+	transactionOutcome := ""
 
 	for {
 		select {
@@ -693,7 +740,10 @@ func (h *Handler) drainBackendResponses(ctx context.Context, trigger pgproto3.Fr
 				continue
 			}
 		}
-		if _, ok := msg.(*pgproto3.CommandComplete); ok {
+		if complete, ok := msg.(*pgproto3.CommandComplete); ok {
+			// COMMIT in a failed native transaction completes as ROLLBACK.
+			// Only use this tag when finalizing recognized transaction-end SQL.
+			transactionOutcome = deceptionTransactionAction(string(complete.CommandTag))
 			if notice := shapeCtx.TruncationNotice(); notice != nil {
 				if err := h.sendToClient(notice); err != nil {
 					return fmt.Errorf("send truncation notice: %w", err)
@@ -705,6 +755,9 @@ func (h *Handler) drainBackendResponses(ctx context.Context, trigger pgproto3.Fr
 			if query, queryOK := trigger.(*pgproto3.Query); queryOK {
 				action := deceptionTransactionAction(query.String)
 				if action != "" {
+					if transactionOutcome != "" {
+						action = transactionOutcome
+					}
 					if err := h.notifyDeceptionTransaction(ctx, action); err != nil {
 						return fmt.Errorf("finalize deceptive transaction: %w", err)
 					}
@@ -720,6 +773,9 @@ func (h *Handler) drainBackendResponses(ctx context.Context, trigger pgproto3.Fr
 		switch m := msg.(type) {
 		case *pgproto3.ReadyForQuery:
 			h.sess.SetTxStatus(m.TxStatus)
+			if m.TxStatus == 'I' {
+				h.syntheticTxFailed = false
+			}
 			h.lastQueryOutcome.TransactionState = h.postgresTransactionState()
 			return nil
 		case *pgproto3.ErrorResponse:
@@ -1154,7 +1210,17 @@ func (h *Handler) sendPostgresDeceptionResult(dec *deceptionDecisionResponse, sq
 	return nil
 }
 
+func (h *Handler) markSyntheticTransactionFailed() {
+	if h.currentTxStatus() == 'T' {
+		h.sess.SetTxStatus('E')
+		if !h.virtual {
+			h.syntheticTxFailed = true
+		}
+	}
+}
+
 func (h *Handler) sendPostgresDeceptionError(sqlState, message string) error {
+	h.markSyntheticTransactionFailed()
 	if sqlState == "" {
 		sqlState = "42601"
 	}

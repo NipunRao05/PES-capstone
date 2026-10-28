@@ -23,7 +23,8 @@ func (h *Handler) principalQuery(ctx context.Context, sql string) principalDecis
 		action = "command"
 	}
 	body := map[string]interface{}{"session_id": safeSessionID(h), "protocol": "postgres",
-		"username": safeUsername(h), "database": safeDatabase(h), "sql": sql, "transaction_active": h.currentTxStatus() != 'I'}
+		"username": safeUsername(h), "database": safeDatabase(h), "sql": sql, "transaction_active": h.currentTxStatus() != 'I',
+		"transaction_state": h.postgresTransactionState()}
 	var result principalDecision
 	if err := principal.Call(ctx, action, body, &result); err != nil {
 		result.Mode = "block"

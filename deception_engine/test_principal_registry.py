@@ -169,6 +169,21 @@ class PrincipalTests(unittest.TestCase):
         for salt,token in ((b'',b''),(b'x'*20,b'x'*19),(b'x'*19,b'x'*20)):
             with self.assertRaises(PrincipalError):self.reg.native_auth(dict(username='fake_compro1',session_id='r',salt=b64(salt),auth_token=b64(token)))
 
+    def test_creator_session_cannot_be_reused_for_either_protocol(self):
+        for protocol in ('postgres', 'mysql'):
+            with self.subTest(protocol=protocol):
+                self.create(protocol)
+                before = self.reg.load(self.reg.key(protocol, 'fake_compro1'))
+                with self.assertRaises(PrincipalError):
+                    if protocol == 'postgres':
+                        body, _ = self.scram_body(sid='creator')
+                        self.reg.finish_scram(body)
+                    else:
+                        self.native('creator')
+                self.assertEqual(self.reg.load(self.reg.key(protocol, 'fake_compro1')), before)
+                self.assertFalse(self.redis.exists(PREFIX + 'session:creator'))
+                self.assertEqual(self.reg.metrics()['deceptive_principal_return_sessions_total'], 0)
+
 
 class PersistentStateTests(PrincipalTests):
     # Separate class runs only persistence methods; inherited verifier tests are intentionally excluded below.

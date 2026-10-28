@@ -13,6 +13,7 @@ import re
 import secrets
 import time
 from datetime import datetime, timezone
+from principal_state import PrincipalTransactionContext
 
 ORIGIN = "attacker_created_deceptive"
 PREFIX = "deceptive-principal:"
@@ -241,7 +242,7 @@ class PrincipalRegistry:
         if record["first_reuse_at"] is None:
             record["first_reuse_at"] = now()
             record["time_to_first_reuse_seconds"] = max(0, time.time() - datetime.fromisoformat(record["created_at"]).timestamp())
-        binding = {"key": key, "tx": False, "failed": False, "revision": record["world_revision"]}
+        binding = PrincipalTransactionContext.new(key, record["world_revision"]).binding
         self.check_deadline()
         with self.redis.pipeline(transaction=True) as pipe:
             pipe.set(key, json.dumps(record))

@@ -1,5 +1,291 @@
 # AGENTS.md
 
+## Pass 3 — PostgreSQL Synthetic Error and Abort-State Consistency — 2026-10-28
+
+**IMPLEMENTED / VERIFIED by focused tests** for supported statement paths. This
+is the newest handoff; earlier Pass 1/2 sections remain historical where superseded.
+Full sequence matrix, error inventory, exact commands and limits:
+`POSTGRES_SYNTHETIC_ERROR_STATE.md`. Pass 4 has NOT started.
+
+- Objective: align client-visible PostgreSQL error/abort state and fake/principal
+  finalization with the transaction's rollback outcome, preserving deterministic
+  mode and the Pass 2 lifecycle/storage/auth boundaries.
+- Branch `feature/config-observability`, HEAD `ea364d1` unchanged. Starting tree:
+  twelve unstaged/untracked Pass 1/2 source/test/doc paths; preserved all. No stage,
+  commit, push, branch/worktree or volume changes. User owns Git and cmds.txt.
+- Production changed: `pgproxy/internal/protocol/handler.go` (new centralized
+  markSyntheticTransactionFailed, local failed gate and rollback forwarding);
+  `pgproxy/internal/protocol/principal.go::principalQuery` (private state hint);
+  `pgproxy/internal/protocol/principal_auth.go::rejectPrincipalExtended` (shared
+  statement-error helper only; authentication functions unchanged);
+  `deception_engine/principal_runtime.py::query` (early/exception abort handling
+  and failed-hint reconciliation through existing PrincipalTransactionContext).
+- Tests: new `deception_engine/test_postgres_error_state.py`, new
+  `pgproxy/internal/protocol/synthetic_error_state_test.go`; added FAILED -> EOF
+  case to Pass 2 `pgproxy/internal/protocol/principal_lifecycle_test.go`.
+- Docs: new POSTGRES_SYNTHETIC_ERROR_STATE.md, this handoff, dated notes in
+  PRINCIPAL_TRANSACTION_LIFECYCLE.md and STATE_WORLD_AUDIT.md. Prior history kept.
+- Found: ordinary fake/policy SQL error during T incorrectly returned T; early
+  principal bounded SQL validation bypassed failed binding; local virtual extended
+  rejection could leave registry healthy; policy Parse rejection could emit a second
+  error before Sync. Focused pre-fix tests reproduced these failures.
+- IDLE: error remains I, no failed transaction invented. ACTIVE: fake successes
+  remain T; statement errors become E. FAILED: reject further supported simple
+  statements with 25P02; local extended errors discard through Sync with RFQ E.
+- Ordinary/native distinction: native RFQ I/T/E remains physical status authority;
+  `syntheticTxFailed` is transient local error provenance, not a second durable FSM.
+  A native backend that never saw a fake statement's error can still physically
+  be T while client sees E. Block further work; send full COMMIT/END as native
+  ROLLBACK, relay actual native ROLLBACK tag/I, finalize dirty overlay as rollback
+  through preserved Pass 2 completion handling. Native RFQ I clears local failure.
+- Virtual principals execute no backend SQL. Existing Pass 2 failed COMMIT returns
+  ROLLBACK/I without promotion; explicit rollback restores committed rows, removes
+  tx snapshot/pending key inventory and clears failed state. Fresh transactions
+  and returning sessions do not inherit FAILED or uncommitted data in fixture tests.
+- Proxy-local virtual failure is included as failed_transaction on next private
+  request; engine applies record_query_failure under existing lock BEFORE any
+  query or promotion. Reconciliation is lazy (next request), not a new abort RPC.
+  Early PostgreSQL validation/HTTPException/quota paths use the same helper.
+- Mixed orderings VERIFIED BY TEST: healthy native+fake commit; fake success ->
+  native error -> fake rejection -> rollback-on-COMMIT; native write+fake mutation
+  -> fake error -> backend/fake query rejection -> COMMIT or ROLLBACK discards both
+  test-double pending states; clean BEGIN after rollback. No DB mirroring/2PC added.
+- Disconnect VERIFIED BY TEST: actual proxy Run from FAILED -> EOF sends end,
+  never commit. Actual engine end-route fixture deletes binding/working/snapshot
+  keys; fresh real proof helper restores committed-only data, IDLE binding.
+- MySQL non-regression: no MySQL production edits; normal errors remain ACTIVE,
+  malformed statement exception behavior unchanged; PG failed hint ignored. Relevant
+  Python parity and both MySQL protocol/principal package tests pass.
+- Tests executed: new Python file initially 6 FAIL / 14 PASS; new ordinary proxy
+  matrix initially failed both error/end cases and policy abort; separate policy
+  extended test initially failed on duplicate ErrorResponse. Corrected tests pass.
+  Python from deception_engine, bundled interpreter with ignored pass2-tooling on
+  PYTHONPATH and PYTHONDONTWRITEBYTECODE=1: -m pytest -q -p no:cacheprovider
+  test_postgres_error_state.py test_principal_state.py test_principal_registry.py
+  test_phase_b_invariants.py: **58 PASS in 12.90s**. New file alone: **22 PASS**.
+- Go from each proxy: go test ./internal/protocol ./internal/principal -count=1
+  -timeout 45s: **all four packages PASS**. Focused synthetic/policy/backend-error/
+  private-abort/disconnect selection passed too. Cache permission denial required
+  approved access. No full suite, stack startup, rebuild, live DB test or new install.
+- DEFERRED: synthetic savepoints (full rollback is not savepoint recovery), broader
+  SQL/extended emulation and end grammar, atomic evidence/outbox, general observed-
+  fact/world commitment ledger, broad concurrency/crash/fencing and Redis disk
+  recovery. Generic Redis/deadline failure cannot guarantee immediate durable E.
+  SQL-text-only evidence projections can miss COMMIT resolving as ROLLBACK; schema/
+  collector redesign remains deferred. Runtime health **NOT VERIFIED**.
+- Recommended Pass 4 boundary — PLANNED ONLY, requires user's next scoped request:
+  define and test a minimal monotonic attacker-visible observation/commitment model
+  alongside existing authority, with no adaptive selection or SQL-response changes.
+  Do not preemptively implement it or unnecessarily revisit auth, principal storage,
+  MySQL, config, evidence delivery, scaling, replay, observability or deployment.
+- Preserve .env, HMAC/verifier/identity formats, canonical feature defaults,
+  deterministic_rule_based and disabled future features. No new persistence schema,
+  service, dependency, savepoints, learner or world ledger was introduced.
+
+---
+
+## Pass 2 — Principal Transaction Lifecycle Formalization — 2026-10-28
+
+**IMPLEMENTED; VERIFIED by focused tests.** This is the newest execution handoff;
+older Pass 1/planning/verification sections below are historical where superseded.
+Full details, transition matrix, exact commands and limitations:
+`PRINCIPAL_TRANSACTION_LIFECYCLE.md`. Pass 3 was NOT started.
+
+- Branch `feature/config-observability`, observed HEAD `ea364d1` unchanged.
+  Starting tree: modified AGENTS.md and untracked STATE_WORLD_AUDIT.md from Pass 1;
+  preserved both. All Pass 2 work remains unstaged/uncommitted for manual review.
+- Production changes: new `deception_engine/principal_state.py`; wiring in
+  `deception_engine/principal_runtime.py::query`, `install`, new `end_session`;
+  `deception_engine/principal_registry.py::PrincipalRegistry.login` binding factory;
+  narrow fix in `pgproxy/internal/protocol/handler.go::drainBackendResponses`.
+- Tests: new `deception_engine/test_principal_state.py`, new
+  `pgproxy/internal/protocol/transaction_test.go`, and new
+  `principal_lifecycle_test.go` in both proxies' `internal/protocol/`; added
+  creator-session rejection test in `deception_engine/test_principal_registry.py`.
+  Existing `test_phase_b_invariants.py` was run unchanged.
+- Docs: new PRINCIPAL_TRANSACTION_LIFECYCLE.md; this handoff; a dated Pass 2 note
+  in STATE_WORLD_AUDIT.md preserving the original audit as history.
+- `PrincipalTransactionState` represents IDLE(I), ACTIVE(T), FAILED(E).
+  `PrincipalTransactionContext` is a typed view of the SAME legacy binding dict,
+  centralizing new/begin/commit/rollback/abort/status/revision/key inventory.
+  No persisted enum, new fields, migration, new store or dependency was added.
+- Authority unchanged: runtime `query` under existing principal lock owns live
+  transitions; MutationStore owns working overlays/snapshots; principal record
+  owns committed overlays/revision. Physical databases remain physical authority.
+- Commit: active, nonfailed, revision-current transactions promote then restore;
+  stale commit marks failed with existing 40001/1213 response. Failed PG COMMIT
+  restores and returns ROLLBACK. Empty active commit still increments revision.
+- Rollback: drop snapshot and restore principal committed overlays, clear active/
+  failed flags; runtime stores empty pending-key inventory. Idle/repeated ends do
+  not promote. Repeated BEGIN preserves current pending work, as before.
+- Disconnect: actual /principals/end dispatch routes through end_session; deletes
+  binding first, then exposure/mutation/snapshot/cache cleanup, never promotion.
+  Proxy Run deferred-end routing tested for explicit close, EOF and auth failure.
+  Reconnect tests authenticate fresh sessions and prove committed-only restoration.
+- Autocommit: supported IDLE DML still promotes immediately, without explicit BEGIN.
+  Ordinary seeded-session deceptive COMMIT stays session-scoped. Permissions/roles
+  are immediate persistent admin-registry updates; exposure is observational depth
+  retained across row rollback/return. Neither is forced into row transactions.
+- PG mixed result RESOLVED by focused regression: dirty ordinary fake overlay plus
+  native failed tx E; COMMIT/END gets native ROLLBACK completion. Previously proxy
+  finalized overlay as commit from SQL text. Both cases failed before correction;
+  drain now uses backend completion for recognized end commands. Native wire output
+  unchanged. This specific conditional fix was explicitly authorized in Pass 2;
+  older Pass 1 “do not alter proxy” recommendation does not prohibit it.
+- MySQL parity VERIFIED for virtual pending/committed/disconnect/reconnect semantics;
+  regular statement errors remain ACTIVE vs PG FAILED. Native autocommit/implicit
+  commit handling unchanged and relevant package tests passed. No MySQL production
+  code or either protocol's virtual-auth implementation changed.
+- Final executed Python: from deception_engine with PYTHONPATH pointing to ignored
+  .runtime/pass2-tooling and PYTHONDONTWRITEBYTECODE=1, bundled python.exe -m pytest
+  -q -p no:cacheprovider test_principal_state.py test_principal_registry.py
+  test_phase_b_invariants.py test_stateful_crud.py: **41 PASS in 13.65s**.
+- Final executed Go (from EACH proxy): go test ./internal/protocol ./internal/principal
+  -count=1 -timeout 45s: **all four packages PASS**. New mixed/disconnect subsets
+  also passed. Git diff --check passed. No unrelated tracked changes found.
+- Environment history: container baseline 24 PASS; initial new tests 9 PASS;
+  existing principal/state/CRUD 30 PASS. Read-only container first needed tmpfs;
+  later Docker engine pipe unavailable. Installed existing requirements only into
+  ignored .runtime/pass2-tooling and completed final run locally. Go cache required
+  approved access. No full-stack startup/restart/build or live DB checks performed.
+- DEFERRED: synthetic savepoints; general observation/world commitment ledger;
+  atomic evidence/outbox; broad Redis/crash/concurrency/lease fencing; unrecognized
+  native end spellings; ordinary PG synthetic-error abort parity and early virtual
+  validation-exception state. Runtime health **NOT VERIFIED**. No disk-recovery,
+  physical mixed-SQL or real parallel-Redis guarantee follows from fixture tests.
+- Recommended Pass 3 boundary (PLANNED ONLY): characterize ordinary PostgreSQL
+  synthetic error/abort consistency with focused tests, then scope only a clearly
+  established local invariant correction. Do not begin a ledger/adaptive feature.
+  Expected investigation: pgproxy protocol handler/tests and existing engine state
+  fixtures; avoid reworking principal auth/identity/storage, MySQL, config/defaults,
+  evidence, scaling, replay, observability, services or deployment unnecessarily.
+- Preserve deterministic_rule_based and disabled future flags, .env/HMAC/verifiers,
+  volumes, cmds.txt and user changes. No staging, commit, branch/worktree change,
+  push, PR, schema migration, credentials change or Pass 3 execution authorized.
+
+---
+
+## Pass 1 — State / World Consistency Audit — 2026-10-28
+
+This handoff supersedes older “next implementation” instructions below. Pass 1
+is a completed **source/test-coverage audit**, not runtime verification or approval
+to implement self-evolution. Full repository-specific evidence and the 12-section
+report: `STATE_WORLD_AUDIT.md`. No Pass 2 implementation was performed.
+
+### Inspected baseline and boundaries
+
+- Inspected branch `feature/config-observability`, HEAD `ea364d1` (`Monday-28/10`).
+  Initial working tree was clean. Pass 1 changes only this handoff and the report;
+  no staging, commit, branch/worktree changes, service changes or test execution.
+- Source/config inspected: both proxy managers, protocol/auth/session/transaction
+  paths, principal registry/runtime, mutation/exposure/generation/schema code,
+  session consumer/engine/projection, Evidence Store, scaling persistence/control,
+  replay/hardening, canonical configuration, relevant test bodies and historical
+  verification artifacts. `.env` compatibility flags were inspected without
+  printing secrets. Tests listed in the report were read, not rerun.
+- VERIFIED BY INSPECTION: `config/features.yaml` selects deterministic_rule_based;
+  core, session/evidence, principals, scaling/replay and observability enabled;
+  all six future features disabled. `scripts/configuration.py::render` forces
+  adaptation/experiments off, empty adaptation endpoint, SAFE_MODE. Preserve this.
+- Runtime NOT VERIFIED: historical direct Compose ps failed on the intended
+  HONEYPOT_CONFIGURED guard and Docker client-config access warning. October 16
+  live results remain historical. Older HEAD/uncommitted statements below are
+  historical and do not describe the clean initial October 28 checkout.
+
+### Authoritative ownership / implicit FSM map
+
+- Native PostgreSQL/MySQL engines own physical SQL state/transactions. Proxy
+  `internal/session/session.go::Session` and handler fields own transient wire,
+  authentication, prepared-statement and transaction-status state. Both managers
+  dial the backend before virtual routing; MySQL also uses its greeting.
+- `deception_engine/principal_registry.py::PrincipalRegistry` owns durable
+  protocol-specific reserved identities, verifiers, permissions, creator/link
+  metadata and enabled tombstones. Redis-deception uses AOF appendfsync always
+  plus a volume. Stable principal HMAC and generation inputs must be preserved.
+- `principal_runtime.py::query` owns principal committed overlays/revision and
+  binding tx/failed state; per-principal lock serializes operations, revision
+  conflict rejects stale commits. Autocommit/COMMIT promotes; rollback restores;
+  disconnect never promotes. Saved exposure depth survives row rollback.
+- `mutation_store.py::MutationStore` owns ordinary session overlays/snapshot,
+  four-hour TTL. Ordinary fake COMMIT is NOT cross-session persistence; end cleans
+  all overlays. Principal working copies restore from committed principal JSON.
+- `exposure.py::ExposureTracker` owns progressive depth/last table, not a ledger
+  of observed facts. `generator.py`/schema YAML reconstruct base rows; no persisted
+  schema/generator version binding per principal. `persistent_objects`/`world_id`
+  are initialized placeholders, not implemented general world persistence.
+- `session_module/authoritative_state.py::AuthoritativeStateStore` is a bounded
+  **derived in-memory projection**, not physical/principal authority. No restart
+  reload or general query-event dedup. `SessionEngine` separately summarizes
+  activity; production query-less session_end is dropped by mapper, so behavioral
+  summary closure waits for inactivity/capacity/shutdown rather than disconnect.
+- EvidenceRepository owns bounded/TTL historical evidence, correlations and
+  artifacts, not live auth/query control. Scaling owns desired targets/cooldowns/
+  controls and bounded dedup history, not SQL/world semantics or actual replicas.
+  Replay uses sanitized captured queries against isolated static sandbox fixtures;
+  no original principal/world snapshot. Sandbox DBs use tmpfs; hardening can change
+  sandbox permissions only; Redis reports can outlive those DB changes.
+- FSMs IMPLEMENTED implicitly: connection auth/close; three distinct session
+  lifecycles; physical/ordinary-overlay/virtual transactions; enabled principal
+  -> later reuse -> disabled retained tombstone. Reuse is a predicate/counter,
+  not exclusive lifecycle state; creator-session login rejected; no re-enable.
+- General unresolved -> generated -> exposed -> immutable committed fact FSM:
+  NOT IMPLEMENTED. Existing strategy registry/guard source must be preserved;
+  disabled experiment revision is not the principal world revision.
+
+### Invariants / coverage / gaps
+
+- ENFORCED on inspected supported paths: reserved accounts/commands fail closed
+  without physical account creation; virtual proof checks; enabled recheck at
+  login/query; retained tombstones; reuse excludes creator session. Persistence,
+  transaction isolation, restart/concurrency and global idempotency are PARTIAL.
+- Coverage discovered: `test_principal_registry.py` proof/replay/rotation/reuse,
+  reconnect/rollback and sequential stale-commit conflict; `test_phase_b_invariants.py`
+  binding/overlay expiry, active disable/tombstone, both-protocol row lifetime,
+  PG abort and exposure surviving rollback; CRUD/base-world/metadata suites;
+  MySQL protocol lifecycle and transaction-boundary/finalization-failure tests;
+  session late-end projection, evidence ID/order/correlation/artifact idempotency,
+  scaling restore/dedup, native smoke create/return/reconnect/outage/disable stages.
+- HIGH gaps: no fact observation/contradiction ledger; synthetic savepoints absent;
+  PG ordinary overlay finalizer uses submitted SQL, not actual backend command tag
+  (COMMIT-as-ROLLBACK risk); ordinary Redis write errors may still claim success;
+  ordinary PG synthetic errors do not mark transaction E as virtual errors do;
+  durable principal write and Kafka evidence publication lack an atomic outbox;
+  evidence SADD claim precedes non-atomic append; finite principal lock has no fencing.
+- MEDIUM gaps: session projection restart loss/duplicate query counting, delayed
+  behavior closure, TTL/outage exposure resets, bounded generated INSERT semantics,
+  no replay world reconstruction. General world-consistency invariant NOT ENFORCED.
+- Missing proof: real Redis/process crash and partial-write recovery; true parallel
+  principal operations/lease expiry (unit lock is nullcontext); synthetic savepoint
+  rollback; mixed backend/deception failed commit; complete out-of-order tx handling;
+  duplicate query projection; schema upgrades preserving prior observed facts.
+- Adaptive readiness: PARTIAL observation/history/commitment/reconstruction/shared
+  principal world; session-only scope understood; future contradiction detection
+  NOT SUPPORTED. No live learner, steering, intervention or evolving assets authorized.
+
+### Exact recommended Pass 2 boundary — PLANNED, not started
+
+Small behavior-preserving principal binding/lifecycle formalization only: local
+type/pure helpers for existing tx/failed/revision/mutation_keys and I/T/E mapping;
+retain Redis JSON shape, locks, TTLs, ordering, errors and SQL outputs. Characterize
+transitions with focused tests, including creator-session login rejection. No new
+service, DB, generic FSM library, observation ledger or changed acceptance rules.
+
+Expected files: new `deception_engine/principal_state.py` and
+`deception_engine/test_principal_state.py`; minimal wiring in
+`deception_engine/principal_runtime.py` and `principal_registry.py::login`;
+`deception_engine/test_principal_registry.py`, `test_phase_b_invariants.py`;
+update this handoff/report with actual results. Run focused tests during an
+authorized Pass 2; this recommendation does not begin it now.
+
+Do NOT alter `.env`, config defaults/launcher/Compose, either proxy's protocol/auth,
+`api.py`, `mutation_store.py`, `exposure.py`, generation/schema assets, strategy
+registry/guard/selector, session/adaptive modules, evidence/scaling/replay,
+observability, deployment, HMAC or volumes. Preserve `cmds.txt` and manual Git
+boundaries. Transaction defects/exposure commitment need separately scoped later
+behavior changes; they are not quietly included in this formalization pass.
+
+---
+
 ## Live verification checkpoint — 2026-10-16
 
 The latest user request explicitly supersedes earlier no-test/no-startup rules:
