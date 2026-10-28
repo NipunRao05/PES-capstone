@@ -1,8 +1,12 @@
+active_versions: {D0: 1, D1: 1, D2: 1, D3: 1, D4: 1, D5: 1, D6: 1}
 registry_version: strategy-registry-v1
 default_strategy_id: D0
 unmapped_strategy_ids: [D7]
 strategies:
   - strategy_id: D0
+    strategy_version: 1
+    implementation: existing_deterministic
+    commitment_preconditions: []
     name: BASELINE
     description: Existing deterministic protocol, banner, passthrough, and safe fallback behavior.
     supported_protocols: [mysql, postgres]
@@ -18,6 +22,9 @@ strategies:
     approval_status: APPROVED
     evidence: [deception_engine/api.py, mysqlproxy/internal/protocol/handler.go, pgproxy/internal/protocol/handler.go]
   - strategy_id: D1
+    strategy_version: 1
+    implementation: existing_deterministic
+    commitment_preconditions: []
     name: CATALOG_RECON_LURE
     description: Existing deterministic catalog deception with progressive exposure.
     supported_protocols: [mysql, postgres]
@@ -33,6 +40,9 @@ strategies:
     approval_status: APPROVED
     evidence: [deception_engine/exposure.py, deception_engine/schema_loader.py, mitre_agent/rules/detection_rules.yaml]
   - strategy_id: D2
+    strategy_version: 1
+    implementation: existing_deterministic
+    commitment_preconditions: []
     name: BACKUP_LURE
     description: Existing backup and archive named synthetic trap assets.
     supported_protocols: [mysql, postgres]
@@ -48,6 +58,9 @@ strategies:
     approval_status: APPROVED
     evidence: [deception_engine/schemas/hr.yaml, deception_engine/schemas/finance.yaml, deception_engine/schemas/crm.yaml]
   - strategy_id: D3
+    strategy_version: 1
+    implementation: existing_deterministic
+    commitment_preconditions: []
     name: CREDENTIAL_LURE
     description: Existing synthetic credential, token, and key trap assets.
     supported_protocols: [mysql, postgres]
@@ -63,6 +76,9 @@ strategies:
     approval_status: APPROVED
     evidence: [deception_engine/schemas/hr.yaml, deception_engine/schemas/finance.yaml, deception_engine/schemas/crm.yaml, mitre_agent/rules/detection_rules.yaml]
   - strategy_id: D4
+    strategy_version: 1
+    implementation: existing_deterministic
+    commitment_preconditions: []
     name: SENSITIVE_DATA_LURE
     description: Existing synthetic HR, finance, and CRM records plus sensitive-data traps.
     supported_protocols: [mysql, postgres]
@@ -78,6 +94,9 @@ strategies:
     approval_status: APPROVED
     evidence: [deception_engine/schemas/hr.yaml, deception_engine/schemas/finance.yaml, deception_engine/schemas/crm.yaml, deception_engine/generator.py]
   - strategy_id: D5
+    strategy_version: 1
+    implementation: existing_deterministic
+    commitment_preconditions: []
     name: PRIVILEGE_LURE
     description: Existing MITRE rule/profile metadata; standalone attacker-facing execution remains unverified.
     supported_protocols: [mysql, postgres]
@@ -93,6 +112,9 @@ strategies:
     approval_status: REQUIRES_REVIEW
     evidence: [mitre_agent/rules/detection_rules.yaml, mitre_agent/rules/deception_profiles.yaml]
   - strategy_id: D6
+    strategy_version: 1
+    implementation: existing_deterministic
+    commitment_preconditions: []
     name: DESTRUCTIVE_OPERATION_SIMULATION
     description: Existing fake-schema INSERT UPDATE and DELETE simulation backed by per-session mutation state.
     supported_protocols: [mysql, postgres]

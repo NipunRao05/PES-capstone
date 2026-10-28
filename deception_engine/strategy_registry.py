@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import re
+import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+from world_commitments import Commitments, Fact
 
 DEFAULT_REGISTRY_PATH = Path(__file__).parent / "strategies" / "registry.yaml"
 _SAFE_ASSET = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -15,6 +18,10 @@ _ALLOWED_PROTOCOLS = {"mysql", "postgres"}
 _ALLOWED_APPROVAL = {"APPROVED", "REQUIRES_REVIEW", "REJECTED"}
 _ALLOWED_RISK = {"low", "medium", "high", "critical"}
 _ALLOWED_COST = {"low", "medium", "high"}
+ACTION_BINDINGS = {"D0": "baseline_response", "D1": "catalog_response",
+    "D2": "backup_asset_read", "D3": "credential_asset_read",
+    "D4": "sensitive_asset_read", "D5": "review_only", "D6": "managed_mutation"}
+PRODUCER_ACTIONS = frozenset(ACTION_BINDINGS.values()) - {"review_only"} | {"policy_rejection", "statement_error"}
 
 
 class RegistryValidationError(ValueError):
@@ -38,6 +45,10 @@ class Strategy:
     validation_version: str
     approval_status: str
     evidence: tuple[str, ...] = ()
+    strategy_version: int = 1
+    implementation: str = "existing_deterministic"
+    commitment_preconditions: tuple[Fact, ...] = ()
+    action_binding: str = "baseline_response"
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Strategy":
@@ -60,6 +71,24 @@ class Strategy:
         evidence = raw.get("evidence", [])
         if not isinstance(evidence, list) or any(not isinstance(x, str) or not x.strip() for x in evidence):
             raise RegistryValidationError("evidence must be a string list")
+        version = raw.get("strategy_version", 1)
+        if type(version) is not int or not 1 <= version <= 65535:
+            raise RegistryValidationError("invalid strategy version")
+        if raw.get("implementation", "existing_deterministic") != "existing_deterministic":
+            raise RegistryValidationError("unknown implementation")
+        conditions = raw.get("commitment_preconditions", [])
+        if not isinstance(conditions, list) or len(conditions) > 16:
+            raise RegistryValidationError("invalid preconditions")
+        try:
+            facts = tuple(Fact(x["namespace"], x["subject"], x["property"], x["value"])
+                for x in conditions if isinstance(x, dict) and set(x) == {"op", "namespace", "subject", "property", "value"} and x["op"] == "requires")
+        except (ValueError, TypeError, KeyError) as exc:
+            raise RegistryValidationError("invalid preconditions") from exc
+        if len(facts) != len(conditions) or len({f.key for f in facts}) != len(facts):
+            raise RegistryValidationError("invalid preconditions")
+        binding = raw.get("action_binding", ACTION_BINDINGS.get(raw.get("strategy_id")))
+        if binding not in ACTION_BINDINGS.values() or (binding == "review_only" and raw["approval_status"] == "APPROVED"):
+            raise RegistryValidationError("unknown or non-executable action binding")
         item = cls(
             strategy_id=str(raw["strategy_id"]).strip(),
             name=str(raw["name"]).strip(),
@@ -76,6 +105,8 @@ class Strategy:
             validation_version=str(raw["validation_version"]).strip(),
             approval_status=str(raw["approval_status"]).strip().upper(),
             evidence=tuple(x.strip() for x in evidence),
+            strategy_version=version, commitment_preconditions=facts,
+            action_binding=binding,
         )
         item.validate()
         return item
@@ -114,21 +145,47 @@ class Strategy:
             "validation_version": self.validation_version,
             "approval_status": self.approval_status,
             "evidence": list(self.evidence),
+            "strategy_version": self.strategy_version,
+            "action_binding": self.action_binding,
+            "implementation": self.implementation,
+            "commitment_preconditions": [dict(op="requires", namespace=f.namespace, subject=f.subject, property=f.property, value=f.value) for f in self.commitment_preconditions],
         }
+
+
+    def definition_digest(self) -> str:
+        semantic = self.to_dict()
+        for key in ("name", "description", "approval_status", "evidence", "validation_version", "implementation"):
+            semantic.pop(key)
+        for key, value in semantic.items():
+            if isinstance(value, list):
+                semantic[key] = sorted(value, key=lambda x: json.dumps(x, sort_keys=True))
+        return hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 class StrategyRegistry:
     def __init__(self, registry_version: str, default_strategy_id: str,
                  strategies: list[Strategy], unmapped_strategy_ids: tuple[str, ...] = (),
-                 *, degraded: bool = False, load_error: str = ""):
+                 *, degraded: bool = False, load_error: str = "", active_versions=None):
         self.registry_version = str(registry_version).strip()
         self.default_strategy_id = str(default_strategy_id).strip()
         self.unmapped_strategy_ids = tuple(unmapped_strategy_ids)
         self.degraded = degraded
         self.load_error = str(load_error)
-        self._strategies = {item.strategy_id: item for item in strategies}
-        if len(self._strategies) != len(strategies):
-            raise RegistryValidationError("duplicate strategy_id")
+        self._versions = {(item.strategy_id, item.strategy_version): item for item in strategies}
+        if len(self._versions) != len(strategies):
+            raise RegistryValidationError("duplicate strategy ID/version")
+        if active_versions is None:
+            if len({x.strategy_id for x in strategies}) != len(strategies):
+                raise RegistryValidationError("multiple versions require explicit active_versions")
+            active_versions = {x.strategy_id: x.strategy_version for x in strategies}
+        if not isinstance(active_versions, dict) or set(active_versions) != {x.strategy_id for x in strategies}:
+            raise RegistryValidationError("invalid active_versions")
+        self.active_versions = dict(active_versions)
+        self._strategies = {}
+        for sid, version in active_versions.items():
+            if type(version) is not int or (sid, version) not in self._versions:
+                raise RegistryValidationError("active version not found")
+            self._strategies[sid] = self._versions[sid, version]
         default = self._strategies.get(self.default_strategy_id)
         if not self.registry_version or default is None or default.approval_status != "APPROVED":
             raise RegistryValidationError("an approved default strategy and registry_version are required")
@@ -148,12 +205,20 @@ class StrategyRegistry:
         if not isinstance(unmapped, list) or any(not isinstance(x, str) for x in unmapped):
             raise RegistryValidationError("unmapped_strategy_ids must be a string list")
         return cls(raw.get("registry_version", ""), raw.get("default_strategy_id", ""),
-                   [Strategy.from_dict(x) for x in items], tuple(x.strip() for x in unmapped))
+                   [Strategy.from_dict(x) for x in items], tuple(x.strip() for x in unmapped), active_versions=raw.get("active_versions"))
 
     @classmethod
     def load(cls, path: Path = DEFAULT_REGISTRY_PATH) -> "StrategyRegistry":
         with path.open("r", encoding="utf-8") as handle:
-            return cls.from_dict(yaml.safe_load(handle))
+            registry = cls.from_dict(yaml.safe_load(handle))
+        with path.with_suffix(".lock.json").open("r", encoding="utf-8") as handle:
+            registry.validate_lock(json.load(handle))
+        return registry
+
+    def validate_lock(self, manifest):
+        for (sid, version), item in self._versions.items():
+            if manifest.get(f"{sid}:{version}") != item.definition_digest():
+                raise RegistryValidationError(f"{sid} v{version}: definition integrity mismatch")
 
     @classmethod
     def load_with_fallback(cls, path: Path = DEFAULT_REGISTRY_PATH) -> "StrategyRegistry":
@@ -175,8 +240,32 @@ class StrategyRegistry:
                    ("D1", "D2", "D3", "D4", "D5", "D6", "D7"),
                    degraded=True, load_error=reason)
 
-    def get(self, strategy_id: str) -> Strategy | None:
-        return self._strategies.get(str(strategy_id or "").strip())
+    def get(self, strategy_id: str, strategy_version: int | None = None) -> Strategy | None:
+        sid = str(strategy_id or "").strip()
+        return self._strategies.get(sid) if strategy_version is None else self._versions.get((sid, strategy_version))
+
+    def eligibility(self, strategy_id: str, strategy_version: int, protocol: str, record: dict) -> tuple[bool, str]:
+        item = self.get(strategy_id)
+        if item is None:
+            return False, "UNKNOWN_STRATEGY"
+        item = self.get(strategy_id, strategy_version)
+        if item is None:
+            return False, "UNKNOWN_VERSION"
+        if item.approval_status != "APPROVED":
+            return False, "NOT_APPROVED"
+        if protocol not in item.supported_protocols:
+            return False, "UNSUPPORTED_PROTOCOL"
+        try:
+            commitments = Commitments(record)
+            for fact in item.commitment_preconditions:
+                state = commitments.check(fact)
+                if state == "unobserved":
+                    return False, "PRECONDITION_MISSING"
+                if state == "conflict":
+                    return False, "PRECONDITION_MISMATCH"
+        except (ValueError, TypeError, KeyError):
+            return False, "INVALID_COMMITMENTS"
+        return True, "APPROVED"
 
     def resolve(self, strategy_id: str) -> Strategy:
         item = self.get(strategy_id)
@@ -202,10 +291,11 @@ class StrategyRegistry:
     def to_dict(self) -> dict[str, Any]:
         return {
             "registry_version": self.registry_version,
+            "active_versions": dict(self.active_versions),
             "default_strategy_id": self.default_strategy_id,
             "degraded": self.degraded,
             "strategy_count": len(self._strategies),
             "approved_strategy_ids": [x.strategy_id for x in self.approved()],
             "unmapped_strategy_ids": list(self.unmapped_strategy_ids),
-            "strategies": [x.to_dict() for x in self._strategies.values()],
+            "strategies": [x.to_dict() for x in self._versions.values()],
         }

@@ -119,6 +119,7 @@ func (h *Handler) servePrincipalQuery(ctx context.Context, sql string) error {
 		return err
 	}
 	code := ""
+	h.acknowledgeObservations(ctx, result)
 	if result.Mode != "fake" {
 		code = result.SQLState
 	}

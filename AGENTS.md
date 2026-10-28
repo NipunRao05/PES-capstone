@@ -1,5 +1,202 @@
 # AGENTS.md
 
+## Pass 5C — Producer-Side Action Identity Verification — 2026-10-28
+
+IMPLEMENTED / VERIFIED BY FOCUSED TESTS for approved engine action families.
+Branch feature/config-observability, HEAD f568312. Starting tree had uncommitted
+Pass 4/5/5B work, preserved. All work remains unstaged/uncommitted; no Git mutation.
+Production: api.py (explicit producer parameters), new action_provenance.py,
+strategy_registry.py (derived bounded producer vocabulary only). Tests: new
+test_action_provenance.py. Docs: ACTION_PROVENANCE_MODEL.md, concise progress notes
+in STRATEGY_VERSION_INTEGRITY.md and STRATEGY_REGISTRY_MODEL.md, this handoff.
+
+Semantic producer = branch creating response, not serializer. Shared read/count
+producer selects existing asset family before generation, emits code-level action
+only on success. No later response-content inference or copying expected binding.
+Catalog authority remains ACTION_BINDINGS; derived PRODUCER_ACTIONS includes
+operational policy_rejection/statement_error, excluding review_only.
+Expected map unchanged: D0 baseline_response; D1 catalog_response; D2 backup_asset_read;
+D3 credential_asset_read; D4 sensitive_asset_read; D6 managed_mutation. Actual map:
+banner/passthrough -> baseline; catalog/SHOW/metadata -> catalog; successful shared
+read/count -> selected asset family; completed mutation response -> managed_mutation;
+relation/exposure denial -> policy_rejection; syntax/column error -> statement_error.
+D5 REQUIRES_REVIEW; D7 unmapped. No strategy/lock/approval/version changes.
+
+ActionProvenance(actual, expected, status) is immutable, attached to JSONResponse
+Python object only. verify_action yields MATCH/MISMATCH/NOT_VERIFIED/INVALID_ACTION.
+Missing legacy metadata never guessed. Mismatch leaves body/transaction unchanged.
+No JSON/header/proxy field, persistent event or trace. Direct principal auth/tx
+dictionary responses and framework errors remain outside verified engine coverage.
+
+Tests: focused producer + registry/version/precondition/policy/world/principal/PG
+error suites 128 PASS, 17.16s. Added expected-binding corruption case; final producer
+file 17 PASS, 5.18s. Initial fixture lacked deception_level, corrected. Exact commands
+in ACTION_PROVENANCE_MODEL.md. Actual producers in both protocols verified; body
+preservation and failed lure provenance tested. Deterministic selection, commitments,
+read-only preconditions and version lock tests pass. No proxy code changes or Go
+campaign. Runtime health NOT VERIFIED. No service/config/feature changes.
+
+DEFERRED: persistent decision/application traces, experiments, outcome linkage/
+scoring, learner/shadow/adaptive selection, gap detection, candidates, graph,
+promotion. Recommended Pass 6 only: scoped decision/application trace and experiment
+registry consuming provenance before serialization, retaining UNKNOWN for uncovered
+paths. Do not begin without the next scoped request.
+
+---
+
+## Pass 5B — Strategy Version Integrity and Executable Action Binding — 2026-10-28
+
+**PARTIAL**, not approval to begin Pass 6. See STRATEGY_VERSION_INTEGRITY.md.
+Branch feature/config-observability, HEAD f568312; existing uncommitted Pass 4/5
+work preserved. No Git mutation or service changes. Production: strategy_registry.py,
+strategies/registry.yaml, new strategies/registry.lock.json. Tests: new
+test_strategy_version_integrity.py. Docs: STRATEGY_VERSION_INTEGRITY.md, concise
+STRATEGY_REGISTRY_MODEL.md progress note, this handoff.
+
+Registry authority unchanged. Definitions indexed by ID/version; explicit active
+map, exact lookup without fallback. Legacy single versions infer active; production
+all v1. SHA-256 canonical JSON pins semantic metadata including binding/assets/
+preconditions; description/name/evidence/validation and approval/active governance
+excluded. Adjacent lock is read-only at load and detects same-version replacement;
+historical entries may remain. Source review governs edits to both files together.
+Existing degraded D0 fallback remains on failed file loading. No code/asset hash pin.
+
+Bindings: D0 baseline_response; D1 catalog_response; D2 backup_asset_read;
+D3 credential_asset_read; D4 sensitive_asset_read; D6 managed_mutation. D5 remains
+REQUIRES_REVIEW/review_only; D7 unmapped. These map existing action families; they
+do not prove which handler produced a response because current strategy annotation
+occurs after response construction. Producer-side verification remains PARTIAL.
+No dispatcher or deterministic SQL/commitment behavior changed. Preconditions
+remain read-only. Focused version/registry/policy/precondition/world tests: 54 PASS
+in 3.35s. Runtime health NOT VERIFIED; no Go/live checks or feature changes.
+
+Deferred: decision trace, experiments, scoring, learner/shadow/adaptive selection,
+gap detection, candidate generation, graph, promotion. Exact next boundary before
+Pass 6: establish producer-side action identity verification for current response
+families without altering response semantics. Do not start trace/experiments yet.
+
+---
+
+## Pass 5 — Versioned Approved Strategy Registry and Commitment Preconditions — 2026-10-28
+
+**PARTIAL / VERIFIED BY FOCUSED TESTS**. See STRATEGY_REGISTRY_MODEL.md. Branch
+`feature/config-observability`, HEAD `f568312`; starting tree contained all
+uncommitted Pass 4 changes, preserved. No Git/service/volume changes.
+
+- Existing authority: `deception_engine/strategies/registry.yaml`, loaded by
+  `strategy_registry.py`; API and policy guard use it, adaptive code remains dormant.
+  Existing deterministic handlers remain action authority. D0/D1/D2/D3/D4/D6
+  approved v1; D5 requires review; D7 unmapped. D0 remains fallback.
+- Production edits: `strategy_registry.py` and `strategies/registry.yaml`. Tests:
+  `test_strategy_commitment_preconditions.py`. Docs: STRATEGY_REGISTRY_MODEL.md,
+  WORLD_COMMITMENT_MODEL.md progress note, this handoff.
+- Each definition has version 1, approval, coarse existing_deterministic binding
+  and empty commitment preconditions. Legacy missing fields default to those values.
+  One definition per ID is the active version; duplicates rejected. Version history
+  across deployments and precise executable action binding remain PARTIAL.
+- Internal eligibility checks only structured `requires` canonical facts from a
+  defensive commitment snapshot; missing/mismatching/corrupt data fails safely.
+  No commit, exposure, transaction or SQL mutation. Production preconditions empty;
+  existing deterministic choice/SQL paths and feature defaults unchanged.
+- Focused Python registry/policy/world tests passed: 52 cases. PostgreSQL/MySQL
+  behavior unchanged by inspection and existing Python coverage; no live or Go
+  protocol tests in this pass. Runtime health NOT VERIFIED.
+- DEFERRED: trace, experiments, scoring, learner, adaptive selector, gap detector,
+  candidate generation, attack graph, promotion, and stronger action/version
+  binding. Recommended Pass 6: scoped strategy decision/application trace and
+  experiment registry design, after resolving the partial binding/version limits;
+  do not begin without the next request.
+
+---
+
+## Pass 4 — Monotonic Attacker-Visible World Commitments — 2026-10-28
+
+**IMPLEMENTED / VERIFIED BY FOCUSED TESTS** for the bounded principal path below.
+Newest handoff; earlier pass statements remain historical where superseded.
+Full schema, authority, receipt boundary, exact commands and limits:
+`WORLD_COMMITMENT_MODEL.md`. Pass 5 is **NOT IMPLEMENTED / DO NOT START**.
+
+- Objective: retain explicit previously exposed facts without changing SQL
+  responses, authentication, transaction semantics or deterministic selection.
+- Branch `feature/config-observability`, observed HEAD `f568312`; starting tree
+  clean (Passes 1–3 already committed by user). HEAD unchanged; all Pass 4 changes
+  unstaged/uncommitted. No Git mutation, branch/worktree or service/volume changes.
+  Preserve user `cmds.txt` and manual Git ownership.
+- Production: new `deception_engine/world_commitments.py`; integration in
+  `deception_engine/principal_runtime.py`; private candidate/receipt helpers in
+  both proxies' `internal/protocol/principal.go`; one post-write call in each
+  `internal/protocol/principal_auth.go::servePrincipalQuery`. Authentication
+  functions unchanged. No new external dependency or infrastructure.
+- Tests: new `deception_engine/test_world_commitments.py`,
+  `test_world_commitment_lifecycle.py`; new
+  `pgproxy/internal/protocol/world_commitment_test.go` and MySQL counterpart.
+- Docs: new WORLD_COMMITMENT_MODEL.md, short dated STATE_WORLD_AUDIT.md note,
+  this newest handoff. Pass 2/3 reports and historical audit retained.
+- Model: immutable `Fact`; `Commitments.commit/get/has/list/check/serialize`.
+  Authority: principal runtime's existing persistent Redis record under existing
+  principal lock; physical SQL remains native authority, committed row overlays
+  retain their separate meaning. Reads/serialization return defensive copies.
+- Identity: `(relation, testdb.<table>, exists)`; stable key joined with `|`.
+  Subject is two canonical lower-case identifiers (each <=63 chars). Values:
+  JSON boolean for exists; model also accepts kind=table/view, not yet integrated.
+  Noncanonical strings/numbers and arbitrary properties are rejected. No rows,
+  SQL, raw result dumps or authentication material in the fact collection.
+- Scope/storage: principal-specific optional `world_commitments` map in existing
+  persistent principal JSON; <=128 entries, no TTL/eviction. Old missing field
+  loads empty; malformed present data is not erased. Principal identities remain
+  protocol-specific; semantic fact shape shared. Session-only facts DEFERRED;
+  no IP/fingerprint/global identity inference or extra world store.
+- Provenance: first_session_id <=128 chars, timezone ISO first_committed_at <=40,
+  fixed source synthetic_select_response. Session is provenance, not identity;
+  timestamp is engine receipt time, not causal ordering or delivery proof.
+- New fact inserts; same fact/value returns unchanged, retaining first provenance;
+  differing value returns conflict and retains original. No version/change or
+  response-repair policy. Capacity errors never evict old facts.
+- Integration: successful simple unqualified known managed-table SELECT returns
+  private candidates; both proxies acknowledge only after all SQL response writes
+  succeed. Authenticated private observe route commits relation-exists=true.
+  Empty results count; errors/DML/catalogs/aggregates/joins are not instrumented.
+  Candidates alone do not commit. Wire output remains unchanged in focused tests.
+- Persistence: fresh locked loads + existing save preserve record fields and
+  observations across reconnect. Existing world_revision remains row-only: fact
+  insert does not invalidate open SQL transactions. Stale row commits still fail
+  and cannot erase facts on tested sequential interleavings. No new version/lock.
+- Transaction independence: observations are outside overlay/snapshot state;
+  rollback, FAILED cleanup/COMMIT-as-ROLLBACK and disconnect retain them. Existing
+  IDLE/ACTIVE/FAILED and PG I/T/E behavior remains passing. Depth remains aggregate
+  disclosure-policy state; not an observation ledger or derived from this partial
+  collection. No depth/generator/schema/mutation-store changes.
+- Test execution: bundled Python, existing ignored pass2-tooling PYTHONPATH,
+  PYTHONDONTWRITEBYTECODE=1, `-m pytest -q -p no:cacheprovider` targeting new model/
+  lifecycle + test_postgres_error_state.py/test_principal_state.py/
+  test_principal_registry.py/test_phase_b_invariants.py: **82 PASS, 13.45s**.
+  First new-file run 23 PASS; first combined run 81 PASS; added one failure test.
+  Each proxy: `go test ./internal/protocol ./internal/principal -count=1 -timeout
+  45s`: **all four packages PASS**. New Go fixture constructor/Encode compilation
+  mistakes corrected before passing. gofmt and git diff --check pass.
+- VERIFIED BY TEST: canonical model/roundtrip/capacity; actual private route auth;
+  both protocols' exposure/reconnect/rollback/failed preservation; idempotency;
+  internal conflict and unchanged results; principal isolation; active/stale row
+  commits; receipt storage failure. Real proxy writers assert post-write receipt,
+  no receipt after failed writes, unchanged SQL bytes/result payloads on receipt
+  success/failure. Redis lock fixture is a no-op; no true parallel proof claimed.
+- PARTIAL/DEFERRED: full SQL/ordinary-session observation coverage, roles/paths,
+  schema/generator pinning, contradiction repair, attack graph, versioned registry
+  work, adaptive selection, evidence/outbox atomicity, real restart/crash/lease
+  expiry/fencing tests. Socket writes and storage are not atomic: failure after
+  writes can leave an exposed fact unrecorded; bounded proxy warning only, no SQL
+  rewrite or tx failure. Receipt time can delay next command within existing budget.
+- Runtime health **NOT VERIFIED**. No full suite, live smoke, stack start/rebuild,
+  deployment, new install or future-feature activation. Preserve current feature
+  defaults, identity/verifier formats, deterministic_rule_based and disabled
+  learning/steering/intervention/AI. No new strategy/experiment registry or learner.
+- Exact recommended Pass 5 — PLANNED ONLY: inspect and extend the existing dormant
+  approved strategy registry with explicit versions and read-only commitment
+  preconditions; keep current deterministic selection/configuration unchanged.
+  No duplicate registry or adaptive activation; requires the next scoped request.
+
+---
+
 ## Pass 3 — PostgreSQL Synthetic Error and Abort-State Consistency — 2026-10-28
 
 **IMPLEMENTED / VERIFIED by focused tests** for supported statement paths. This

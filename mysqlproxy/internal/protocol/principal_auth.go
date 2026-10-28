@@ -65,6 +65,7 @@ func (h *Handler) servePrincipalQuery(ctx context.Context, sql string) error {
 		return err
 	}
 	code, state := "", ""
+	h.acknowledgeObservations(ctx, result)
 	if result.Mode != "fake" {
 		code = fmt.Sprintf("mysql_%d", result.ErrorCode)
 		state = result.SQLState

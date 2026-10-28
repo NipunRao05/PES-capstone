@@ -687,7 +687,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
                 latency_ms=_latency(req.deception_level, base=30),
                 profile="fake_schema",
                 strategy_id="D1",
-            ))
+            ), producer_action='catalog_response')
         if req.protocol.lower().startswith("postgres") or " from pg_database" in fp:
             database_rows = databases
             datname_match = re.search(r"\bdatname\s*=\s*'([^']+)'", fp, re.I)
@@ -702,7 +702,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
                 latency_ms=_latency(req.deception_level, base=30),
                 profile="fake_schema",
                 strategy_id="D1",
-            ))
+            ), producer_action='catalog_response')
         return _json_response(DecisionResponse(
             mode="fake",
             databases=databases,
@@ -712,7 +712,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
             latency_ms=_latency(req.deception_level, base=30),
             profile="fake_schema",
             strategy_id="D1",
-        ))
+        ), producer_action='catalog_response')
 
     # 3. PostgreSQL information_schema metadata.  Tables and columns are
     # rendered from the same YAML that drives fake rows, then filtered by the
@@ -763,7 +763,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
     return _json_response(DecisionResponse(
         mode="passthrough",
         explanation="Table not in fake schema — forwarding to backend",
-    ))
+    ), producer_action='baseline_response')
 
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
@@ -847,7 +847,7 @@ async def _handle_postgres_catalog(
             column_types=["boolean" if column.startswith("has") or column == "rowsecurity" else "text" for column in columns],
             profile="fake_schema", strategy_id="D1",
             explanation=f"Bounded pg_tables catalog at exposure depth {depth}",
-        ))
+        ), producer_action='catalog_response')
 
     if any(marker in query for marker in (
         "pg_catalog.pg_inherits", "pg_catalog.pg_policy",
@@ -859,7 +859,7 @@ async def _handle_postgres_catalog(
             mode="fake", rows=[], columns=["Name"], column_types=["text"],
             profile="fake_schema", strategy_id="D1",
             explanation="No optional relation objects declared by deceptive schema",
-        ))
+        ), producer_action='catalog_response')
 
     if "pg_catalog.pg_class" in query:
         if "c.relchecks" in query:
@@ -900,7 +900,7 @@ async def _handle_postgres_catalog(
                 mode="fake", rows=rows, columns=columns, column_types=types,
                 profile="fake_schema", strategy_id="D1",
                 explanation="Bounded psql relation detail catalog",
-            ))
+            ), producer_action='catalog_response')
         requested = _pg_catalog_requested_table(query)
         selected = [requested] if requested in visible else ([] if requested else visible)
         if 'as "schema"' in query or " as schema" in query:
@@ -921,7 +921,7 @@ async def _handle_postgres_catalog(
             mode="fake", rows=rows, columns=columns, column_types=types,
             profile="fake_schema", strategy_id="D1",
             explanation=f"Bounded pg_class catalog at exposure depth {depth}",
-        ))
+        ), producer_action='catalog_response')
 
     if "pg_catalog.pg_attribute" in query:
         oid_match = re.search(r"attrelid\s*=\s*'?([0-9]+)'?", query, re.I)
@@ -948,7 +948,7 @@ async def _handle_postgres_catalog(
             column_types=["text", "text", "text", "boolean", "text", "text", "text"],
             profile="fake_schema",
             strategy_id="D1", explanation="Bounded pg_attribute relation description",
-        ))
+        ), producer_action='catalog_response')
 
     # psql asks optional follow-up catalogs for indexes, constraints, policies,
     # inheritance and triggers.  The current YAML declares none, so an empty
@@ -957,7 +957,7 @@ async def _handle_postgres_catalog(
         mode="fake", rows=[], columns=["Name"], column_types=["text"],
         profile="fake_schema", strategy_id="D1",
         explanation="No optional catalog objects declared by deceptive schema",
-    ))
+    ), producer_action='catalog_response')
 
 
 def _extract_mysql_metadata_table(query: str) -> str:
@@ -981,7 +981,7 @@ async def _handle_mysql_columns(
         return _json_response(DecisionResponse(
             mode="passthrough",
             explanation="Metadata target is not in fake schema — forwarding to backend",
-        ))
+        ), producer_action='baseline_response')
     denied = _table_access_error(req, schema_name, table, table_def)
     if denied is not None:
         return denied
@@ -991,7 +991,7 @@ async def _handle_mysql_columns(
         columns=columns, column_types=["text"] * len(columns),
         profile="fake_schema", strategy_id="D1",
         explanation=f"YAML-backed MySQL metadata for {table}",
-    ))
+    ), producer_action='catalog_response')
 
 
 async def _handle_information_schema(
@@ -1035,7 +1035,7 @@ async def _handle_information_schema(
             f"depth={depth}, {len(projected)} rows"
         ),
         strategy_id="D1",
-    ))
+    ), producer_action='catalog_response')
 
 
 def _metadata_projection(query: str, available: list[str]) -> list[str]:
@@ -1134,11 +1134,11 @@ def _syntax_error(req: DecisionRequest, message: str) -> JSONResponse:
         return _json_response(DecisionResponse(
             mode="block", error_msg=message, sqlstate="42601",
             explanation="Unsupported or malformed bounded deceptive SQL",
-        ))
+        ), producer_action='statement_error')
     return _json_response(DecisionResponse(
         mode="block", error_msg=message, error_code=1064, sqlstate="42000",
         explanation="Unsupported or malformed bounded deceptive SQL",
-    ))
+    ), producer_action='statement_error')
 
 
 def _column_error(req: DecisionRequest, column: str) -> JSONResponse:
@@ -1146,11 +1146,11 @@ def _column_error(req: DecisionRequest, column: str) -> JSONResponse:
     if protocol.startswith("postgres"):
         return _json_response(DecisionResponse(
             mode="block", error_msg=f'column "{column}" does not exist', sqlstate="42703",
-        ))
+        ), producer_action='statement_error')
     return _json_response(DecisionResponse(
         mode="block", error_msg=f"Unknown column '{column}' in 'field list'",
         error_code=1054, sqlstate="42S22",
-    ))
+    ), producer_action='statement_error')
 
 
 def _validate_metadata_sql(
@@ -1267,7 +1267,7 @@ async def _handle_show_tables(
         is_trap=is_trap,
         explanation=f"Progressive exposure depth={depth}, {len(visible)} tables visible",
         strategy_id="D1",
-    ))
+    ), producer_action='catalog_response')
 
 
 async def _handle_count(
@@ -1275,16 +1275,17 @@ async def _handle_count(
 ) -> JSONResponse:
     table = _extract_table(fp) or req.table
     if not table:
-        return _json_response(DecisionResponse(mode="passthrough"))
+        return _json_response(DecisionResponse(mode="passthrough"), producer_action='baseline_response')
 
     table_def = _schema_loader.get_table(schema_name, table)
     if not table_def:
-        return _json_response(DecisionResponse(mode="passthrough"))
+        return _json_response(DecisionResponse(mode="passthrough"), producer_action='baseline_response')
 
     denied = _table_access_error(req, schema_name, table, table_def)
     if denied is not None:
         return denied
 
+    read_action = _read_producer_action(schema_name, table)
     # Advance depth only after the currently exposed object is authorized.
     table_depth = table_def.get("exposure_depth", 1)
     _exposure.record_table_access(req.session_id, table, table_depth)
@@ -1308,7 +1309,7 @@ async def _handle_count(
         is_trap=is_trap,
         explanation=f"COUNT for {table}: {count} rows (base={base_count} delta={delta})",
         strategy_id=_strategy_id_for_table(schema_name, table),
-    ))
+    ), producer_action=read_action)
 
 
 async def _handle_select(
@@ -1316,12 +1317,13 @@ async def _handle_select(
 ) -> JSONResponse:
     table_def = _schema_loader.get_table(schema_name, table)
     if not table_def:
-        return _json_response(DecisionResponse(mode="passthrough"))
+        return _json_response(DecisionResponse(mode="passthrough"), producer_action='baseline_response')
 
     denied = _table_access_error(req, schema_name, table, table_def)
     if denied is not None:
         return denied
 
+    read_action = _read_producer_action(schema_name, table)
     # Advance exploration depth only after authorization.
     table_depth = table_def.get("exposure_depth", 1)
     _exposure.record_table_access(req.session_id, table, table_depth)
@@ -1400,7 +1402,7 @@ async def _handle_select(
         is_trap=is_trap,
         explanation=f"Fake rows for {table}: {len(rows)} rows returned",
         strategy_id=_strategy_id_for_table(schema_name, table),
-    ))
+    ), producer_action=read_action)
 
 
 async def _handle_mutation(
@@ -1417,7 +1419,7 @@ async def _handle_mutation(
         return _json_response(DecisionResponse(
             mode="passthrough",
             explanation="Mutation target is not in fake schema — forwarding to backend",
-        ))
+        ), producer_action='baseline_response')
 
     denied = _table_access_error(req, schema_name, table, table_def)
     if denied is not None:
@@ -1468,7 +1470,7 @@ async def _handle_mutation(
         profile="fake_table_data",
         explanation=f"Mutation recorded: {fp[:30]} — {affected} rows affected",
         strategy_id="D6",
-    ))
+    ), producer_action='managed_mutation')
 
 
 # ─── Session lifecycle ────────────────────────────────────────────────────────
@@ -1532,7 +1534,7 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
             latency_ms=_latency(req.deception_level, base=25),
             profile="fake_system_info",
             explanation=f"PostgreSQL banner hardening: {fp} → {column}='{value}'",
-        ))
+        ), producer_action='baseline_response')
 
     if fp in {"select database()", "select database"}:
         value = req.database or DEFAULT_DATABASE
@@ -1540,7 +1542,7 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
             mode="fake", rows=[{"database()": value}], columns=["database()"],
             column_types=["text"], latency_ms=_latency(req.deception_level, base=25),
             profile="fake_system_info", explanation="Canonical connected database identity",
-        ))
+        ), producer_action='baseline_response')
 
     if fp in SYSTEM_VAR_MAP:
         val = SYSTEM_VAR_MAP[fp]
@@ -1552,7 +1554,7 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
             latency_ms=_latency(req.deception_level, base=25),
             profile="fake_system_info",
             explanation=f"Banner hardening: {fp} → '{val}'",
-        ))
+        ), producer_action='baseline_response')
     return None
 
 
@@ -1610,7 +1612,7 @@ def _relation_error(
             error_code=0,
             sqlstate="42P01",
             explanation=explanation,
-        ))
+        ), producer_action='policy_rejection')
     database = str(getattr(req, "database", "") or "testdb")
     return _json_response(DecisionResponse(
         mode="block",
@@ -1618,17 +1620,28 @@ def _relation_error(
         error_code=1146,
         sqlstate="42S02",
         explanation=explanation,
-    ))
+    ), producer_action='policy_rejection')
 
 
-def _json_response(resp: DecisionResponse) -> JSONResponse:
+def _read_producer_action(schema_name: str, table_name: str) -> str:
+    # The existing asset rule selects the read family. This code-level producer
+    # contract deliberately does not copy the registry's expected binding field.
+    selected = _strategy_registry.strategy_for_asset(schema_name, table_name)
+    return {"D0": "baseline_response", "D2": "backup_asset_read",
+            "D3": "credential_asset_read", "D4": "sensitive_asset_read"}.get(selected.strategy_id)
+
+
+def _json_response(resp: DecisionResponse, *, producer_action=None) -> JSONResponse:
     import dataclasses
     _sync_strategy_runtime()
     resp.strategy_id = _strategy_agent.select_registered_rule(
         resp.strategy_id
     ).strategy_id
     resp.strategy_registry_version = _strategy_registry.registry_version
-    return JSONResponse(content=dataclasses.asdict(resp))
+    response = JSONResponse(content=dataclasses.asdict(resp))
+    from action_provenance import verify_action
+    response.action_provenance = verify_action(_strategy_registry.resolve(resp.strategy_id), producer_action)
+    return response
 
 
 def _latency(deception_level: int, base: int = 30) -> int:

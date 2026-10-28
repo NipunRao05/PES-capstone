@@ -1,5 +1,13 @@
 # Pass 1 — State / World Consistency Audit
 
+> Subsequent Pass 4 progress — 2026-10-28: bounded principal observation facts
+> now persist in optional principal JSON `world_commitments`, acknowledged after
+> successful proxy writes for simple known-table reads. First values/provenance
+> survive reconnect and rollback; internal conflicts retain the original fact.
+> See `WORLD_COMMITMENT_MODEL.md`: 82 focused Python cases and four Go packages
+> PASS. Coverage is partial; socket/storage atomicity, broader crash/concurrency
+> and runtime health remain NOT VERIFIED. Original audit is retained below.
+
 > Subsequent Pass 3 update — 2026-10-28: the bounded PostgreSQL synthetic-error
 > gaps below now have focused corrections and tests in
 > `POSTGRES_SYNTHETIC_ERROR_STATE.md`. The general fact/commitment, savepoint,

@@ -12,6 +12,7 @@ from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 from principal_registry import PrincipalRegistry, PrincipalError, PREFIX, SESSION_TTL, now
 from principal_state import PrincipalTransactionContext, PrincipalTransactionConflict
+from world_commitments import Commitments, Fact, FIELD
 
 principal_seed = ContextVar("principal_seed", default="")
 
@@ -61,6 +62,8 @@ def install(app, api):
                 return reg.native_auth(body)
             if action == "query":
                 return await query(reg, api, request, body)
+            if action == "observe":
+                return observe(reg, api, body)
             if action == "end":
                 end_session(reg, api, sid)
                 return {"status": "ok"}
@@ -89,6 +92,57 @@ def end_session(reg, api, sid):
     api._exposure.cleanup_session(sid)
     api._mutations.cleanup_session(sid)
     api._generator.cleanup_session(sid)
+
+
+def observe(reg, api, body):
+    """Trusted proxy receipt after successful response writes; never a SQL action.
+
+    Fresh record + existing principal lock preserves concurrent row revisions and
+    prior facts. Observation alone must not invalidate an open SQL transaction.
+    """
+    sid = body["session_id"]
+    session_key = PREFIX + "session:" + sid
+    binding = json.loads(reg.redis.get(session_key) or "null")
+    if not binding:
+        raise PrincipalError("Session expired", "28000", 1045)
+    candidates = body.get("observation_candidates")
+    if not isinstance(candidates, list) or not 1 <= len(candidates) <= 8:
+        raise PrincipalError("Invalid observations")
+    schema = api._schema_loader.schema_for_database("testdb")
+    facts = []
+    for subject in candidates:
+        if not isinstance(subject, str) or not subject.startswith("testdb.") or not api._schema_loader.get_table(schema, subject[7:]):
+            raise PrincipalError("Invalid observations")
+        facts.append(Fact("relation", subject, "exists", True))
+    with reg.lock(binding["key"]):
+        current = json.loads(reg.redis.get(session_key) or "null")
+        if not current or current["key"] != binding["key"]:
+            raise PrincipalError("Session expired", "28000", 1045)
+        record = reg.load(current["key"])
+        # A response already sent remains observed even if the account was just
+        # disabled. Do not re-enable it or alter its permissions/binding/TTL.
+        commitments = Commitments(record)
+        statuses = [commitments.commit(fact, session_id=sid, timestamp=now()) for fact in facts]
+        inserted = statuses.count("inserted")
+        if inserted:
+            record[FIELD] = commitments.serialize()
+            reg.save(current["key"], record)
+        return {"status": "ok", "inserted": inserted, "conflicts": statuses.count("conflict")}
+
+
+def observation_candidates(api, sql, result):
+    """Only successful simple unqualified managed-table reads, including empty rows.
+
+    Match a small grammar instead of inferring facts from arbitrary SQL/catalog
+    results. These private candidates are not commitments or wire result fields.
+    """
+    if result.get("mode") != "fake" or result.get("profile") not in {"fake_table_data", "high_value_target"}:
+        return []
+    match = re.fullmatch(r"select\s+(?:\*|[a-z_][a-z0-9_]*(?:\s*,\s*[a-z_][a-z0-9_]*)*)\s+from\s+"
+        r"([a-z_][a-z0-9_]{0,62})(?:\s+where\s+id\s*=\s*\d+)?(?:\s+limit\s+\d+)?", sql.lower())
+    if match and api._schema_loader.get_table(api._schema_loader.schema_for_database("testdb"), match[1]):
+        return ["testdb." + match[1]]
+    return []
 
 
 async def query(reg, api, request, body):
@@ -235,4 +289,7 @@ async def query(reg, api, request, body):
             pipe.execute()
         result["tx_status"] = transaction.state.value
         result["post_return_exploration_depth"] = record["exposure_depth"]
+        candidates = observation_candidates(api, sql, result)
+        if candidates:
+            result["observation_candidates"] = candidates
         return result

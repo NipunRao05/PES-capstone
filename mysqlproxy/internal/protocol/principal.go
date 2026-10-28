@@ -8,13 +8,31 @@ import (
 type principalDecision struct {
 	deceptionDecisionResponse
 	principal.Context
-	Token       string                   `json:"token"`
-	ServerFirst string                   `json:"server_first"`
-	ServerFinal string                   `json:"server_final"`
-	CommandTag  string                   `json:"command_tag"`
-	TxStatus    string                   `json:"tx_status"`
-	Depth       int                      `json:"post_return_exploration_depth"`
-	Events      []map[string]interface{} `json:"events"`
+	Token                 string                   `json:"token"`
+	ServerFirst           string                   `json:"server_first"`
+	ServerFinal           string                   `json:"server_final"`
+	CommandTag            string                   `json:"command_tag"`
+	TxStatus              string                   `json:"tx_status"`
+	Depth                 int                      `json:"post_return_exploration_depth"`
+	Events                []map[string]interface{} `json:"events"`
+	ObservationCandidates []string                 `json:"observation_candidates"`
+}
+
+// Receipt follows successful response writes; persistence failures never rewrite
+// SQL output or mark the transaction failed. No payload/error details are logged.
+func (h *Handler) acknowledgeObservations(ctx context.Context, result principalDecision) {
+	if !h.virtual || result.Mode != "fake" || len(result.ObservationCandidates) == 0 {
+		return
+	}
+	var receipt struct {
+		Status    string `json:"status"`
+		Conflicts int    `json:"conflicts"`
+	}
+	err := principal.Call(ctx, "observe", map[string]interface{}{
+		"session_id": safeSessionID(h), "observation_candidates": result.ObservationCandidates}, &receipt)
+	if err != nil || receipt.Status != "ok" || receipt.Conflicts != 0 {
+		h.logger.Warn("principal observation acknowledgement failed")
+	}
 }
 
 func (h *Handler) principalQuery(ctx context.Context, sql string) principalDecision {
