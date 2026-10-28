@@ -96,6 +96,20 @@ async def query(reg, api, request, body):
         record = reg.load(binding["key"])
         if not record["enabled"]:
             raise PrincipalError("Account disabled", "28000", 1045)
+
+        def working_keys():
+            return list(reg.redis.scan_iter("mutation:" + sid + ":*", count=200))
+
+        def expired_state():
+            # Never promote a partial working world over durable committed state.
+            # Reauthentication restores the committed record into a fresh session.
+            reg.redis.delete(session_key)
+            raise PrincipalError("Session state expired; reconnect required", "28000", 1045)
+
+        if binding["tx"]:
+            expected = binding.get("mutation_keys")
+            if expected is None or any(reg.redis.get(key) is None for key in expected):
+                expired_state()
         sql = body.get("sql", "").strip().rstrip(";").strip()
         if len(sql) > 65536 or not sql or ";" in sql or "/*" in sql or "--" in sql:
             raise PrincipalError("Unsupported statement", "42601", 1064)
@@ -118,8 +132,12 @@ async def query(reg, api, request, body):
 
         def promote():
             overlays = {}
-            for key in reg.redis.scan_iter("mutation:" + sid + ":*", count=200):
-                overlays[key.split(":", 2)[2]] = reg.redis.get(key)
+            keys = set(working_keys()) | set(binding.get("mutation_keys", []))
+            for key in keys:
+                value = reg.redis.get(key)
+                if value is None:
+                    expired_state()
+                overlays[key.split(":", 2)[2]] = value
             if len(json.dumps(overlays)) > 1024 * 1024:
                 raise PrincipalError("Account state limit exceeded", "54000", 1114)
             record["persistent_mutations"] = overlays
@@ -171,8 +189,15 @@ async def query(reg, api, request, body):
             record["exposure_depth"] = max(record["exposure_depth"], api._exposure.get_depth(sid))
         reg.check_deadline()
         record["updated_at"] = now()
+        keys = working_keys()
+        binding["mutation_keys"] = keys if binding["tx"] else []
         # One atomic durable write precedes the proxy's success response.
         with reg.redis.pipeline(transaction=True) as pipe:
+            # Keep working overlays alive at least as long as the refreshed binding.
+            for key in keys:
+                pipe.expire(key, SESSION_TTL)
+            pipe.expire("mutation-tx:" + sid, SESSION_TTL)
+            pipe.expire("exposure:" + sid, SESSION_TTL)
             pipe.set(binding["key"], json.dumps(record))
             pipe.setex(session_key, SESSION_TTL, json.dumps(binding))
             pipe.execute()

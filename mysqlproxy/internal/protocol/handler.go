@@ -132,9 +132,11 @@ type Handler struct {
 	intercept *interceptor.Interceptor
 
 	// Phase 3: session/auth event publishing
-	pub              *publisher.Publisher
-	authMethod       string // captured from server greeting auth plugin name
-	lastQueryOutcome interceptor.QueryOutcome
+	pub                     *publisher.Publisher
+	authMethod              string // captured from server greeting auth plugin name
+	lastQueryOutcome        interceptor.QueryOutcome
+	deceptionTxDirty        bool
+	deceptionTransactionSQL string
 }
 
 // NewHandler constructs a Handler.
@@ -681,6 +683,9 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 			// If /decide returns mode=fake, build a MySQL result set here and do not
 			// forward the query to the real backend.
 			if dec, ok := h.decideWithDeceptionEngine(ctx, sql, "mysql"); ok {
+				if strings.EqualFold(dec.Mode, "fake") && isDeceptionMutationSQL(sql) && h.deceptionTransactionState() == "in_transaction" && dec.AffectedRows != nil && *dec.AffectedRows > 0 {
+					h.deceptionTxDirty = true
+				}
 				h.logger.Info(
 					"serving deception-engine fake result",
 					"protocol", "mysql",
@@ -909,6 +914,11 @@ func (h *Handler) handleStmtPrepare(ctx context.Context, cmdPkt []byte, sql stri
 // response packets back to the client. isQuery=true enables row counting.
 // Fix 2 equivalent: handles multi-resultset, LOCAL INFILE, and all edge cases.
 func (h *Handler) forwardAndDrain(ctx context.Context, cmdPkt []byte, sc *shaper.ShapeContext, isQuery bool) error {
+	h.deceptionTransactionSQL = ""
+	if len(cmdPkt) > 0 && cmdPkt[0] == comQuery {
+		h.deceptionTransactionSQL = cleanMySQLQueryPayload(cmdPkt[1:])
+	}
+	defer func() { h.deceptionTransactionSQL = "" }()
 	h.lastQueryOutcome = interceptor.QueryOutcome{Verified: isQuery, Success: true, Authority: "backend", TransactionState: h.mysqlTransactionState()}
 	if err := h.sendPacket(h.backendConn, cmdPkt, 0); err != nil {
 		return fmt.Errorf("send to backend: %w", err)
@@ -975,6 +985,9 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 
 		switch pkt[0] {
 		case packetOK:
+			if err := h.finalizeDeceptionTransaction(ctx, pkt); err != nil {
+				return err
+			}
 			h.updateMySQLStatus(pkt)
 			// Check for more results (SERVER_MORE_RESULTS_EXISTS in status flags)
 			if err := h.sendPacket(h.clientConn, pkt, seqNum); err != nil {
@@ -1124,7 +1137,7 @@ func (h *Handler) emitTextQueryOutcome(sql string, outcome interceptor.QueryOutc
 }
 
 func (h *Handler) mysqlTransactionState() string {
-	if h.sess != nil && h.sess.Snapshot().InTransaction {
+	if h.sess != nil && (h.sess.Snapshot().InTransaction || h.deceptionTxDirty) {
 		return "in_transaction"
 	}
 	return "idle"
@@ -1805,17 +1818,18 @@ func indexByte(b []byte, c byte) int {
 // ─── Deception-engine integration ────────────────────────────────────────────
 
 type deceptionDecisionRequest struct {
-	SessionID       string  `json:"session_id"`
-	QueryNormalized string  `json:"query_normalized"`
-	Fingerprint     string  `json:"fingerprint"`
-	EventType       string  `json:"event_type"`
-	Phase           string  `json:"phase"`
-	Username        string  `json:"username"`
-	Database        string  `json:"database"`
-	Protocol        string  `json:"protocol"`
-	Table           string  `json:"table"`
-	DeceptionLevel  int     `json:"deception_level"`
-	RiskScore       float64 `json:"risk_score"`
+	TransactionState string  `json:"transaction_state"`
+	SessionID        string  `json:"session_id"`
+	QueryNormalized  string  `json:"query_normalized"`
+	Fingerprint      string  `json:"fingerprint"`
+	EventType        string  `json:"event_type"`
+	Phase            string  `json:"phase"`
+	Username         string  `json:"username"`
+	Database         string  `json:"database"`
+	Protocol         string  `json:"protocol"`
+	Table            string  `json:"table"`
+	DeceptionLevel   int     `json:"deception_level"`
+	RiskScore        float64 `json:"risk_score"`
 }
 
 type deceptionDecisionResponse struct {
@@ -1905,17 +1919,18 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	normalized := normalizeDeceptionSQL(sql)
 	req := deceptionDecisionRequest{
-		SessionID:       safeSessionID(h),
-		QueryNormalized: normalized,
-		Fingerprint:     deceptionFingerprint(normalized),
-		EventType:       "query",
-		Phase:           inferDeceptionPhase(normalized),
-		Username:        safeUsername(h),
-		Database:        safeDatabase(h),
-		Protocol:        protocol,
-		Table:           extractDeceptionTableName(normalized),
-		DeceptionLevel:  inferDeceptionLevel(normalized),
-		RiskScore:       inferDeceptionRisk(normalized),
+		TransactionState: h.deceptionTransactionState(),
+		SessionID:        safeSessionID(h),
+		QueryNormalized:  normalized,
+		Fingerprint:      deceptionFingerprint(normalized),
+		EventType:        "query",
+		Phase:            inferDeceptionPhase(normalized),
+		Username:         safeUsername(h),
+		Database:         safeDatabase(h),
+		Protocol:         protocol,
+		Table:            extractDeceptionTableName(normalized),
+		DeceptionLevel:   inferDeceptionLevel(normalized),
+		RiskScore:        inferDeceptionRisk(normalized),
 	}
 
 	body, err := json.Marshal(req)
@@ -2051,8 +2066,9 @@ func (h *Handler) sendMySQLDeceptionOK(affectedRows int) error {
 	}
 	pkt := []byte{packetOK}
 	pkt = append(pkt, writeLenEncInt(uint64(affectedRows))...)
-	pkt = append(pkt, 0x00)                   // last insert id
-	pkt = append(pkt, 0x02, 0x00, 0x00, 0x00) // autocommit, warnings=0
+	pkt = append(pkt, 0x00) // last insert id
+	status := h.deceptionStatus()
+	pkt = append(pkt, byte(status), byte(status>>8), 0x00, 0x00)
 	return h.sendPacket(h.clientConn, pkt, 1)
 }
 
@@ -2434,9 +2450,6 @@ func scrambleSHA1(password string, seed []byte) []byte {
 var _ = scrambleSHA1
 
 func (h *Handler) deceptionEOFPacket() []byte {
-	if !h.virtual {
-		return mysqlEOFPacket()
-	}
-	status := h.principalStatus()
+	status := h.deceptionStatus()
 	return []byte{0xfe, 0, 0, byte(status), byte(status >> 8)}
 }

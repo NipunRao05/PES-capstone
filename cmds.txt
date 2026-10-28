@@ -1,0 +1,24 @@
+py --version
+docker version
+
+
+py scripts/honeypot.py config-check
+py scripts/honeypot.py config-status
+
+
+py scripts/honeypot.py compose config --quiet
+
+py scripts/honeypot.py compose up -d --build
+
+
+py scripts/honeypot.py compose ps
+
+
+
+
+
+
+py scripts/verify_runtime.py
+
+
+
