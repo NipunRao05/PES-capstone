@@ -1,5 +1,580 @@
 # AGENTS.md
 
+## Pass 8E — Real Redis and End-to-End Trace Runtime Validation — 2026-10-30
+
+COMPLETE for bounded local validation. Real Redis Lua/index/outbox and the live
+PostgreSQL query trace path VERIFIED. Redis restart/disk durability and production
+sizing NOT VERIFIED. Full evidence, commands, fixture inventory and limits:
+TRACE_RUNTIME_VALIDATION.md. Earlier NOT VERIFIED labels remain historical.
+
+- Objective: validate current working-tree trace/index/outbox contracts against
+  real existing Redis/HTTP/query runtime; make only reproduced minimal repairs.
+- Branch feature/config-observability, HEAD ec82fd9 unchanged. Starting tree had
+  unstaged/untracked Pass 6–8D work, preserved. Ending adds unstaged/uncommitted
+  Pass 8E fix/tests/scripts/docs. No Git mutation or feature/secret/.env changes.
+- Initial state: Redis services, Redpanda, PostgreSQL/MySQL exited; Evidence Store,
+  replay engine/scaling restarting. Proxies/deception Up with unavailable dependencies.
+  Old engine image lacked live_trace.py/trace_outbox.py. Existing named volumes
+  confirmed. No volume deletion, credential reset or physical schema/user creation.
+- Canonical config-check PASS, config-status deterministic with all future features
+  disabled, compose config --quiet PASS. Docker pipe denial handled via approved
+  escalation. Used supported launcher compose up -d --build, no down first. Started
+  existing dependencies on retained volumes and recreated changed application images.
+- Evidence restart cause established: Redis hostname resolution failed at Runtime
+  PING because redis-mitre was stopped; recovered after dependency start. Not index
+  code. Post-rebuild replay 502 was nginx's stale cached upstream IP; a targeted
+  launcher restart sandbox-replay-api resolved it. Initial Prometheus/Loki readiness
+  settled. No opportunistic production/config repair.
+- Redis topology: TraceStore/Evidence uses redis-mitre:6379 DB0 and existing
+  capstone-main_redismitre volume, appendonly=no. Outbox/principal/world use
+  redis-deception:6379 DB0, capstone-main_redisdeception volume, appendonly=yes and
+  appendfsync=always. Actual application-side PINGs PASS. Receiver retention resolved
+  to 2592000s (30 days). No Redis port published or persistence configuration changed.
+- Real TraceStore WRITE/READ/ACTIVATE Lua PASS: all kinds canonical/retrievable,
+  one membership/sequence, epoch/version/time/sequence present. Exact replay unchanged,
+  same position/TTL; conflicting record preserved original and index. Actual HTTP
+  endpoint new/replay/conflict returned inserted/unchanged/409.
+- Real snapshot/pagination PASS: 132 decisions, boundary captured, later admission
+  excluded; pages 128+4 ordered with no missing/duplicate IDs. One-second isolated
+  TTL expired, stale membership removed, re-admission sequence advanced. Four-thread
+  concurrency: 12 same-ID requests -> one inserted/11 unchanged; 12 distinct retained.
+- Real outbox PASS in a private prefix: durable enqueue/reload; injected sender503
+  retains original pair/retry metadata. New Python process delivered over actual HTTP
+  then discarded ACK locally; another new process replayed original IDs, got unchanged
+  and removed pending entry. Real test-worker process recreation/lost-ACK VERIFIED;
+  production daemon-container restart with pending work not separately fault-injected.
+- Real HTTP indexed denominator PASS: 3 applications, 2 with outcomes, 1 without,
+  coverage2/3; 2 eligible, eligible coverage1. Empty scope ->0/null. Isolated orphan
+  diagnosed and excluded from denominator. All values are engineering fixtures,
+  not real attacker observations or scientific effectiveness evidence.
+- Functional capacity3 PASS: fourth admission rejected, originals/count/sequence
+  intact. Production1000-per-kind unchanged. Real report timings: 100/kind (300 total)
+  0.027229s; 500/kind (1500 total) 0.117345s, no timeout/memory error. Small fixture
+  records, one measurement each; no latency threshold, worst-case/full sizing claim.
+- Live PG SELECT version() initially succeeded through existing backend fallback
+  but /decide500/no trace. Runtime logs showed DuplicateTimeseries. Reproducing
+  subprocess test FAILED identically: Docker python api.py uses __main__, while
+  producer import api reexecutes module/collectors. Minimal api.py entry-point alias
+  shares initialized module; no SQL/strategy/state/formula changes. Rebuilt only
+  deception-engine, reran exact live check PASS. Container/source hashes matched
+  api/live_trace/outbox and Evidence trace_index. No Redis restart for this fix.
+- Successful live PG query event and indexed application share execution/start,
+  decision/application IDs; actual daemon outbox acknowledged delivery. No private
+  fields in SQL output. Fixture/session IDs in runtime report. MySQL and extended/
+  prepared live correlation NOT VERIFIED in this pass; no Go source touched.
+- Production change this pass: deception_engine/api.py entry-point alias only.
+  Tests: new subprocess regression in test_query_correlation.py; test_live_trace.py
+  now reuses current Evidence Redis/Lua double rather than obsolete SET-only helper.
+  New bounded manual harnesses scripts/validate_trace_runtime.py and
+  scripts/validate_query_trace_runtime.py. No TraceStore/index/outbox redesign.
+- Automated engine tests: test_trace_outbox.py test_live_trace.py
+  test_decision_trace.py test_query_correlation.py ->46 PASS,7.36s. Evidence:
+  test_trace_index.py test_strategy_traces.py test_strategy_trace_endpoint.py
+  test_strategy_outcomes.py test_outcome_aggregation.py
+  test_query_application_correlation.py test_evidence_store.py ->71 PASS,1.31s.
+  Bundled Python/ignored tooling, no cache/bytecode. Exact commands and initial
+  failing regression in runtime report. No Go/full-repository campaign.
+- Final verify_runtime.py exit0, all13 checks PASS; nine Prometheus targets and53
+  dashboard expressions. Final relevant services Up. Missing-traffic notes are not
+  failures. Initial verifier had three failures, then only replay before targeted
+  restart. No claim of soak, internet deployment or calibrated research dataset.
+- Private Redis namespaces and temporary shared harness files cleaned, only exact
+  tracked test keys. Container rootfs read-only; initial docker cp refused, so used
+  existing shared read-only bind without mount changes. Three marked HTTP fixture
+  applications/decisions plus two outcomes retain normal30-day TTL; marker
+  pass8e_c244619ab80f433c99bc7d88ae62e779 and synthetic digest in report. Exclude
+  these and the controlled PG sessions from research. No principal/world keys touched.
+- Docs: new TRACE_RUNTIME_VALIDATION.md; dated notes in TRACE_INDEX_AND_COVERAGE.md,
+  STRATEGY_TRACE_DELIVERY.md, QUERY_APPLICATION_CORRELATION.md; this handoff preserves
+  prior history. Final diff/status/stat reviewed; git diff --check PASS.
+- NOT VERIFIED: deliberate Redis process-restart persistence, disk disaster/failover,
+  worst-case/full capacity sizing. AOF/volume inspection is not durability proof.
+  Pre-index history, bounded loss/retention/capacity, Pass8B cross-replica/restart
+  query replay, uncovered protocols, commitment/exposure deltas, cross-session
+  delayed outcomes and calibration remain limits. Learner/adaptive/graph/promotion
+  disabled/deferred. Current stack left running, no credentials or volumes changed.
+- Exactly one next recommendation: distributed/restart-safe query-request idempotency,
+  since local trace/index/outbox runtime now passes but request replay is process-
+  local. PLANNED ONLY; no next-pass implementation or deployment started.
+
+## Pass 8D — Authoritative Retained-Trace Indexing and Coverage Denominators — 2026-10-30
+
+IMPLEMENTED / VERIFIED BY CONTRACT TESTS. REAL REDIS INDEX/LUA VERIFICATION and
+runtime health NOT VERIFIED. Authoritative scope is INDEXED_RETAINED_POPULATION,
+never lifetime history. Full contract: TRACE_INDEX_AND_COVERAGE.md.
+
+- Objective: enumerate current indexed retained traces and measure application-to-
+  outcome availability, preserving manifest reports and deterministic behavior.
+- Branch feature/config-observability, HEAD ec82fd9 unchanged. Starting tree had
+  uncommitted Pass 6–8B source/tests/docs; all preserved. Ending tree adds Pass 8D
+  unstaged/uncommitted work. No branch/stage/commit/push, service restart, config,
+  dependency, engine/proxy/strategy/world/principal or feature-default changes.
+- Production: evidence_store/strategy_traces.py and main.py; new trace_index.py
+  and indexed_aggregation.py. Existing outcome_aggregation.py and scoring code
+  reused unchanged. Tests: new test_trace_index.py; test_strategy_traces.py Redis
+  double now models atomic scripts/concurrency/expiry. Docs: new
+  TRACE_INDEX_AND_COVERAGE.md, additive OUTCOME_AGGREGATION_BASELINE.md,
+  STRATEGY_OUTCOME_MODEL.md, STRATEGY_DECISION_TRACE.md notes and this handoff.
+- Authority remains existing Evidence Store Redis. Index kinds decision,
+  application, outcome; index version 1 is independent of trace/profile/strategy
+  versions. Prefix evidence:strategy_trace:index:v1; each kind has sequence-scored
+  members, expiry sorted set, context hash. Application index context retains
+  validated strategy ID/version/digest and experiment ID/version for filtering
+  when the linked decision expires. Logical record contents/UUIDs unchanged.
+- Persistent metadata hash has index_version, enabled_at UTC, epoch UUID, global
+  sequence and per-kind membership counts. First indexed write activates atomically;
+  explicit TraceStore.activate_index() supports empty activation. No TTL on meta.
+  Pre-activation indexed reads return INDEX_NOT_ACTIVE/409 rather than inventing
+  activation history. Redis-persistent metadata survives Python process recreation.
+- One Lua EVAL per record compares content and updates TTL record, index membership,
+  expiry/context and sequence/counts. Normal type/cardinality preflight before write
+  mutations. Same ID/content unchanged, original TTL/position preserved; conflicts
+  do not change index; distinct IDs remain distinct. Modeled concurrent first
+  writes yield one insertion. Lua errors have no automatic rollback: arbitrary
+  corruption/OOM/eviction/disk loss are not claimed safe. Standalone Redis only;
+  cross-slot Redis Cluster and pair-atomic decision/application delivery deferred.
+- Global sequence orders admissions and is never reset/reused by cleanup. Expired
+  records re-admitted receive newer positions. Sequence is not a count; numeric
+  range stays below 2^53. Snapshot maximum + epoch exclude later admissions.
+- list_records(kind) and POST /evidence/strategy-traces/list support pages 1–128,
+  after_sequence (last inspected, even stale), original maximum/epoch and done.
+  Allowed kinds exactly decision/application/outcome. No SCAN/KEYS enumeration.
+  Full indexed report captures all three bounded indices/live records atomically.
+  Stable sequence boundary is not an archived copy: expiry/loss can shrink later
+  reads of the same boundary. Later inserts cannot enlarge an old boundary.
+- Capacity 1,000 entries per kind, including stale until cleaned. At capacity reject
+  new admission, no live eviction/deletion or shortened retention; ingestion 503
+  preserves existing outbox retry behavior. Reports inspect <=3,000 records; maximum
+  raw record payload about 48 MiB plus overhead. Atomic blocking/read latency and
+  capacity suitability require real runtime validation; no load claim.
+- Existing EVIDENCE_TTL_SECONDS retained (default 30 days), independent per record.
+  Redis TIME/PTTL gives expiry metadata; matching legacy admission preserves actual
+  remaining TTL. Enumeration checks live key, excludes stale entries and cleans
+  only index housekeeping. Write cleanup <=128 due members; page cleanup <=128;
+  complete report <=1,000 per kind. Valid records never deleted by cleanup.
+- LEGACY GAP: no automatic scan/backfill. Matching replay can safely admit a legacy
+  record from replay time without content/time/TTL changes. Detectable referenced
+  records without index marked LEGACY_UNINDEXED. Other legacy records remain outside
+  scope; historical_pre_index_coverage always NOT_VERIFIED. Missing/corrupt meta,
+  cardinality/type/context/epoch errors fail closed INDEX_INTEGRITY_ERROR/409.
+- Aggregate endpoint adds explicit population_mode=INDEXED_RETAINED and requires
+  exact experiment ID/version plus scoring profile ID/version. Optional existing
+  strategy ID/version/digest filters apply to application denominator consistently.
+  N live indexed applications; M with one matching retained indexed selected-profile
+  outcome; coverage M/N, null if N=0. N-M lacks a currently retained matching outcome,
+  not a zero behavior result and not proof an outcome was never generated.
+- All statuses contribute to operational N; separate eligible N is APPLIED+MATCH,
+  with its own covered/uncovered/rate. Groups retain full strategy/version/digest,
+  experiment/version and profile/version, including denominator-only groups.
+  Multiple digests separate with diagnostics. Scores/formulas/IDs/calibration unchanged.
+- Orphan outcomes do not increase application denominator. Missing-decision
+  applications stay counted via index context. Report diagnostics include missing
+  indexed/retained relationships, detectable unindexed references, stale members,
+  linkage conflicts and competing outcomes for one app/profile. Conflicting outcomes
+  excluded from coverage; integrity warning retained. No source/outcome/strategy
+  writes during reports, except documented stale-index cleanup.
+- Manifest mode remains explicit selected outcome IDs and DENOMINATOR_NOT_VERIFIED.
+  Valid indexed reports use AUTHORITATIVE_INDEXED_SCOPE, explicitly scoped. Global
+  indexed counts vs filtered counts remain distinct. No lifetime/lost-trace total,
+  reward, ranking, causal effectiveness or real attacker-data claim.
+- Tests: initial trace/ingestion regressions 6 PASS (1.06s); new contract suite
+  initially 14 PASS (1.19s), extended with expiry-between-pages, missing membership,
+  live preservation, eligibility and API capacity checks. Final Evidence Store
+  index/trace/endpoint/outcome/aggregation/store/correlation selection: 71 PASS,
+  1.22s. Exact command in TRACE_INDEX_AND_COVERAGE.md. No test failures/assertion
+  weakening in this pass. git diff --check passes; final diff/status/stat reviewed.
+- Read-only docker ps required approved Docker pipe access; Evidence Store observed
+  restarting and no running Redis container. No healthy test-safe endpoint found;
+  no real Lua/index test run and no service repair/restart. RedisDouble serializes
+  modeled contracts; it does not execute Lua. Real atomicity/disk/recovery and
+  overall runtime remain NOT VERIFIED. No engine/Go/full-repository campaign.
+- Remaining: pre-index historical gap, bounded retention/capacity/delivery losses,
+  real Redis Lua/operational verification, Pass 8B process-local replay limits,
+  uncovered prepared/extended protocols, commitment/exposure deltas, cross-session
+  delayed outcomes, calibration, learner/adaptive selector/graph/promotion deferred.
+- Exact next recommendation: bounded deployment/runtime validation of Evidence Store
+  Redis Lua/index/outbox integration. This is PLANNED ONLY, not authorization to
+  start services, deploy or begin another implementation pass. No next-pass work.
+
+## Pass 8B — Authoritative Query/Application Correlation and Request Timing — 2026-10-30
+
+IMPLEMENTED / VERIFIED BY FOCUSED TESTS for covered synchronous simple/text query
+paths. Runtime NOT VERIFIED. Full contract, exact commands and limits:
+QUERY_APPLICATION_CORRELATION.md. Branch feature/config-observability, HEAD ec82fd9
+unchanged. Starting tree contained unstaged/untracked Pass 6–8A work; preserved.
+Ending tree includes that work plus unstaged/untracked Pass 8B source/tests/docs.
+No Git mutation, service restart, deployment, dependency or feature-default changes.
+
+- Objective: connect one real proxy request to its existing authoritative decision
+  and application, excluding the producing query from follow-up activity by identity.
+- Production: both proxies' internal/protocol/{handler,principal,principal_auth}.go,
+  new query_correlation.go, internal/interceptor/interceptor.go and
+  internal/publisher/publisher.go; deception_engine/{api,models,principal_runtime,
+  live_trace}.py and new query_correlation.py/query_replay.py;
+  evidence_store/{main,strategy_traces,strategy_outcomes}.py. Prior pass source
+  files remain uncommitted alongside these changes; registry definitions/lock unchanged.
+- Tests: new query_correlation_test.go in each proxy; enhanced both existing
+  world_commitment_test.go wire tests; new deception_engine/test_query_correlation.py
+  and evidence_store/test_query_application_correlation.py. Existing principal
+  registry fixture stubs optional trace sink only, preventing unavailable Redis
+  delivery from consuming principal deadlines; assertions/deadlines unchanged.
+- Docs: new QUERY_APPLICATION_CORRELATION.md; dated additive notes in
+  STRATEGY_OUTCOME_MODEL.md, OUTCOME_AGGREGATION_BASELINE.md,
+  STRATEGY_DECISION_TRACE.md and this handoff. Earlier history retained.
+- Proxy owns cryptographically random canonical UUID4 query_execution_id and UTC
+  RFC3339Nano request_started_at, created/reset at accepted simple Query/COM_QUERY
+  before policy/engine handling, including virtual-principal loops. Repeated SQL
+  gets distinct IDs. Existing completion timestamp meaning remains unchanged.
+  Entropy failure leaves optional correlation absent; no SQL behavior change.
+- /decide and private principal-query requests carry bounded validated metadata.
+  Final decision retains execution/start; application links through decision_id.
+  Existing decision/application UUIDs remain independent. Optional schema fields
+  retain legacy compatibility; no strategy identity/digest or scoring version change.
+- Engine HTTP response adds private _correlation with execution/start/decision/app
+  IDs after semantic production. Both proxies validate same execution and strategy
+  UUIDs, retain their own start, and emit QueryOutcome -> QueryEvent -> RawEvent.
+  D0 evaluated passthrough and producer rejection/error retain linkage; missing or
+  failed RPC/decoding never invents application IDs. No row/column/wire metadata.
+- PostgreSQL coverage: ordinary simple queries and supported virtual simple query
+  loop. MySQL: ordinary COM_QUERY text and supported virtual query loop. Prepared,
+  extended/portal/binary execution NOT COVERED. Auth/transaction-only/framework paths
+  without a finalized strategy application have absent strategy linkage.
+- Existing proxy POST helpers have no application-level retry loop. Engine bounded
+  process-local replay shares concurrent work and original IDs/result; conflicting
+  reuse rejected. Cache 1,024 entries / 600 seconds, earlier completed-entry eviction
+  possible. All-in-flight saturation proceeds without linkage, with a warning.
+  Principal replay rechecks binding/enabled/deadline. Cross-replica, restart and
+  post-eviction replay NOT VERIFIED; no distributed exactly-once guarantee. Do not
+  add cross-process retries assuming durable idempotency. Conflicting retained
+  applications claiming one execution fail outcome evaluation.
+- Evidence Store ingestion retains optional bounded metadata without a trace lookup;
+  event-first/trace-first both pass. Evaluation validates retained relationships,
+  deduplicates executions and rejects conflicts. Unresolved linkage stays partial.
+- Producing UUID excluded first; distinct IDs with identical SQL count separately.
+  Same-session/request-start/completion/next-decision bounds still gate follow-up.
+  Complete bounded retained session snapshots require formal close query_count,
+  all execution/start fields and indicated trace manifest linkage. This is not a
+  global denominator/index. Missing/unlinked historical evidence remains null;
+  no temporal/fingerprint retrofit. Complete zero-follow-up produces observed 0.
+- Newly observable raw dimensions: followup_queries, verified_followup_queries,
+  successful_followup_queries, verified_errors, verified_trap_interactions, subject
+  to existing verification/authority/coverage guards. deterministic_components v1
+  formulas unchanged. Old persisted outcomes immutable. Exposure/commitment deltas,
+  novelty baselines and cross-session delayed outcomes remain NOT OBSERVED/DEFERRED.
+- Deterministic strategy selection and D0/D1/D2/D3/D4/D6 approvals unchanged;
+  D5 requires review, D7 unmapped. World/principal/transaction regression tests pass.
+  Wire tests in both proxies compare identical SQL output with/without envelope and
+  explicitly reject ID/envelope leakage. No learner/adaptive/graph/promotion enabled.
+- Final engine regression: 157 PASS, 71.98s, across correlation/live trace/model/
+  outbox/provenance/world/registry/version/preconditions/principal/PG-error suites.
+  Added real ASGI and explicit passthrough/rejection/error linkage tests afterward:
+  test_query_correlation.py + test_strategy_registry.py: 24 PASS, 5.63s.
+  Evidence correlation/aggregation/outcome/trace/endpoint/store: 53 PASS, 1.28s.
+  Each proxy: go test ./internal/protocol ./internal/interceptor ./internal/publisher
+  -count=1 -timeout 60s: all six packages PASS after approved cache access. gofmt and
+  git diff --check pass. Initial fixture deadline failure and script encoding/duplicate
+  edits corrected before passing. Exact Python commands in correlation report.
+- Runtime health, live delivery, real Redis recovery and restart behavior NOT VERIFIED.
+  No Docker/service operations or Internet attacker-data claim. Global denominator,
+  historical repair, uncovered protocols, deltas, novelty, calibration, cross-session
+  outcomes, learner, adaptive selection, graph and promotion remain deferred.
+- Exact recommended next pass: Pass 8D, authoritative retained-trace enumeration /
+  coverage denominator, because the application-ID manifest still cannot prove all
+  retained applications were enumerated. PLANNED ONLY; no next-pass work started.
+
+## Pass 8A — Outcome Aggregation, Coverage Diagnostics, and Baseline Research Statistics — 2026-10-30
+
+IMPLEMENTED / VERIFIED BY FOCUSED TESTS. Coverage denominator PARTIAL/NOT VERIFIED;
+runtime NOT VERIFIED. Branch feature/config-observability, HEAD ec82fd9. Starting
+tree had uncommitted Pass 6–7 work; preserved. Ending work unstaged/uncommitted.
+No Git/service/config/engine/proxy/strategy changes. See OUTCOME_AGGREGATION_BASELINE.md.
+
+- Production: new evidence_store/outcome_aggregation.py; bounded POST
+  /evidence/strategy-outcomes/aggregate in main.py. Tests: new
+  test_outcome_aggregation.py. Docs: OUTCOME_AGGREGATION_BASELINE.md, short
+  STRATEGY_OUTCOME_MODEL.md note and this handoff. Historical reward/shadow/learning
+  modules DORMANT/INCOMPATIBLE, unchanged; only stdlib statistics/Counter reused.
+- Evidence Store owns read-only reports over persisted outcome-ID manifests <=1000.
+  No episode recalculation, Redis scan/index, trace write, TTL refresh or aggregate
+  persistence. Exact bounded filters only. Missing/expired requested ID -> 404;
+  invalid/conflicting records -> 422. No raw SQL/session/principal data in reports.
+- Group key: strategy ID/version/digest + experiment ID/version + profile ID/version.
+  No numerical means across these keys. Different digests under same ID/version
+  remain separate with MULTIPLE_DEFINITION_DIGESTS diagnostic. No historical
+  formula/lock authentication claim. Deterministic group order, UTC generated_at.
+- Population: EXPLICIT_RETAINED_OUTCOME_MANIFEST. Overall outcome/eligibility/
+  app+provenance/completeness/termination counts; per-group all_outcomes and separate
+  eligible_outcomes summaries. Noneligible applications stay in operational counts
+  but are excluded from eligible score distributions. Counts/proportions use
+  selected manifest n, not lifetime/system totals. Status dimensions can overlap.
+- No authoritative retained application index exists. Global retained decision/
+  application/outcome totals, missing-outcome application count and retained-store
+  coverage percentage are null; DENOMINATOR_NOT_VERIFIED. Distinct applications
+  with selected outcomes are explicitly manifest-only. No fabricated denominator.
+- Raw feature/component matrices retain observed/missing/rate. Numeric stats include
+  n/min/max/mean/median over observed finite nonnegative values only. Null != 0;
+  all-null -> no mean; all-zero -> mean 0. Boolean close counts true/false/missing.
+  Coverage labels are availability only, never performance/readiness thresholds.
+  COMPLETE/PARTIAL/INSUFFICIENT counts and proportions retained per population.
+- Selected min(window_start)/max(window_end) are evidence window range, not experiment
+  dates. UUID duplicate records do not inflate n; conflicting copies fail. Sources
+  unchanged after report. No principal grouping, rankings, causal comparisons,
+  significance testing, D0 superiority comparison or composite reward. CALIBRATION
+  REQUIRED; every numeric distribution shows observed n. No sample threshold invented.
+- Producing-query ambiguity remains unresolved. Deferred relation/query novelty,
+  commitments/depth deltas and cross-session linkage remain visible NOT OBSERVED/
+  DEFERRED with source requirements. Reports quantify supplied records' missingness;
+  no live evidence population or real attacker dataset was loaded/claimed.
+- Tests: focused aggregation/outcome/trace endpoint/TraceStore/evidence selection
+  47 PASS, 1.29s; initial test-fixture string division corrected, no model weakening.
+  Existing bundled Python/ignored pass2-tooling, -m pytest -q -p no:cacheprovider;
+  exact command in aggregation doc. git diff --check passes. No engine/Go/full-suite
+  or Docker campaign. Real Redis/runtime recovery and overall health NOT VERIFIED.
+- Exact recommended next pass: instrument authoritative request-start and
+  query/application linkage to resolve currently unobservable activity dimensions.
+  Do not start calibration/aggregation-based selection/learner/shadow/adaptive policy,
+  graph/gap detection/candidates/promotion automatically. No next-pass work started.
+
+---
+
+## Pass 7 — Strategy Outcome Linkage and Deterministic Component Scoring — 2026-10-30
+
+IMPLEMENTED / VERIFIED BY FOCUSED TESTS for bounded retained-evidence evaluation;
+source coverage PARTIAL, runtime NOT VERIFIED. Branch feature/config-observability,
+HEAD ec82fd9; starting tree contained uncommitted Pass 6/6B/6C work, preserved.
+Ending work unstaged/uncommitted. No Git/service/config/strategy selection changes.
+Full contract and limits in STRATEGY_OUTCOME_MODEL.md.
+
+- Production: new evidence_store/strategy_outcomes.py; outcome persistence kind in
+  strategy_traces.py; completed-evidence POST strategy-outcomes endpoint in main.py.
+  Tests: new test_strategy_outcomes.py. Docs: STRATEGY_OUTCOME_MODEL.md, concise
+  decision-trace/delivery progress notes, this handoff. No engine/proxy changes.
+- Authority is Evidence Store, independent of SQL. Endpoint accepts explicit
+  application-ID manifest <=128, loads retained pairs/session evidence, verifies
+  session linkage. No trace index exists; manifest completeness cannot be certified.
+  Current service results always PARTIAL; no invented absent trace or closed session.
+- Episodes start at application, end at earliest next retained decision, formal
+  session_end, 300s horizon or 100 follow-up requests. Strict start/end exclusions;
+  event time + stable IDs order; no cross-session reuse. Active snapshots withheld
+  until formal closure or full horizon expiration. Bounds UNVALIDATED_RESEARCH_BOUND.
+- APPLIED+MATCH eligible for later comparison; blocked/error/mismatch/unverified
+  retained but ineligible. Eligibility is distinct from complete evidence, not
+  a claim of causal effectiveness. No composite reward/weights/learner enabled.
+- Record includes schema/outcome/decision/application IDs, session/principal,
+  strategy/version/digest and experiment references, windows/reason, application/
+  provenance statuses, eligibility, raw features, component vector/profile/completeness.
+  UUID5 identity derives from application + scoring profile/version. No raw SQL.
+- Code-owned deterministic_components v1: engagement=min(verified queries/20,1),
+  error_component=min(verified errors/10,1), trap_interaction=min(verified traps/5,1),
+  disconnect_signal=closure-ended-window binary if close known. CALIBRATION REQUIRED.
+  Raw counts/duration/close separate; unobservable components null, observed zero
+  only with complete source contract. Catalog trap visibility never counts as
+  successful trap interaction. No MITRE dependency. Historical reward_model/shadow/
+  learning/factorial code DORMANT/INCOMPATIBLE; no helper/formula reused.
+- Critical limit: proxy query timestamps are completion-time, with no retained
+  per-query application link/request start. Producing query cannot safely count as
+  follow-up. Evaluator requires authoritative request_started_at; adapter never
+  fabricates it, marks query components NOT OBSERVED. Novel relations/families/
+  commitments and end-depth delta remain null due missing pre-decision baselines.
+- Persistence: same existing TraceStore atomic SET NX EX, outcome kind, default
+  evidence retention 30 days; validates retained pair/session/definition linkage.
+  Same ID/content unchanged; changed content conflict. Event-ID dedup; contradictory
+  duplicates rejected. Late data that changes a finalized outcome raises 409, never
+  silently overwrites. Future profile identity distinct; only v1 formulas exist.
+- Tests: evidence outcome/endpoint/trace/evidence targets 36 PASS, 1.16s; engine
+  decision/live/outbox/world/version regression 45 PASS, 4.43s. Existing bundled
+  Python/ignored tooling, -m pytest -q -p no:cacheprovider; exact commands in outcome
+  doc. git diff --check pass. No full-suite/Go/live stack or service restart.
+- Limitations: temporal/session linkage is not causal proof; explicit trace manifest
+  and retained bounded evidence can omit data. Cross-session delayed outcomes,
+  novelty/depth baselines, aggregation, composite calibration, causal claims,
+  learner/shadow/adaptive selector, graph/gaps/candidates/promotion DEFERRED.
+  Pass 6C real Redis/process recovery remains NOT VERIFIED; no attacker dataset
+  claimed. Exact recommended next pass: outcome aggregation and baseline completeness
+  statistics, preserving null/unattributable dimensions. Do not begin it now.
+
+---
+
+## Pass 6C — Durable Strategy Trace Delivery, Retry, and Recovery — 2026-10-30
+
+IMPLEMENTED / VERIFIED BY CONTRACT TESTS; real Redis/process recovery NOT VERIFIED.
+Branch feature/config-observability, HEAD ec82fd9; starting tree contained prior
+Pass 6/6B uncommitted changes, preserved. Ending work remains unstaged/uncommitted.
+No Git, service restart, feature/default, strategy or principal/world changes.
+
+Production: new deception_engine/trace_outbox.py; Emitter changes in live_trace.py;
+startup/shutdown integration in api.py. Tests: new test_trace_outbox.py. Docs:
+new STRATEGY_TRACE_DELIVERY.md, STRATEGY_DECISION_TRACE.md progress note, this handoff.
+
+Old queue was volatile Queue(128), no retry/drain/recovery. New owner is deception
+engine's existing redis-deception target, not Evidence Store's Redis. Outbox uses
+hash + due/expiry sorted sets under trace-outbox:v1. Atomic enqueue stores pair and
+schedule before DURABLE_PENDING; failed local write reports FAILED; full reports
+FULL; conflicts preserved. Original application UUID is delivery ID; decision and
+application IDs/content never regenerated. Local client connect/read timeouts 0.4s,
+no connection retries. SQL never waits for remote HTTP retries.
+
+Limits: 1,024 retained entries including terminal records, 32-KiB envelope, 24-hour
+entry retention; prune and shared-key TTL bound storage when stopped. 20 observed
+failed attempts, backoff min(2**attempt,300)s. Network/timeout/429/5xx/uncertain ack
+retry; 409 terminal CONFLICT; other4xx PERMANENT_FAILURE; exhaustion EXHAUSTED.
+Terminal diagnostics remain until expiry and count against capacity; no arbitrary
+pending eviction. No payload/exception-body logs or new high-cardinality metrics.
+
+Worker starts in lifespan, recovers due entries without attacker query. One per
+process, possible duplicate sends across replicas. Atomic CAS updates/ack prevent
+stale workers overwriting retry state or resurrecting delivered entries. Shutdown
+stops acceptance and joins <=1.5s; undelivered work stays durable. In-flight work may
+finish; no indefinite drain. Lost ack retries same pair and receiver returns unchanged;
+partial pair retries decision unchanged/application inserted. Existing TraceStore
+and endpoint validation remain unchanged. Decision/application pair is not atomic.
+
+Guarantee: acknowledged Redis persistence before send, bounded at-least-once
+reattempts while available and retained, not unconditional eventual delivery or
+exactly once. Disk durability depends on existing Redis configuration. Entry expires
+after one day; default receiver retention is 30 days. Lower receiver TTL needs review.
+No trace protection before local enqueue or during Redis outage/loss.
+
+Tests: initial outbox/live 22 PASS; focused causal/model/provenance/version/
+precondition/world selection 75 PASS (49.63s). Added stale-CAS/exhaustion/SQL-state
+cases: final outbox/live 26 PASS (4.33s). Evidence endpoint/TraceStore/evidence suite
+24 PASS (1.10s). Exact commands in STRATEGY_TRACE_DELIVERY.md; Lua modeled, not run
+against real Redis. docker ps showed Evidence Store restarting; isolated test via
+running engine failed ConnectionError to configured Redis. No service repair done.
+Runtime health and REAL REDIS RECOVERY NOT VERIFIED. No proxy edits/Go campaign.
+
+Remaining: retention/terminal loss bounds, local enqueue failure, Redis durability,
+pair non-atomicity, duplicate transport. Recommended Pass 7 only: scoped outcome
+linkage and deterministic scoring after reviewing delivery evidence. Do not start
+rewards/learner/shadow/adaptive selection/graph/gap detector/candidates/promotion.
+
+---
+
+## Pass 6B — Pre-Production Decision Finalization and Live Trace Emission — 2026-10-30
+
+IMPLEMENTED / VERIFIED BY FOCUSED TESTS for covered engine action families.
+Branch feature/config-observability, HEAD ec82fd9. Starting tree had the prior
+Pass 6 models/store/docs edits (5 modified + 3 untracked), all preserved. Ending
+work unstaged/uncommitted; no Git history/branch or service/config changes.
+See newest section of STRATEGY_DECISION_TRACE.md for full live contract and limits.
+
+- Production: new deception_engine/live_trace.py; producer wrappers and unchanged
+  database-enumeration extraction in api.py; scoped authenticated principal context
+  in principal_runtime.py; Evidence Store POST /evidence/strategy-trace in main.py;
+  bounded HTTP ingestion validation in strategy_traces.py. Prior decision_trace.py
+  edits retained. Tests: new test_live_trace.py and
+  evidence_store/test_strategy_trace_endpoint.py. Docs: updated STRATEGY_DECISION_TRACE.md,
+  ACTION_PROVENANCE_MODEL.md, STRATEGY_VERSION_INTEGRITY.md and this handoff.
+- Old order: producer/response -> select_registered_rule -> annotation. New covered
+  boundary: live_trace.producer.start -> finalize -> existing selector/registry
+  approval + read-only eligibility/fallback -> decision_trace.begin -> producer ->
+  Pass 5C actual provenance -> applied -> observational pair submission. Frozen
+  Finalized retains strategy ID/version/digest/expected action through execution.
+  Serializer retains legacy wire error annotations but never replaces that decision.
+- D0 covers system/baseline/passthrough; D1 catalog/SHOW/metadata including extracted
+  database enumeration; D2–D4 existing asset read/count families; D6 managed mutation.
+  Outer/probe contexts not producing a final result are not emitted. Inner completed
+  response pair suppresses outer duplication. Direct auth/transaction/framework
+  errors are not fake strategy decisions. D5 review-only; D7 unmapped.
+- State-before is constructed at wrapper entry before exposure/generation/mutation.
+  Fields remain protocol/tx/depth/principal reference/commitment scope,digest and
+  evaluated facts. Principal record comes from existing authenticated query lock
+  and ContextVar resets in finally; acknowledgement facts happen after response,
+  never retroactively enter state-before. No raw SQL/results/credentials in traces.
+- Reuses deterministic_baseline v1 and Pass 6 UUID models. Actual provenance comes
+  independently from producer; policy denial -> BLOCKED, statement_error -> ERROR,
+  fake production -> APPLIED, uncovered -> NOT_VERIFIED. Mismatch is stored, never
+  concealed by rewriting expected action or SQL. No reward/effectiveness semantics.
+- Emitter uses bounded queue 128 and daemon worker, POST to existing Evidence Store
+  URL with 0.5s timeout. Response-local QUEUED/FAILED; worker logs conflict or failure
+  without payloads. Pair queued after production, decision object exists beforehand.
+  HTTP persistence is not on SQL critical path. No durable queue, automatic retries
+  or shutdown drain. Process/transport failures can lose evidence. QUEUED != STORED.
+- Persistence owner remains Evidence Store Redis TraceStore. Endpoint validates
+  complete bounded field sets and pair linkage, stores decision then application.
+  HTTP 409 conflict/422 invalid; generic artifacts untouched. Existing SET NX EX
+  idempotency/conflict/different-ID semantics retained. Decision failure prevents
+  application write; app failure can leave only decision. Pairs are not atomic;
+  retry original UUIDs/content. Redis retention/expiry remains the storage boundary.
+- Tests: final engine focused live_trace/decision_trace/action_provenance/version/
+  precondition/registry/policy/world/lifecycle/PG error/principal/phase-B targets:
+  148 PASS, 23.36s. Evidence endpoint/strategy_traces/evidence_store: 24 PASS, 1.23s.
+  Bundled Python -m pytest -q -p no:cacheprovider; exact target lists in trace doc.
+  Explicit causal event order, old depth, all action families, expected/actual/linkage,
+  unchanged response on write/conflict failures, keyword-call compatibility, bounded
+  ingestion and existing transaction/commitment behavior pass. git diff --check pass.
+- Real Redis test attempted through existing capstone-evidence-store using isolated
+  UUID namespace/TTL/cleanup script. Docker reported container restarting; script
+  never ran. No restart performed. Real Redis/process restart durability and overall
+  runtime health NOT VERIFIED. No proxy edits or Go/full-stack campaign.
+- Remaining: best-effort loss windows, no pair atomicity, uncovered external/auth/tx
+  producers, no persistent trace index/session projection. Endpoint follows existing
+  Evidence API network trust, not cryptographic proof of producer origin. Preserve
+  locks/versions/approvals, configuration defaults and disabled adaptive features.
+- Exact recommended Pass 7: scoped outcome linkage and deterministic outcome scoring,
+  after reviewing this pass. Do not implement reward/learner/shadow/adaptive selector,
+  graph, gap detector, candidate generation or automatic promotion now.
+
+---
+
+## Pass 6 — Strategy Decision/Application Trace and Experiment Registry — 2026-10-30
+
+**PARTIAL**. Record/storage foundations implemented; no live decision/application
+emission. Branch feature/config-observability, HEAD ec82fd9 (Wednesday Part 2).
+Starting tree clean: interrupted decision_trace.py/test_decision_trace.py were
+already committed and were preserved/extended. Ending changes unstaged/uncommitted.
+No Git mutation. See STRATEGY_DECISION_TRACE.md for exact boundary and tests.
+
+- Production: decision_trace.py (schema_version, reject ineligible final selection);
+  new evidence_store/strategy_traces.py; EvidenceRepository.strategy_traces factory
+  in evidence_store/main.py. Tests: new evidence_store/test_strategy_traces.py;
+  existing decision_trace and prior pass files rerun. Docs: STRATEGY_DECISION_TRACE.md,
+  concise ACTION_PROVENANCE_MODEL.md/STRATEGY_VERSION_INTEGRITY.md notes, this handoff.
+- Decision timing blocker remains: api.decide -> semantic handler/DecisionResponse
+  -> _json_response -> select_registered_rule/enforce_registered_choice -> annotation
+  -> provenance. Final universal approval is post-production; no pre-action causal
+  trace emitted. Small storage extension did not require response refactor. Completing
+  runtime flow requires passing an explicit finalized selection through producers,
+  preserving fallback/eligibility semantics; do not silently infer state afterward.
+- begin model: schema_version, UUID decision_id, UTC timestamp, experiment ID/version/
+  mode/active, session/principal reference, protocol, exact strategy ID/version/digest,
+  expected binding, approval/eligibility/reason, bounded state_before. applied model:
+  schema_version, UUID application_id, decision_id, UTC timestamp, expected/actual,
+  Pass 5C provenance status, application status and result_class. Policy rejection
+  BLOCKED; statement_error ERROR; known fake producer APPLIED; uncovered NOT_VERIFIED.
+  APPLIED is not client delivery or effectiveness. Retries reuse original UUID/record.
+- Code-owned experiment() registry: deterministic_baseline v1, deterministic_rule_based,
+  active; unknown definition/version rejected. Historical session factorial assignment
+  code DORMANT/UNSUITABLE, unchanged. No arms/randomization/new feature settings.
+- State-before: tx state, depth, principal commitment scope/digest plus only evaluated
+  fact keys/values/results. No principal mutations/SQL/secrets. Digest does not supply
+  full historical reconstruction. Missing principal context explicitly unavailable.
+- Persistence owner: existing Evidence Store Redis. New trace-specific SET NX EX of
+  whole canonical record at kind/UUID key, direct retrieval. Same ID/content unchanged;
+  conflicting content TraceConflict; different IDs never payload-deduplicated. No
+  separate claim/append, so failed writes permit retry; unknown post-write outcome
+  reconciles to unchanged. Existing generic artifact dedup/claim-before-append remains
+  unchanged. Default evidence retention 30 days, dedup only within retention; no
+  session index or pair-atomicity. Application before decision rejected for retry;
+  validates expected binding, but decision can expire after that check.
+- Repository-internal interface only; no public ingestion endpoint or runtime emitter.
+  Full external schema/auth validation, optional failure logging/queueing and true
+  Redis restart/disk proof remain unimplemented. No live SQL dependency was added.
+- Tests observed after resume: evidence_store test_strategy_traces.py plus
+  test_evidence_store.py: 22 PASS, 3.55s. Engine decision_trace/action_provenance/
+  strategy_version_integrity/strategy_commitment_preconditions/strategy_registry/
+  policy_guard/world_commitments/world_commitment_lifecycle: 78 PASS, 12.39s.
+  Bundled Python -m pytest -q -p no:cacheprovider, existing pass2-tooling PYTHONPATH,
+  PYTHONDONTWRITEBYTECODE=1. Exact target commands in STRATEGY_DECISION_TRACE.md.
+  No proxy code changes/Go campaign/live services. Runtime health NOT VERIFIED.
+- Remaining: truthful pre-production finalization and observational emitter required
+  before Pass 6 COMPLETE. Preserve responses/state/config/strategy locks/approvals.
+  Recommended next step before Pass 7: finish that explicit decision contract and
+  live emission; do not start outcome linkage/scoring/rewards/learner/shadow/adaptive
+  selection/gap detection/candidates/graph/promotion.
+
+---
+
 ## Pass 5C — Producer-Side Action Identity Verification — 2026-10-28
 
 IMPLEMENTED / VERIFIED BY FOCUSED TESTS for approved engine action families.

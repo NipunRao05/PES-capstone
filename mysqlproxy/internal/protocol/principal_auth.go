@@ -95,6 +95,7 @@ func (h *Handler) principalLoop(ctx context.Context) error {
 		case comQuit:
 			return nil
 		case comQuery:
+			h.beginQuery()
 			err = h.servePrincipalQuery(ctx, cleanMySQLQueryPayload(pkt[1:]))
 		case comPing:
 			err = h.principalOK(0)

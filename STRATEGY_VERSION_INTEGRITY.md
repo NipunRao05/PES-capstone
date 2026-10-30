@@ -1,5 +1,12 @@
 # Pass 5B — Strategy Version Integrity and Executable Action Binding
 
+> Pass 6B — 2026-10-30: covered live decisions capture exact strategy ID/version/
+> digest before production. Registry/lock semantics remain unchanged; see
+> STRATEGY_DECISION_TRACE.md for causal boundaries and durability limits.
+
+> Pass 6 progress — 2026-10-30: decision model builders capture exact ID/version/
+> digest. Live decision recording remains partial; see STRATEGY_DECISION_TRACE.md.
+
 > Pass 5C progress — 2026-10-28: each approved engine action family now has a
 > tested producer-side identity and internal expected/actual comparison. Metadata
 > stays on Python response objects; uncovered external/direct principal paths are

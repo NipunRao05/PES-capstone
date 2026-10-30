@@ -108,6 +108,7 @@ var deceptionBreaker = struct {
 
 // Handler manages the full lifecycle of one MySQL client↔backend pair.
 type Handler struct {
+	queryCorrelation       interceptor.QueryCorrelation
 	virtual                bool
 	principalAuthToken     []byte
 	principalAuthSalt      []byte
@@ -649,6 +650,7 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 			}
 
 		case comQuery:
+			h.beginQuery()
 			sql := cleanMySQLQueryPayload(payload)
 			if principal.AccountSQL(sql) {
 				if err := h.servePrincipalQuery(ctx, sql); err != nil {
@@ -1131,6 +1133,7 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 }
 
 func (h *Handler) emitTextQueryOutcome(sql string, outcome interceptor.QueryOutcome) {
+	outcome.QueryCorrelation = h.queryCorrelation
 	if h.intercept != nil && h.sess != nil {
 		h.intercept.InterceptTextQueryOutcome(h.sess, sql, outcome)
 	}
@@ -1818,6 +1821,7 @@ func indexByte(b []byte, c byte) int {
 // ─── Deception-engine integration ────────────────────────────────────────────
 
 type deceptionDecisionRequest struct {
+	interceptor.QueryCorrelation
 	TransactionState string  `json:"transaction_state"`
 	SessionID        string  `json:"session_id"`
 	QueryNormalized  string  `json:"query_normalized"`
@@ -1833,22 +1837,23 @@ type deceptionDecisionRequest struct {
 }
 
 type deceptionDecisionResponse struct {
-	Mode         string                   `json:"mode"`
-	Rows         []map[string]interface{} `json:"rows"`
-	Count        *int                     `json:"count"`
-	AffectedRows *int                     `json:"affected_rows"`
-	Columns      []string                 `json:"columns"`
-	ColumnTypes  []string                 `json:"column_types"`
-	Tables       []string                 `json:"tables"`
-	Databases    []string                 `json:"databases"`
-	LatencyMS    int                      `json:"latency_ms"`
-	ErrorMsg     string                   `json:"error_msg"`
-	ErrorCode    int                      `json:"error_code"`
-	SQLState     string                   `json:"sqlstate"`
-	Profile      string                   `json:"profile"`
-	StrategyID   string                   `json:"strategy_id"`
-	Explanation  string                   `json:"explanation"`
-	IsTrap       bool                     `json:"is_trap"`
+	Correlation  *interceptor.QueryCorrelation `json:"_correlation,omitempty"`
+	Mode         string                        `json:"mode"`
+	Rows         []map[string]interface{}      `json:"rows"`
+	Count        *int                          `json:"count"`
+	AffectedRows *int                          `json:"affected_rows"`
+	Columns      []string                      `json:"columns"`
+	ColumnTypes  []string                      `json:"column_types"`
+	Tables       []string                      `json:"tables"`
+	Databases    []string                      `json:"databases"`
+	LatencyMS    int                           `json:"latency_ms"`
+	ErrorMsg     string                        `json:"error_msg"`
+	ErrorCode    int                           `json:"error_code"`
+	SQLState     string                        `json:"sqlstate"`
+	Profile      string                        `json:"profile"`
+	StrategyID   string                        `json:"strategy_id"`
+	Explanation  string                        `json:"explanation"`
+	IsTrap       bool                          `json:"is_trap"`
 }
 
 func (h *Handler) deceptionBreakerOpen() (bool, time.Time) {
@@ -1919,6 +1924,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	normalized := normalizeDeceptionSQL(sql)
 	req := deceptionDecisionRequest{
+		QueryCorrelation: h.queryCorrelation,
 		TransactionState: h.deceptionTransactionState(),
 		SessionID:        safeSessionID(h),
 		QueryNormalized:  normalized,
@@ -1979,6 +1985,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 		return nil, false
 	}
 
+	h.acceptCorrelation(dec.Correlation)
 	h.recordDeceptionSuccess()
 
 	mode := strings.ToLower(dec.Mode)

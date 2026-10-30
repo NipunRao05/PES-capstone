@@ -27,6 +27,7 @@ import (
 // MySQL error_code retains mysql_<number>; sqlstate preserves the separate wire SQLSTATE.
 // Kafka key: session_id (guarantees ordering within a session)
 type RawEvent struct {
+	interceptor.QueryCorrelation
 	PostReturnExplorationDepth int `json:"post_return_exploration_depth,omitempty"`
 	principal.Context
 	EventType        string `json:"event_type"` // "query"
@@ -303,6 +304,7 @@ func (p *Publisher) ingestLoop(ctx context.Context, events <-chan interceptor.Qu
 				SessionID:                  qe.SessionID,
 				Context:                    qe.Context,
 				PostReturnExplorationDepth: qe.PostReturnExplorationDepth,
+				QueryCorrelation:           qe.QueryCorrelation,
 				Timestamp:                  qe.Timestamp.UTC().Format(time.RFC3339Nano),
 				ClientIP:                   qe.ClientIP,
 				Username:                   qe.Username,

@@ -37,6 +37,8 @@ from generator import DataGenerator
 from models import DecisionRequest, DecisionResponse
 from mutation_store import MutationStore
 from schema_loader import SchemaLoader
+from live_trace import producer, current as finalized_trace
+from query_replay import replay
 from strategy_registry import StrategyRegistry
 from policy_guard import POLICY_VERSION, PolicyGuard
 from strategy_agent import RULE_POLICY_VERSION, RuleOnlyStrategyAgent
@@ -156,7 +158,15 @@ async def lifespan(app: FastAPI):
         _strategy_registry.registry_version,
         [item.strategy_id for item in _strategy_registry.approved()],
     )
-    yield
+    import live_trace
+    if live_trace.sink is None:
+        live_trace.sink = live_trace.Emitter()
+    try:
+        yield
+    finally:
+        if isinstance(live_trace.sink, live_trace.Emitter):
+            live_trace.sink.close()
+            live_trace.sink = None
     if _redis_client:
         _redis_client.close()
 
@@ -373,6 +383,11 @@ def _prepare_decide_request_payload(payload: dict) -> dict:
         errors.append("invalid risk_score")
 
     transaction_state = str(data.get("transaction_state") or "idle").strip().lower()
+    from query_correlation import metadata
+    try:
+        metadata(data)
+    except (ValueError, TypeError, AttributeError):
+        errors.append("invalid query correlation")
     if transaction_state not in {"idle", "in_transaction", "failed_transaction"}:
         errors.append("invalid transaction_state")
 
@@ -627,6 +642,8 @@ async def next_strategy(body: dict = Body(...)) -> dict:
     return result
 
 @app.post("/decide", response_model=None)
+@replay("decide", "body")
+@producer("D0")
 async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
     """
     Main decision endpoint. Called by the proxy shaper for every query.
@@ -676,43 +693,7 @@ async def decide(request: Request, body: dict = Body(...)) -> JSONResponse:
         or " from pg_catalog.pg_database" in fp
         or " from information_schema.schemata" in fp
     ):
-        databases = _visible_databases(req)
-        if " from information_schema.schemata" in fp:
-            return _json_response(DecisionResponse(
-                mode="fake",
-                databases=databases,
-                rows=[{"schema_name": db} for db in databases],
-                columns=["schema_name"],
-                column_types=["text"],
-                latency_ms=_latency(req.deception_level, base=30),
-                profile="fake_schema",
-                strategy_id="D1",
-            ), producer_action='catalog_response')
-        if req.protocol.lower().startswith("postgres") or " from pg_database" in fp:
-            database_rows = databases
-            datname_match = re.search(r"\bdatname\s*=\s*'([^']+)'", fp, re.I)
-            if datname_match:
-                database_rows = [db for db in databases if db == datname_match.group(1)]
-            return _json_response(DecisionResponse(
-                mode="fake",
-                databases=database_rows,
-                rows=[{"datname": db} for db in database_rows],
-                columns=["datname"],
-                column_types=["text"],
-                latency_ms=_latency(req.deception_level, base=30),
-                profile="fake_schema",
-                strategy_id="D1",
-            ), producer_action='catalog_response')
-        return _json_response(DecisionResponse(
-            mode="fake",
-            databases=databases,
-            rows=[{"Database": db} for db in databases],
-            columns=["Database"],
-            column_types=["text"],
-            latency_ms=_latency(req.deception_level, base=30),
-            profile="fake_schema",
-            strategy_id="D1",
-        ), producer_action='catalog_response')
+        return await _handle_database_enumeration(req, fp)
 
     # 3. PostgreSQL information_schema metadata.  Tables and columns are
     # rendered from the same YAML that drives fake rows, then filtered by the
@@ -779,6 +760,47 @@ _INFORMATION_SCHEMA_COLUMN_COLUMNS = [
 _SUPPORTED_METADATA_FILTERS = {"table_schema", "table_name", "column_name"}
 
 
+@producer("D1")
+async def _handle_database_enumeration(req, fp):
+    databases = _visible_databases(req)
+    if " from information_schema.schemata" in fp:
+        return _json_response(DecisionResponse(
+            mode="fake",
+            databases=databases,
+            rows=[{"schema_name": db} for db in databases],
+            columns=["schema_name"],
+            column_types=["text"],
+            latency_ms=_latency(req.deception_level, base=30),
+            profile="fake_schema",
+            strategy_id="D1",
+        ), producer_action='catalog_response')
+    if req.protocol.lower().startswith("postgres") or " from pg_database" in fp:
+        database_rows = databases
+        datname_match = re.search(r"\bdatname\s*=\s*'([^']+)'", fp, re.I)
+        if datname_match:
+            database_rows = [db for db in databases if db == datname_match.group(1)]
+        return _json_response(DecisionResponse(
+            mode="fake",
+            databases=database_rows,
+            rows=[{"datname": db} for db in database_rows],
+            columns=["datname"],
+            column_types=["text"],
+            latency_ms=_latency(req.deception_level, base=30),
+            profile="fake_schema",
+            strategy_id="D1",
+        ), producer_action='catalog_response')
+    return _json_response(DecisionResponse(
+        mode="fake",
+        databases=databases,
+        rows=[{"Database": db} for db in databases],
+        columns=["Database"],
+        column_types=["text"],
+        latency_ms=_latency(req.deception_level, base=30),
+        profile="fake_schema",
+        strategy_id="D1",
+    ), producer_action='catalog_response')
+
+
 def _is_pg_catalog_query(query: str) -> bool:
     return any(
         marker in query
@@ -818,6 +840,7 @@ def _pg_catalog_requested_table(query: str) -> str:
     return ""
 
 
+@producer("D1")
 async def _handle_postgres_catalog(
     req: DecisionRequest, schema_name: str, query: str
 ) -> JSONResponse:
@@ -973,6 +996,7 @@ def _extract_mysql_metadata_table(query: str) -> str:
     return match.group(1).split(".")[-1].lower() if match else ""
 
 
+@producer(lambda api, a: "D1" if api._schema_loader.get_table(a[1], a[2]) else "D0")
 async def _handle_mysql_columns(
     req: DecisionRequest, schema_name: str, table: str
 ) -> JSONResponse:
@@ -994,6 +1018,7 @@ async def _handle_mysql_columns(
     ), producer_action='catalog_response')
 
 
+@producer("D1")
 async def _handle_information_schema(
     req: DecisionRequest, schema_name: str, fp: str
 ) -> JSONResponse:
@@ -1240,6 +1265,7 @@ def _validate_managed_sql(
                 return _column_error(req, identifier)
     return None
 
+@producer("D1")
 async def _handle_show_tables(
     req: DecisionRequest, schema_name: str
 ) -> JSONResponse:
@@ -1270,6 +1296,7 @@ async def _handle_show_tables(
     ), producer_action='catalog_response')
 
 
+@producer(lambda api, a: api._strategy_registry.strategy_for_asset(a[2], (api._extract_table(a[1]) or a[0].table)).strategy_id)
 async def _handle_count(
     req: DecisionRequest, fp: str, schema_name: str
 ) -> JSONResponse:
@@ -1312,6 +1339,7 @@ async def _handle_count(
     ), producer_action=read_action)
 
 
+@producer(lambda api, a: api._strategy_registry.strategy_for_asset(a[2], a[1]).strategy_id)
 async def _handle_select(
     req: DecisionRequest, table: str, schema_name: str
 ) -> JSONResponse:
@@ -1405,6 +1433,7 @@ async def _handle_select(
     ), producer_action=read_action)
 
 
+@producer(lambda api, a: "D6" if api._schema_loader.get_table(a[3], a[2]) else "D0")
 async def _handle_mutation(
     req: DecisionRequest, fp: str, table: str, schema_name: str
 ) -> JSONResponse:
@@ -1514,6 +1543,7 @@ def _short_id(value: str) -> str:
     return value[:8] if len(value) > 8 else value
 
 
+@producer("D0")
 def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
     protocol = (req.protocol or "mysql").strip().lower()
     if protocol.startswith("postgres") and fp in POSTGRES_SYSTEM_VAR_MAP:
@@ -1634,13 +1664,14 @@ def _read_producer_action(schema_name: str, table_name: str) -> str:
 def _json_response(resp: DecisionResponse, *, producer_action=None) -> JSONResponse:
     import dataclasses
     _sync_strategy_runtime()
-    resp.strategy_id = _strategy_agent.select_registered_rule(
-        resp.strategy_id
-    ).strategy_id
+    # Preserve legacy wire annotation for operational errors/direct callers.
+    # The pre-production context remains the immutable applied decision.
+    resp.strategy_id = _policy_guard.enforce_registered_choice(resp.strategy_id)
     resp.strategy_registry_version = _strategy_registry.registry_version
     response = JSONResponse(content=dataclasses.asdict(resp))
     from action_provenance import verify_action
-    response.action_provenance = verify_action(_strategy_registry.resolve(resp.strategy_id), producer_action)
+    final = finalized_trace.get()
+    response.action_provenance = verify_action(final.strategy if final else _strategy_registry.resolve(resp.strategy_id), producer_action)
     return response
 
 
@@ -1823,6 +1854,9 @@ def _parse_limit_offset(fp: str) -> tuple[int, int]:
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Producer wrappers import api; Docker's script entry point must share its
+    # initialized state and collectors rather than execute the module twice.
+    sys.modules["api"] = sys.modules[__name__]
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

@@ -27,7 +27,16 @@ import (
 
 // QueryEvent is the captured, normalized query with full session metadata.
 // Identical schema to the PostgreSQL proxy's QueryEvent for unified Kafka consumption.
+// QueryCorrelation identifies one covered client execution, independent of SQL.
+type QueryCorrelation struct {
+	QueryExecutionID string `json:"query_execution_id,omitempty"`
+	RequestStartedAt string `json:"request_started_at,omitempty"`
+	DecisionID       string `json:"decision_id,omitempty"`
+	ApplicationID    string `json:"application_id,omitempty"`
+}
+
 type QueryEvent struct {
+	QueryCorrelation
 	principal.Context
 	PostReturnExplorationDepth int
 	SessionID                  string
@@ -57,6 +66,7 @@ type QueryEvent struct {
 
 // QueryOutcome is attached only after a deterministic result is known.
 type QueryOutcome struct {
+	QueryCorrelation
 	PostReturnExplorationDepth int
 	Verified                   bool
 	Success                    bool
@@ -124,6 +134,7 @@ func (i *Interceptor) InterceptTextQueryOutcome(sess *session.Session, sql strin
 		SessionID:                  snap.ID,
 		Context:                    snap.Context,
 		PostReturnExplorationDepth: outcome.PostReturnExplorationDepth,
+		QueryCorrelation:           outcome.QueryCorrelation,
 		Timestamp:                  time.Now(),
 		ClientIP:                   snap.ClientIP,
 		Username:                   snap.Username,
@@ -180,6 +191,7 @@ func (i *Interceptor) InterceptStmtExecuteOutcome(sess *session.Session, stmtID 
 		SessionID:                  snap.ID,
 		Context:                    snap.Context,
 		PostReturnExplorationDepth: outcome.PostReturnExplorationDepth,
+		QueryCorrelation:           outcome.QueryCorrelation,
 		Timestamp:                  time.Now(),
 		ClientIP:                   snap.ClientIP,
 		Username:                   snap.Username,

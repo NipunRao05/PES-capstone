@@ -3,7 +3,6 @@
 Call begin only at an explicit pre-production decision boundary. Runtime wiring
 is intentionally pending; never reconstruct state-before from a finished result.
 """
-from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -47,7 +46,9 @@ def begin(registry, strategy_id, *, session_id, protocol, transaction_state,
     principal_id = record.get("principal_id")
     if principal_id is not None and (not isinstance(principal_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", principal_id)):
         raise ValueError("Invalid principal reference")
-    return {"decision_id": str(uuid4()), "timestamp": timestamp(), **experiment(),
+    if not eligible:
+        raise ValueError("Trace requires eligible final selection")
+    return {"schema_version": 1, "decision_id": str(uuid4()), "timestamp": timestamp(), **experiment(),
         "session_id": session_id, "principal_id": principal_id, "protocol": protocol,
         "strategy_id": strategy.strategy_id, "strategy_version": strategy.strategy_version,
         "strategy_definition_digest": strategy.definition_digest(),
@@ -77,7 +78,7 @@ def applied(decision, provenance, *, result_mode):
         status = "ERROR"
     elif actual is not None and verification in {"MATCH", "MISMATCH"}:
         status = "APPLIED" if result_mode == "fake" else "NOT_VERIFIED"
-    return {"application_id": str(uuid4()), "decision_id": decision["decision_id"],
+    return {"schema_version": 1, "application_id": str(uuid4()), "decision_id": decision["decision_id"],
         "timestamp": timestamp(), "expected_action_binding": decision["expected_action_binding"],
         "actual_action_binding": actual, "provenance_status": verification,
         "application_status": status, "result_class": result_mode}

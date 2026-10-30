@@ -160,6 +160,7 @@ func (h *Handler) principalLoop(ctx context.Context) error {
 			continue
 		}
 		if q, ok := msg.(*pgproto3.Query); ok {
+			h.beginQuery()
 			if err = h.servePrincipalQuery(ctx, q.String); err != nil {
 				return err
 			}

@@ -289,6 +289,10 @@ def principal_context(payload: dict) -> dict:
 
 
 class EvidenceRepository:
+    def strategy_traces(self):
+        from strategy_traces import TraceStore
+        return TraceStore(self.client, EVIDENCE_TTL_SECONDS)
+
     def __init__(self, client: redis.Redis):
         self.client = client
         self._touch_lock = threading.Lock()
@@ -453,6 +457,8 @@ class EvidenceRepository:
                 "source_partition": partition,
                 "source_offset": offset,
             }
+            from strategy_traces import event_correlation
+            query.update(event_correlation(payload))
             appended = self._append_once(session_id, "queries", event_id, query, MAX_QUERY_EVENTS)
             if appended:
                 telemetry.query(payload, topic)
@@ -1080,6 +1086,99 @@ def list_evidence(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any
     return {"count": len(sessions), "sessions": sessions}
 
 
+@app.post("/evidence/session/{session_id}/strategy-outcomes")
+def evaluate_strategy_outcomes(session_id: str, body: dict) -> dict:
+    """Explicit retained-evidence snapshot evaluation, never live SQL control."""
+    from strategy_outcomes import evaluate, instant
+    from strategy_traces import TraceConflict
+    from trace_index import IndexCapacityError, IndexIntegrityError
+    identities = body.get("application_ids")
+    if set(body) != {"application_ids"} or not isinstance(identities, list) or not 1 <= len(identities) <= 128 or any(not isinstance(x, str) for x in identities):
+        raise HTTPException(422, "A bounded application ID manifest is required")
+    repository = require_runtime().repository
+    session = repository.get_session(session_id)
+    if session is None:
+        raise HTTPException(404, "Session evidence unavailable")
+    store = repository.strategy_traces()
+    try:
+        pairs = []
+        for identity in identities:
+            application = store.get("application", identity)
+            if application is None:
+                raise ValueError("Application evidence unavailable")
+            decision = store.get("decision", application["decision_id"])
+            if decision is None or decision["session_id"] != session_id:
+                raise ValueError("Decision/session evidence unavailable")
+            pairs.append({"decision": decision, "application": application})
+        closes = [e["timestamp"] for e in session["connection_events"] if e.get("event_type") == "session_end"]
+        close = min(closes, key=instant) if closes else None
+        events = [{**q, "session_id": session_id, "event_type": "query"} for q in session["queries"]]
+        end_events = [e for e in session["connection_events"] if e.get("event_type") == "session_end" and e.get("timestamp") == close]
+        expected_count = end_events[0].get("query_count") if end_events else None
+        executions = {e.get("query_execution_id") for e in events if e.get("query_execution_id")}
+        query_complete = type(expected_count) is int and expected_count == len(executions) and all(e.get("query_execution_id") and e.get("request_started_at") for e in events)
+        manifest = {p["application"]["application_id"] for p in pairs}
+        trace_complete = query_complete and all(e.get("application_id") in manifest and e.get("decision_id") for e in events) and all(p["decision"].get("query_execution_id") in executions for p in pairs)
+        outcomes = evaluate(session_id, pairs, events, closed_at=close, as_of=utc_now(),
+            query_coverage=query_complete, trace_coverage=trace_complete)
+        result = [{"outcome_id": r["outcome_id"], "stored": store.store("outcome", r)} for r in outcomes]
+        return {"records": result, "outcomes": outcomes}
+    except TraceConflict:
+        raise HTTPException(409, "Historical outcome conflict; review late evidence")
+    except IndexCapacityError:
+        raise HTTPException(503, "Trace index capacity unavailable")
+    except IndexIntegrityError:
+        raise HTTPException(409, "INDEX_INTEGRITY_ERROR")
+    except (ValueError, TypeError, KeyError):
+        raise HTTPException(422, "Invalid or incomplete outcome evidence")
+
+
+@app.post("/evidence/strategy-outcomes/aggregate")
+def aggregate_strategy_outcomes(body: dict) -> dict:
+    if body.get("population_mode") == "INDEXED_RETAINED":
+        from indexed_aggregation import indexed_aggregate
+        from trace_index import IndexIntegrityError
+        if set(body)-{"population_mode", "filters", "snapshot_max_sequence", "index_epoch"}:
+            raise HTTPException(422, "Invalid indexed population request")
+        try:
+            return indexed_aggregate(require_runtime().repository.strategy_traces(),
+                filters=body.get("filters"), snapshot_max_sequence=body.get("snapshot_max_sequence"),
+                index_epoch=body.get("index_epoch"))
+        except IndexIntegrityError as exc:
+            raise HTTPException(409, str(exc))
+        except (ValueError, TypeError, KeyError):
+            raise HTTPException(422, "Invalid indexed population scope")
+    from outcome_aggregation import aggregate
+    identities = body.get("outcome_ids")
+    if set(body)-{"outcome_ids", "filters"} or not isinstance(identities,list) or len(identities)>1000 or any(not isinstance(x,str) for x in identities):
+        raise HTTPException(422,"A bounded outcome ID manifest is required")
+    store = require_runtime().repository.strategy_traces()
+    try:
+        records=[]
+        for identity in identities:
+            record=store.get("outcome",identity)
+            if record is None:
+                raise HTTPException(404,"Requested outcome is not retained")
+            records.append(record)
+        return aggregate(records,filters=body.get("filters"),generated_at=utc_now())
+    except (ValueError,TypeError,KeyError):
+        raise HTTPException(422,"Invalid or inconsistent aggregate evidence")
+
+
+@app.post("/evidence/strategy-traces/list")
+def list_strategy_traces(body: dict) -> dict:
+    from trace_index import IndexIntegrityError
+    if not isinstance(body, dict) or set(body)-{"kind", "after_sequence", "limit", "snapshot_max_sequence", "index_epoch"} or "kind" not in body:
+        raise HTTPException(422, "Invalid trace index page request")
+    try:
+        options = {k: v for k, v in body.items() if k != "kind"}
+        return require_runtime().repository.strategy_traces().list_records(body["kind"], **options)
+    except IndexIntegrityError as exc:
+        raise HTTPException(409, str(exc))
+    except (ValueError, TypeError, KeyError):
+        raise HTTPException(422, "Invalid trace index page request")
+
+
 @app.post("/evidence/report", status_code=201)
 def link_ai_report(report: AIReportLink) -> dict[str, Any]:
     stored = require_runtime().repository.ingest_ai_report(report.model_dump())
@@ -1108,3 +1207,27 @@ def link_evidence_artifact(link: EvidenceArtifactLink) -> dict[str, Any]:
         "artifact_id": link.artifact_id,
         "session_id": link.session_id,
     }
+
+
+@app.post("/evidence/strategy-trace")
+def store_strategy_trace(pair: dict) -> dict:
+    if set(pair) != {"decision", "application"}:
+        raise HTTPException(422, "Invalid trace pair")
+    from strategy_traces import TraceConflict, validate_ingestion
+    from trace_index import IndexCapacityError, IndexIntegrityError
+    if not isinstance(pair["decision"], dict) or not isinstance(pair["application"], dict) or pair["application"].get("decision_id") != pair["decision"].get("decision_id"):
+        raise HTTPException(422, "Invalid trace linkage")
+    store = require_runtime().repository.strategy_traces()
+    try:
+        validate_ingestion(pair)
+        decision = store.store("decision", pair["decision"])
+        application = store.store("application", pair["application"])
+        return {"decision": decision, "application": application}
+    except TraceConflict:
+        raise HTTPException(409, "Trace integrity conflict")
+    except IndexCapacityError:
+        raise HTTPException(503, "Trace index capacity unavailable")
+    except IndexIntegrityError:
+        raise HTTPException(409, "INDEX_INTEGRITY_ERROR")
+    except (ValueError, TypeError, KeyError):
+        raise HTTPException(422, "Invalid strategy trace")

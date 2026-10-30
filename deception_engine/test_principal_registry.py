@@ -189,6 +189,11 @@ class PersistentStateTests(PrincipalTests):
     # Separate class runs only persistence methods; inherited verifier tests are intentionally excluded below.
     def setUp(self):
         super().setUp()
+        # These are in-memory principal tests, not Redis/network delivery tests.
+        # Keep optional trace I/O from consuming the registry's real deadline.
+        import live_trace
+        self.trace_patch = patch.object(live_trace, 'sink', MagicMock())
+        self.trace_patch.start().submit.return_value = 'NOT_ATTEMPTED'
         self.old={name:getattr(api,name) for name in ('_schema_loader','_generator','_exposure','_mutations','DECIDE_RATE_LIMIT_ENABLED')}
         api._schema_loader=SchemaLoader();api._generator=DataGenerator()
         api._exposure=ExposureTracker(self.redis);api._mutations=MutationStore(self.redis)
@@ -197,6 +202,7 @@ class PersistentStateTests(PrincipalTests):
         self.command('GRANT SELECT, INSERT, UPDATE, DELETE ON testdb.* TO fake_compro1','mysql')
         self.native('s1')
     def tearDown(self):
+        self.trace_patch.stop()
         for name,value in self.old.items():setattr(api,name,value)
     def q(self,sql,sid='s1'):
         return asyncio.run(query(self.reg,api,MagicMock(),dict(session_id=sid,sql=sql)))

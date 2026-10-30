@@ -41,9 +41,17 @@ func TestWorldCommitmentResponseBoundary(t *testing.T) {
 					w.Write([]byte(`{"status":"ok","inserted":1,"conflicts":0}`))
 					return
 				}
+				var requestBody map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+					t.Error(err)
+				}
+				if !validExecutionID(requestBody["query_execution_id"].(string)) {
+					t.Error("missing execution identity before RPC")
+				}
 				response := map[string]interface{}{"mode": "fake", "tx_status": "I", "columns": []string{"id"}, "column_types": []string{"integer"}, "rows": []map[string]interface{}{{"id": 1}}}
 				if mode != "no_candidates" {
 					response["observation_candidates"] = []string{"testdb.employees"}
+					response["_correlation"] = map[string]interface{}{"query_execution_id": requestBody["query_execution_id"], "decision_id": "11111111-1111-4111-8111-111111111111", "application_id": "22222222-2222-4222-8222-222222222222"}
 				}
 				json.NewEncoder(w).Encode(response)
 				close(queried)
@@ -58,6 +66,7 @@ func TestWorldCommitmentResponseBoundary(t *testing.T) {
 			client.SetDeadline(time.Now().Add(4 * time.Second))
 			h := NewHandler(proxy, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), "", nil, nil)
 			h.virtual = true
+			h.beginQuery()
 			h.sess = session.New("192.0.2.1:1", "fake_fixture", "testdb")
 			if mode == "write_failure" {
 				client.Close()
@@ -95,6 +104,12 @@ func TestWorldCommitmentResponseBoundary(t *testing.T) {
 			}
 			if err := <-done; err != nil {
 				t.Fatal(err)
+			}
+			if bytes.Contains(wire, []byte("_correlation")) || bytes.Contains(wire, []byte(h.queryCorrelation.QueryExecutionID)) || bytes.Contains(wire, []byte("22222222-2222-4222-8222-222222222222")) {
+				t.Fatal("private correlation leaked to client")
+			}
+			if mode != "no_candidates" && h.queryCorrelation.ApplicationID != "22222222-2222-4222-8222-222222222222" {
+				t.Fatal("correlation not accepted")
 			}
 			if mode == "no_candidates" {
 				baseline = wire

@@ -18,7 +18,16 @@ import (
 )
 
 // QueryEvent represents a captured query and its metadata.
+// QueryCorrelation identifies one covered client execution, independent of SQL.
+type QueryCorrelation struct {
+	QueryExecutionID string `json:"query_execution_id,omitempty"`
+	RequestStartedAt string `json:"request_started_at,omitempty"`
+	DecisionID       string `json:"decision_id,omitempty"`
+	ApplicationID    string `json:"application_id,omitempty"`
+}
+
 type QueryEvent struct {
+	QueryCorrelation
 	principal.Context
 	PostReturnExplorationDepth int
 	SessionID                  string
@@ -49,6 +58,7 @@ type QueryEvent struct {
 
 // QueryOutcome is attached only after a deterministic result is known.
 type QueryOutcome struct {
+	QueryCorrelation
 	PostReturnExplorationDepth int
 	Verified                   bool
 	Success                    bool
@@ -115,6 +125,7 @@ func (i *Interceptor) InterceptSimpleOutcome(sess *session.Session, sql string, 
 		SessionID:                  snap.ID,
 		Context:                    snap.Context,
 		PostReturnExplorationDepth: outcome.PostReturnExplorationDepth,
+		QueryCorrelation:           outcome.QueryCorrelation,
 		Timestamp:                  time.Now(),
 		ClientIP:                   snap.ClientIP,
 		Username:                   snap.Username,

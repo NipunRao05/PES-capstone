@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from principal_registry import PrincipalRegistry, PrincipalError, PREFIX, SESSION_TTL, now
 from principal_state import PrincipalTransactionContext, PrincipalTransactionConflict
 from world_commitments import Commitments, Fact, FIELD
+from query_replay import replay
 
 principal_seed = ContextVar("principal_seed", default="")
 
@@ -145,6 +146,24 @@ def observation_candidates(api, sql, result):
     return []
 
 
+def _guard_correlated_query(arguments):
+    """A replay must never bypass active binding/disable/deadline checks."""
+    reg, body = arguments["reg"], arguments["body"]
+    reg.check_deadline()
+    session_key = PREFIX + "session:" + body["session_id"]
+    binding = json.loads(reg.redis.get(session_key) or "null")
+    if not binding:
+        raise PrincipalError("Session expired", "28000", 1045)
+    with reg.lock(binding["key"]):
+        current = json.loads(reg.redis.get(session_key) or "null")
+        if not current or current["key"] != binding["key"]:
+            raise PrincipalError("Session expired", "28000", 1045)
+        if not reg.load(current["key"])["enabled"]:
+            raise PrincipalError("Account disabled", "28000", 1045)
+        return current["key"]
+
+
+@replay("principal-query", "body", guard=_guard_correlated_query)
 async def query(reg, api, request, body):
     sid = body["session_id"]
     session_key = PREFIX + "session:" + sid
@@ -254,10 +273,14 @@ async def query(reg, api, request, body):
             if verb not in {"SELECT", "SHOW", "INSERT", "UPDATE", "DELETE"} or (verb != "SHOW" and verb not in record["persistent_permissions"]):
                 result = failure(PrincipalError("Permission denied or unsupported operation", "42501", 1142))
             else:
+                from live_trace import principal_context
+                trace_token = principal_context.set(record)
                 token = principal_seed.set(record["principal_key"])
                 try:
                     response = await api.decide(request, {"session_id": sid,
                         "query_normalized": sql, "query_raw": sql, "protocol": record["protocol"],
+                        "query_execution_id": body.get("query_execution_id"),
+                        "request_started_at": body.get("request_started_at"),
                         "username": record["username"], "database": "testdb", "deception_level": 1,
                         "transaction_state": "in_transaction" if transaction.active else "idle"})
                     result = json.loads(response.body)
@@ -266,6 +289,7 @@ async def query(reg, api, request, body):
                     raise
                 finally:
                     principal_seed.reset(token)
+                    principal_context.reset(trace_token)
                 if result.get("mode") != "fake" and result.get("mode") != "block":
                     result = failure(PrincipalError("Unsupported synthetic operation"))
                 if result.get("mode") == "fake" and not transaction.active and verb in {"INSERT", "UPDATE", "DELETE"}:

@@ -1,5 +1,13 @@
 # Pass 5C — Producer-Side Action Identity Verification
 
+> Pass 6B — 2026-10-30: covered producers now finalize a decision before invocation
+> and consume actual provenance into a linked live observational application pair.
+> Queue/HTTP persistence is best effort; see STRATEGY_DECISION_TRACE.md.
+
+> Pass 6 progress — 2026-10-30: application record builders consume this provenance;
+> live persistence/emission remains disconnected pending truthful pre-production
+> decision finalization. See STRATEGY_DECISION_TRACE.md; no live-trace claim.
+
 2026-10-28. IMPLEMENTED / VERIFIED BY FOCUSED TESTS for the engine response
 families below. Runtime health NOT VERIFIED.
 

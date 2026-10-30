@@ -42,8 +42,11 @@ func (h *Handler) principalQuery(ctx context.Context, sql string) principalDecis
 	}
 	body := map[string]interface{}{"session_id": safeSessionID(h), "protocol": "mysql",
 		"username": safeUsername(h), "database": safeDatabase(h), "sql": sql, "transaction_active": h.sess.Snapshot().InTransaction}
+	body["query_execution_id"] = h.queryCorrelation.QueryExecutionID
+	body["request_started_at"] = h.queryCorrelation.RequestStartedAt
 	var result principalDecision
 	if err := principal.Call(ctx, action, body, &result); err != nil {
+		result.Correlation = nil
 		result.Mode = "block"
 		result.ErrorCode = 1045
 		result.SQLState = "58000"
@@ -55,6 +58,7 @@ func (h *Handler) principalQuery(ctx context.Context, sql string) principalDecis
 		result.SQLState = "0A000"
 		result.ErrorMsg = "Unsupported operation"
 	}
+	h.acceptCorrelation(result.Correlation)
 	if result.Mode == "fake" {
 		h.publishPrincipalEvents(result.Events)
 	}
