@@ -83,10 +83,7 @@ BANNER_PORT           = os.environ.get("DECEPTION_PORT",            "3306")
 POSTGRES_PORT         = os.environ.get("DECEPTION_POSTGRES_PORT",     "5432")
 
 # Fake database list returned by SHOW DATABASES
-FAKE_DATABASES = [
-    "information_schema", "mysql", "performance_schema",
-    "hr_production", "finance_production", "crm_production",
-]
+FAKE_DATABASES = ["testdb"]
 
 # System variable → banner value mapping (normalised fingerprint → value)
 SYSTEM_VAR_MAP = {
@@ -555,6 +552,13 @@ async def decision_telemetry(request, call_next):
 @app.get("/metrics")
 def operational_metrics():
     DEPENDENCY_UP.labels("deception-engine", "redis").set(int(_redis_ready()))
+    import live_trace
+    if live_trace.sink is not None:
+        try:
+            from research_metrics import collect
+            collect(live_trace.sink.outbox)
+        except Exception:
+            log.warning("research delivery metrics unavailable")
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -1388,14 +1392,28 @@ async def _handle_select(
             offset=offset,
         )
     else:
+        employee_count = _schema_loader.get_row_count("hr", "employees")
         rows = _generator.generate_rows(
             columns=columns_def,
+            pk_pool={"employees.id": list(range(1, employee_count + 1))},
             row_count=base_count,
             session_id=(principal_seed.get() or req.session_id),
             table_name=table,
             limit=effective_limit,
             offset=offset,
         )
+
+    if schema_name == "hr" and table == "payroll":
+        for index, row in enumerate(rows, offset):
+            row["employee_id"] = index + 1
+    if schema_name == "hr" and table == "salary_executives":
+        organization = _generator.generate_organization_rows(schema_name="hr", table_name="employees",
+            schema_tables=_schema_loader.get_all_tables("hr"), employee_count=_schema_loader.get_row_count("hr", "employees"),
+            session_id=(principal_seed.get() or req.session_id))
+        executives = [row for row in organization if row["department"] == "Executive" and row["seniority_level"] >= 4]
+        for index, row in enumerate(rows, offset):
+            executive = executives[index % len(executives)]
+            row["full_name"], row["title"] = executive["full_name"], executive["job_title"]
 
     # Merge session-local inserts, then apply bounded UPDATE/DELETE overlays.
     inserted = _mutations.get_inserted_rows(req.session_id, table)
@@ -1590,7 +1608,7 @@ def _system_var_response(req: DecisionRequest, fp: str) -> JSONResponse | None:
 
 def _visible_databases(req: DecisionRequest) -> list[str]:
     connected = str(getattr(req, "database", "") or DEFAULT_DATABASE)
-    return list(dict.fromkeys([*FAKE_DATABASES, connected]))
+    return ["testdb"]
 
 
 def _strategy_id_for_table(schema_name: str, table_name: str) -> str:
@@ -1852,6 +1870,14 @@ def _parse_limit_offset(fp: str) -> tuple[int, int]:
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
+
+
+@app.get("/research/delivery-status")
+def research_delivery_status():
+    import live_trace
+    if live_trace.sink is None:raise HTTPException(503,"Delivery status unavailable")
+    return live_trace.sink.outbox.stats()
+
 
 if __name__ == "__main__":
     # Producer wrappers import api; Docker's script entry point must share its

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"github.com/pgproxy/internal/principal"
 	"hash/fnv"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -27,6 +28,8 @@ type QueryCorrelation struct {
 }
 
 type QueryEvent struct {
+	WorldID      string `json:"world_id,omitempty"`
+	WorldVersion int    `json:"world_version,omitempty"`
 	QueryCorrelation
 	principal.Context
 	PostReturnExplorationDepth int
@@ -122,6 +125,7 @@ func (i *Interceptor) InterceptSimpleOutcome(sess *session.Session, sql string, 
 	snap := sess.Snapshot()
 	normalized := NormalizeSQL(sql)
 	event := QueryEvent{
+		WorldID: os.Getenv("HONEYPOT_WORLD_ID"), WorldVersion: activeWorldVersion(),
 		SessionID:                  snap.ID,
 		Context:                    snap.Context,
 		PostReturnExplorationDepth: outcome.PostReturnExplorationDepth,
@@ -202,6 +206,7 @@ func (i *Interceptor) InterceptExecute(sess *session.Session, portalName string,
 	snap := sess.Snapshot()
 	normalized := NormalizeSQL(state.query)
 	event := QueryEvent{
+		WorldID: os.Getenv("HONEYPOT_WORLD_ID"), WorldVersion: activeWorldVersion(),
 		SessionID:       snap.ID,
 		Context:         snap.Context,
 		Timestamp:       time.Now(),
@@ -425,4 +430,11 @@ func removeComments(s string) string {
 		i++
 	}
 	return b.String()
+}
+
+func activeWorldVersion() int {
+	if os.Getenv("HONEYPOT_WORLD_ID") == "hr_base_v1" {
+		return 1
+	}
+	return 0
 }

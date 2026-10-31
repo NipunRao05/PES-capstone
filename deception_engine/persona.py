@@ -8,12 +8,13 @@ identity query so SQL-level reconnaissance cannot observe conflicting personas.
 from __future__ import annotations
 
 import os
+from base_world import SERVER_PERSONAS
 
-MYSQL_VERSION = os.environ.get("DECEPTION_MYSQL_VERSION", "8.0.45")
+MYSQL_VERSION = os.environ.get("DECEPTION_MYSQL_VERSION", SERVER_PERSONAS["mysql"])
 MYSQL_VERSION_COMMENT = os.environ.get(
     "DECEPTION_MYSQL_VERSION_COMMENT", "MySQL Community Server - GPL"
 )
-POSTGRES_SERVER_VERSION = os.environ.get("DECEPTION_POSTGRES_SERVER_VERSION", "16.13")
+POSTGRES_SERVER_VERSION = os.environ.get("DECEPTION_POSTGRES_SERVER_VERSION", SERVER_PERSONAS["postgres"])
 POSTGRES_VERSION = os.environ.get(
     "DECEPTION_POSTGRES_VERSION",
     f"PostgreSQL {POSTGRES_SERVER_VERSION} on x86_64-pc-linux-gnu, compiled by gcc, 64-bit",

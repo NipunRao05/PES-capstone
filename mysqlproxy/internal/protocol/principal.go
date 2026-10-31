@@ -42,6 +42,8 @@ func (h *Handler) principalQuery(ctx context.Context, sql string) principalDecis
 	}
 	body := map[string]interface{}{"session_id": safeSessionID(h), "protocol": "mysql",
 		"username": safeUsername(h), "database": safeDatabase(h), "sql": sql, "transaction_active": h.sess.Snapshot().InTransaction}
+	body["traffic_origin"] = h.evidenceContext().TrafficOrigin
+	body["deployment_manifest_id"] = h.evidenceContext().DeploymentManifestID
 	body["query_execution_id"] = h.queryCorrelation.QueryExecutionID
 	body["request_started_at"] = h.queryCorrelation.RequestStartedAt
 	var result principalDecision
@@ -70,6 +72,8 @@ func (h *Handler) publishPrincipalEvents(events []map[string]interface{}) {
 		return
 	}
 	for _, event := range events {
+		event["traffic_origin"] = h.evidenceContext().TrafficOrigin
+		event["deployment_manifest_id"] = h.evidenceContext().DeploymentManifestID
 		h.pub.EmitPrincipal(event)
 	}
 }

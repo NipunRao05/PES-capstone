@@ -24,6 +24,8 @@ class DecisionRequest:
     transaction_state: str = "idle"  # idle | in_transaction | failed_transaction
     query_execution_id: Optional[str] = None
     request_started_at: Optional[str] = None
+    traffic_origin: str = "unknown"
+    deployment_manifest_id: Optional[str] = None
 
 
 @dataclass

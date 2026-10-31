@@ -1,5 +1,12 @@
 # Pass 8B — Authoritative Query/Application Correlation and Request Timing
 
+> Pre-deployment hardening 1 — 2026-10-31: native seed authentication now maps to
+> fixed least-privilege backend identities. Native fallback has a positive grammar;
+> extended/prepared/binary native execution is rejected. Simple/text correlation
+> remains; query evidence adds optional HR base-world identity/version. Historical
+> records remain valid. See BACKEND_PRIVILEGE_CONTAINMENT.md and BASE_WORLD_HR_V1.md.
+
+
 > Pass 8F — 2026-10-31: Redis now owns correlated query replay across processes
 > and engine restart. COMPLETE reuses the original body/IDs without producer or
 > outbox work. Claims older than five seconds can become AMBIGUOUS; no takeover.

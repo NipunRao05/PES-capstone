@@ -81,6 +81,8 @@ def finalize(api, candidate, req):
     record["reason_code"] = "RULE_" + selected if selected == candidate else "REGISTERED_FALLBACK"
     from query_correlation import metadata
     record.update(metadata(vars(req)))
+    from research_metadata import metadata as research_metadata
+    record.update(research_metadata(vars(req), producer_default=True))
     return Finalized(api._strategy_registry.get(selected), record)
 
 

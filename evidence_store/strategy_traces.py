@@ -3,6 +3,7 @@
 No generic artifact claims/indexes participate. Caller retries transport failures
 with the original record/UUID, never a rebuilt timestamp or identity.
 """
+from research_metadata import metadata as research_metadata
 import json
 import re
 from datetime import datetime
@@ -16,7 +17,16 @@ FIELDS = {
     "application": {"schema_version", "application_id", "decision_id", "timestamp", "expected_action_binding",
         "actual_action_binding", "provenance_status", "application_status", "result_class"},
 }
-OPTIONAL_FIELDS = {"decision": {"query_execution_id", "request_started_at"}, "application": set(), "outcome": set()}
+OPTIONAL_FIELDS = {"decision": {"query_execution_id", "request_started_at", "world_id", "world_version", "traffic_origin", "deployment_manifest_id"}, "application": {"world_id", "world_version", "traffic_origin", "deployment_manifest_id"}, "outcome": {"traffic_origin", "deployment_manifest_id"}}
+
+
+def world_metadata(record):
+    if not record.get("world_id") and "world_version" not in record:
+        return {}
+    identity, version = record.get("world_id"), record.get("world_version")
+    if not isinstance(identity, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", identity) or type(version) is not int or not 1 <= version <= 65535:
+        raise ValueError("Invalid world identity")
+    return {"world_id": identity, "world_version": version}
 
 
 def correlation_metadata(record):
@@ -32,7 +42,7 @@ def correlation_metadata(record):
 
 def event_correlation(payload):
     try:
-        metadata = correlation_metadata(payload)
+        metadata = {**correlation_metadata(payload), **world_metadata(payload), **research_metadata(payload)}
         if not metadata:
             return {}
         for field in ("decision_id","application_id"):
@@ -64,8 +74,14 @@ def validate_ingestion(pair):
             raise ValueError("Invalid trace version")
         if datetime.fromisoformat(record["timestamp"]).tzinfo is None:
             raise ValueError("Invalid timestamp")
+        world_metadata(record)
+        research_metadata(record)
         TraceStore.key(kind, record[kind + "_id"])
     d, a = pair["decision"], pair["application"]
+    if research_metadata(d) != research_metadata(a):
+        raise ValueError("Research provenance mismatch")
+    if world_metadata(d) != world_metadata(a):
+        raise ValueError("World identity mismatch")
     correlation_metadata(d)
     if a["decision_id"] != d["decision_id"] or a["expected_action_binding"] != d["expected_action_binding"]:
         raise ValueError("Invalid trace linkage")
@@ -136,13 +152,19 @@ class TraceStore:
         return TraceIndex(self.client).read(kind, **kwargs)
 
     def indexed_snapshot(self, **kwargs):
-        from trace_index import CAPACITY
-        return TraceIndex(self.client).read("all", limit=CAPACITY, **kwargs)
+        from trace_index import REPORT_LIMIT
+        snapshot = TraceIndex(self.client).read("all", limit=REPORT_LIMIT, **kwargs)
+        if any(not group["done"] for group in snapshot["kinds"].values()):
+            raise ValueError("REPORT_LIMIT_EXCEEDED_USE_PAGINATED_EXPORT")
+        return snapshot
 
     def store(self, kind, record):
         outcome_schema(kind)
         if kind not in FIELDS or not isinstance(record, dict) or set(record)-OPTIONAL_FIELDS[kind] != FIELDS[kind] or record.get("schema_version") != 1:
             raise ValueError("Invalid trace schema")
+        if kind in {"decision", "application"}:
+            world_metadata(record)
+        research_metadata(record)
         if kind == "decision":
             correlation_metadata(record)
         identity = record[kind + "_id"]
@@ -158,21 +180,30 @@ class TraceStore:
         if existing is not None and existing != encoded:
             raise TraceConflict("Trace identity reused with different content")
         context = {k: record[k] for k in GROUP_CONTEXT} if kind in {"decision", "outcome"} else None
+        if context is not None:
+            context.update({k:record[k] for k in ("traffic_origin","deployment_manifest_id") if k in record})
         if kind == "application":
             decision = self.get("decision", record["decision_id"])
             if decision is None:
                 if self.get(kind, identity) != record:
                     raise ValueError("Decision missing; retry after decision delivery")
+            elif research_metadata(decision) != research_metadata(record):
+                raise TraceConflict("Application research provenance differs")
+            elif world_metadata(decision) != world_metadata(record):
+                raise TraceConflict("Application world differs")
             elif decision["expected_action_binding"] != record["expected_action_binding"]:
                 raise TraceConflict("Application decision binding differs")
             else:
                 context = {k: decision[k] for k in GROUP_CONTEXT}
+                context.update({k:decision[k] for k in ("traffic_origin","deployment_manifest_id") if k in decision})
         if kind == "outcome":
             decision = self.get("decision", record["decision_id"])
             application = self.get("application", record["application_id"])
             if decision is None or application is None:
                 if self.get(kind, identity) != record:
                     raise ValueError("Outcome requires retained decision/application")
+            elif research_metadata(record) != research_metadata(decision) or research_metadata(record) != research_metadata(application):
+                raise TraceConflict("Outcome research provenance differs")
             elif application["decision_id"] != decision["decision_id"] or any(record[k] != decision[k]
                 for k in ("session_id", "strategy_id", "strategy_version", "strategy_definition_digest", "experiment_id", "experiment_version")):
                 raise TraceConflict("Outcome linkage mismatch")

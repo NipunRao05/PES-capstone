@@ -1,0 +1,14 @@
+# Observed Linux runtime dependency constraints; no guessed versions.
+cloudpickle==3.1.2
+cramjam==2.14.0
+joblib==1.6.0
+kafka-python==2.0.2
+narwhals==2.28.0
+numpy==2.4.6
+packaging==26.3
+prometheus-client==0.26.0
+python-snappy==0.7.3
+redis==5.0.1
+scikit-learn==1.9.1
+scipy==1.17.1
+threadpoolctl==3.7.0

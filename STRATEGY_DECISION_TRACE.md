@@ -1,5 +1,12 @@
 # Pass 6 — Strategy Decision/Application Trace and Experiment Registry
 
+> Pre-deployment hardening 1 — 2026-10-31: new decisions/applications carry optional
+> world_id=hr_base_v1 and world_version=1 from the existing HR schema manifest.
+> Pair ingestion verifies matching world metadata; legacy missing fields remain
+> valid/unknown. Strategy definitions, versions, lock and scoring are unchanged.
+> See BASE_WORLD_HR_V1.md.
+
+
 > Pass 8F — 2026-10-31: Redis-coordinated completed request replay reuses the
 > original decision/application pair and private response IDs, without selecting,
 > executing, constructing traces or submitting to the outbox again. Incomplete

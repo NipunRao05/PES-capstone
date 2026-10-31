@@ -340,6 +340,15 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def _serve_metrics(self):
         pw = PrometheusWriter()
+        # Overlay backing filesystem is the guarded Docker data disk in deployment.
+        # This is not a physical-host/cloud quota collector.
+        import shutil
+        disk=shutil.disk_usage('/')
+        pw.gauge('honeypot_runtime_filesystem_available_bytes',disk.free)
+        pw.gauge('honeypot_runtime_filesystem_size_bytes',disk.total)
+        if hasattr(os,'statvfs'):
+            fs=os.statvfs('/')
+            pw.gauge('honeypot_runtime_filesystem_inodes_available',fs.f_favail)
 
         # Always include the native Prometheus output from scaling agent first
         native = ""  # Do not duplicate native metrics already represented by the bridge.

@@ -32,8 +32,9 @@ import (
 
 // Config holds all proxy configuration.
 type Config struct {
-	ListenAddr  string
-	BackendAddr string
+	OperatorListenAddr string
+	ListenAddr         string
+	BackendAddr        string
 
 	TLSCertFile string
 	TLSKeyFile  string
@@ -145,6 +146,29 @@ func (m *Manager) ListenAndServe(ctx context.Context) error {
 		return fmt.Errorf("listen %s: %w", m.cfg.ListenAddr, err)
 	}
 	m.listener = ln
+	if m.cfg.OperatorListenAddr != "" {
+		operator, err := net.Listen("tcp", m.cfg.OperatorListenAddr)
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		go func() { <-ctx.Done(); operator.Close() }()
+		go func() {
+			for {
+				c, err := operator.Accept()
+				if err != nil {
+					return
+				}
+				if !m.admitConnection() {
+					c.Close()
+					continue
+				}
+				m.wg.Add(1)
+				go m.handleOriginConnection(ctx, c, "operator_validation")
+			}
+		}()
+	}
+
 	m.logger.Info("proxy listening", "addr", ln.Addr())
 
 	// Fix 9: HTTP health + metrics server
@@ -176,18 +200,26 @@ func (m *Manager) ListenAndServe(ctx context.Context) error {
 			}
 		}
 
-		if m.metrics.ActiveConnections.Load() >= int64(m.cfg.MaxConnections) {
-			m.metrics.RejectedConns.Add(1)
+		if !m.admitConnection() {
 			m.logger.Warn("max connections reached, rejecting", "max", m.cfg.MaxConnections)
 			clientConn.Close()
 			continue
 		}
 
-		m.metrics.ActiveConnections.Add(1)
-		m.metrics.TotalConnections.Add(1)
 		m.wg.Add(1)
 		go m.handleConnection(ctx, clientConn)
 	}
+}
+
+// admitConnection atomically shares one bound across ordinary/operator listeners.
+func (m *Manager) admitConnection() bool {
+	if m.metrics.ActiveConnections.Add(1) > int64(m.cfg.MaxConnections) {
+		m.metrics.ActiveConnections.Add(-1)
+		m.metrics.RejectedConns.Add(1)
+		return false
+	}
+	m.metrics.TotalConnections.Add(1)
+	return true
 }
 
 // gracefulShutdown drains active connections up to ShutdownTimeout. Fix 6.
@@ -223,6 +255,9 @@ func (m *Manager) gracefulShutdown() error {
 
 // handleConnection manages the full lifecycle of one client connection.
 func (m *Manager) handleConnection(ctx context.Context, clientConn net.Conn) {
+	m.handleOriginConnection(ctx, clientConn, "research_external")
+}
+func (m *Manager) handleOriginConnection(ctx context.Context, clientConn net.Conn, origin string) {
 	defer func() {
 		clientConn.Close()
 		m.metrics.ActiveConnections.Add(-1)
@@ -236,6 +271,7 @@ func (m *Manager) handleConnection(ctx context.Context, clientConn net.Conn) {
 
 	// Fix 1: peek 8 bytes to detect a CancelRequest before doing anything else.
 	// CancelRequest is a fixed 16-byte message with a special protocol code.
+	_ = clientConn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	peeked, conn, err := peekConn(clientConn, 8)
 	if err != nil {
 		logger.Debug("failed to peek startup bytes", "error", err)
@@ -268,6 +304,7 @@ func (m *Manager) handleConnection(ctx context.Context, clientConn net.Conn) {
 
 	handler := protocol.NewHandler(conn, backendConn, logger, m.cfg.BackendAddr, m.intercept, m.pub)
 
+	handler.SetTrafficOrigin(origin)
 	if err := handler.Run(ctx); err != nil {
 		if !isNormalDisconnect(err) {
 			// Fix 10: enriched error log with session metadata
@@ -299,53 +336,12 @@ func isCancelRequest(b []byte) bool {
 	return code == cancelRequestCode
 }
 
-// handleCancelRequest reads the full 16-byte CancelRequest and forwards it
-// to the real PostgreSQL backend on a fresh TCP connection.
-// Per the PG protocol: the server closes the connection immediately after receiving it.
+// The contained baseline exposes no native BackendKeyData. Unauthenticated
+// cancellation must never address arbitrary backend/operator connections.
 func (m *Manager) handleCancelRequest(clientConn net.Conn, peeked []byte, logger *slog.Logger) {
 	defer clientConn.Close()
 	m.metrics.CancelRequests.Add(1)
-
-	// Full message is 16 bytes: len(4) + code(4) + pid(4) + secret(4).
-	// peeked already contains the first 8 bytes.
-	// We must read the remaining 8 bytes from the UNDERLYING connection, not the
-	// replayConn wrapper — replayConn would replay the peeked prefix again and
-	// corrupt the pid/secret fields.
-	rawConn := clientConn
-	if rc, ok := clientConn.(*replayConn); ok {
-		rawConn = rc.Conn
-	}
-	tail := make([]byte, 8)
-	if err := readExact(rawConn, tail); err != nil {
-		logger.Debug("failed to read cancel request tail", "error", err)
-		return
-	}
-
-	pid := uint32(tail[0])<<24 | uint32(tail[1])<<16 | uint32(tail[2])<<8 | uint32(tail[3])
-	secret := uint32(tail[4])<<24 | uint32(tail[5])<<16 | uint32(tail[6])<<8 | uint32(tail[7])
-
-	logger.Debug("forwarding cancel request", "backend_pid", pid)
-
-	dialer := net.Dialer{Timeout: 3 * time.Second}
-	bc, err := dialer.Dial("tcp", m.cfg.BackendAddr)
-	if err != nil {
-		logger.Warn("cancel: failed to dial backend", "error", err)
-		return
-	}
-	defer bc.Close()
-
-	// Re-encode CancelRequest for the backend
-	msg := make([]byte, 16)
-	putUint32(msg, 0, 16)                // length field
-	putUint32(msg, 4, cancelRequestCode) // cancel code
-	putUint32(msg, 8, pid)
-	putUint32(msg, 12, secret)
-
-	if _, err := bc.Write(msg); err != nil {
-		logger.Warn("cancel: write to backend failed", "error", err)
-		return
-	}
-	logger.Debug("cancel request forwarded successfully", "pid", pid)
+	logger.Debug("unsupported cancellation request rejected")
 }
 
 // ─── Fix 3: Backend Health Check ──────────────────────────────────────────────

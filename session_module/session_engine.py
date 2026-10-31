@@ -77,12 +77,14 @@ def _compute_suspicion_delta(fingerprint: str) -> int:
 
 
 class ActiveSession:
-    def __init__(self, source_ip, db_user, timestamp, session_id="", protocol="", database=""):
+    def __init__(self, source_ip, db_user, timestamp, session_id="", protocol="", database="", traffic_origin="unknown", deployment_manifest_id=""):
         self.source_ip = source_ip
         self.db_user = db_user
         self.session_id = session_id
         self.protocol = protocol
         self.database = database
+        self.traffic_origin=traffic_origin
+        self.deployment_manifest_id=deployment_manifest_id
         self.start_time = timestamp
         self.last_activity = timestamp
 
@@ -179,6 +181,8 @@ class SessionEngine:
                     session_id=session_id,
                     protocol=protocol,
                     database=database,
+                    traffic_origin=getattr(event,"traffic_origin","unknown"),
+                    deployment_manifest_id=getattr(event,"deployment_manifest_id",""),
                 )
                 active_sessions.set(len(self.active_sessions))
 
@@ -228,6 +232,8 @@ class SessionEngine:
             query_count=session.query_count,
             protocol=session.protocol,
             database=session.database,
+            traffic_origin=session.traffic_origin,
+            deployment_manifest_id=session.deployment_manifest_id,
             cluster_id=None,
             persona=None,
             created_at=time.time(),

@@ -98,8 +98,9 @@ class SchemaLoader:
         """Return schema name for a given database name."""
         if not db_name:
             return DEFAULT_SCHEMA
-        db_lower = db_name.lower()
-        return DATABASE_TO_SCHEMA.get(db_lower, DEFAULT_SCHEMA)
+        # HR v1 is the sole approved baseline. Other templates remain loadable
+        # for offline research; a client-controlled database cannot select them.
+        return DEFAULT_SCHEMA
 
     def get_table(self, schema_name: str, table_name: str) -> dict | None:
         """Return the table definition dict, or None if not found."""

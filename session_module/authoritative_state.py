@@ -104,6 +104,8 @@ def _extract_create_columns(sql: str, relation: str) -> set[str]:
 @dataclass
 class AuthoritativeSessionState:
     session_id: str
+    traffic_origin: str = "unknown"
+    deployment_manifest_id: str = ""
     deceptive_principal_id: str = ""
     principal_origin: str = ""
     creator_session_id: str = ""
@@ -236,6 +238,9 @@ class AuthoritativeStateStore:
 
     @staticmethod
     def _refresh_metadata(state: AuthoritativeSessionState, raw: dict) -> None:
+        from research_metadata import metadata
+        for key,value in metadata(raw).items():
+            setattr(state,key,value)
         if raw.get("deceptive_principal_id"):
             for name in ("deceptive_principal_id", "principal_origin", "creator_session_id"):
                 setattr(state, name, str(raw.get(name) or getattr(state, name))[:128])

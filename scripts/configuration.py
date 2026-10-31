@@ -6,6 +6,7 @@ import base64
 import binascii
 import copy
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -106,7 +107,16 @@ def boolean(value, label):
 def read_environment():
     """Literal dotenv subset; reject interpolation rather than guessing Compose semantics."""
     result = {}
-    path = ROOT / ".env"
+    mode=os.getenv('HONEYPOT_DEPLOYMENT_MODE','false')
+    if mode not in {'true','false'}:raise ConfigError('HONEYPOT_DEPLOYMENT_MODE must be true or false')
+    deployment=mode=='true'
+    if os.getenv('HONEYPOT_SECRET_FILE') and not deployment:
+        raise ConfigError('A deployment secret file requires strict deployment mode')
+    path = Path(os.environ['HONEYPOT_SECRET_FILE']) if os.getenv('HONEYPOT_SECRET_FILE') else ROOT / '.env'
+    if deployment:
+        from deployment_guard import private_file
+        if not os.getenv('HONEYPOT_SECRET_FILE'):raise ConfigError('Deployment requires explicit HONEYPOT_SECRET_FILE')
+        private_file(path)
     if path.exists():
         try:
             lines = path.read_text(encoding="utf-8-sig").splitlines()
@@ -168,7 +178,24 @@ def load():
                     raise ConfigError(f"{feature}=true requires {dependency}=true")
 
     policy = read_yaml("config/deception.yaml")
-    keys(policy, ("session", "decision"), "config/deception.yaml")
+    keys(policy, ("session", "decision", "research"), "config/deception.yaml")
+    research_bounds = {"expected_queries_per_minute":(1,600),"observation_seconds":(86400,604800),
+        "retention_seconds":(1209600,7776000),"trace_index_capacity":(1000,262144),
+        "event_journal_capacity":(1000,1048576),"outbox_capacity":(1024,65536),
+        "outbox_retention_seconds":(86400,604800),"outbox_max_attempts":(20,4096),
+        "evidence_redis_maxmemory_mb":(512,8192),"redpanda_retention_seconds":(691200,2592000)}
+    keys(policy["research"], research_bounds, "policy.research")
+    for name,bounds in research_bounds.items():
+        integer(policy["research"][name],*bounds,"policy.research."+name)
+    research=policy["research"]
+    planned_queries=(research["expected_queries_per_minute"]*research["observation_seconds"]+59)//60
+    if research["trace_index_capacity"]*5 < planned_queries*6:
+        raise ConfigError("Research trace capacity requires at least 20 percent headroom for the planned observation")
+    if research["event_journal_capacity"]*5 < planned_queries*7:
+        raise ConfigError("Research journal capacity cannot hold the modeled queries and session events")
+    retry_window=sum(min(2**attempt,300) for attempt in range(1,research["outbox_max_attempts"]))
+    if retry_window>=research["outbox_retention_seconds"]:
+        raise ConfigError("Outbox retry window must fit inside entry retention")
     keys(policy["session"], ("timeout_seconds", "max_active", "queue_size"), "policy.session")
     for name, bounds in {"timeout_seconds": (1, 86400), "max_active": (1, 100000), "queue_size": (1, 1000000)}.items():
         integer(policy["session"][name], *bounds, f"policy.session.{name}")
@@ -196,6 +223,9 @@ def load():
         boolean(value, f"categories.{name}")
 
     env = read_environment()
+    if env.get('HONEYPOT_DEPLOYMENT_MODE','false')=='true':
+        from deployment_guard import validate_secrets
+        validate_secrets(env)
     expected_legacy = {
         "MITRE_ENABLED": False, "LOCAL_LLM_ENABLED": False, "ADAPTATION_ENABLED": False,
         "EXPERIMENT_ENABLED": False, "SCALING_ENABLED": flags["infrastructure.scaling"],
@@ -237,6 +267,31 @@ def load():
             valid = False
         if not valid:
             raise ConfigError("DECEPTIVE_PRINCIPAL_HMAC_SECRET: expected base64 decoding to at least 32 bytes")
+    # Separate native service credentials from public decoy login credentials.
+    # Stable domain-separated derivation reuses an existing deployment secret;
+    # no secret file or actual .env is written. Explicit values may override it.
+    for protocol in ("PG", "MYSQL"):
+        name = protocol + "_RUNTIME_PASSWORD"
+        if not env.get(name):
+            try:
+                key = base64.b64decode(env.get("DECEPTIVE_PRINCIPAL_HMAC_SECRET", ""), validate=True)
+            except (ValueError, binascii.Error):
+                key = b""
+            if len(key) < 32:
+                raise ConfigError(name + ": supply a runtime password or a valid principal HMAC key")
+            env[name] = hmac.new(key, ("backend-runtime-v1:" + protocol).encode(), hashlib.sha256).hexdigest()
+    env.setdefault("PG_DECOY_PASSWORD", env["POSTGRES_PASSWORD"])
+    env.setdefault("MYSQL_DECOY_PASSWORD", env["MYSQL_PASSWORD"])
+    env.setdefault("MYSQL_DECOY_ROOT_PASSWORD", env["MYSQL_ROOT_PASSWORD"])
+    for name in ("PG_DECOY_PASSWORD", "MYSQL_DECOY_PASSWORD", "MYSQL_DECOY_ROOT_PASSWORD"):
+        if not env[name]:
+            raise ConfigError(name + ": empty decoy password")
+    for name in ("PG_RUNTIME_PASSWORD", "MYSQL_RUNTIME_PASSWORD"):
+        if not re.fullmatch(r"[!-~]{24,128}", env[name]):
+            raise ConfigError(name + ": expected 24..128 printable ASCII characters")
+        if env[name] in {env["PG_DECOY_PASSWORD"], env["MYSQL_DECOY_PASSWORD"], env["MYSQL_DECOY_ROOT_PASSWORD"]}:
+            raise ConfigError(name + ": runtime secret must differ from public decoy passwords")
+    env["RESEARCH_OPERATOR_KEY"]=hmac.new(env["PG_RUNTIME_PASSWORD"].encode(),b"research-export-ack-v1",hashlib.sha256).hexdigest()
     ports = []
     for name, default in (("PGPROXY_HOST_PORT", "5432"), ("MYSQLPROXY_HOST_PORT", "3306")):
         value = env.get(name) or default
@@ -305,6 +360,10 @@ def build_model(flags, policy, obs, compose):
         if name == "scaling-agent":
             environment["METRIC_SCALING_ENABLED"] = str(flags["observability.prometheus"]).lower()
         if name == "evidence-store":
+            environment["RESEARCH_OPERATOR_KEY"]="${RESEARCH_OPERATOR_KEY:?canonical launcher required}"
+            environment.update(EVIDENCE_TTL_SECONDS=str(policy["research"]["retention_seconds"]),
+                TRACE_INDEX_CAPACITY=str(policy["research"]["trace_index_capacity"]),
+                EVENT_JOURNAL_CAPACITY=str(policy["research"]["event_journal_capacity"]))
             environment["SCALING_ENABLED"] = str(flags["infrastructure.scaling"]).lower()
             if not flags["analysis.session_behavior"]:
                 environment["KAFKA_TOPICS"] = "mysql-query-events,pg-query-events,mysql-session-events,pg-session-events"
@@ -315,9 +374,21 @@ def build_model(flags, policy, obs, compose):
             environment["SCRAPE_TIMEOUT"] = str(obs["bridge_timeout_seconds"])
             environment["HONEYPOT_MODE"] = "deterministic_rule_based"
             environment["HONEYPOT_FEATURES"] = json.dumps(flags, sort_keys=True)
+        if name in {"pgproxy", "mysqlproxy"}:
+            port=15432 if name=="pgproxy" else 13306
+            environment["OPERATOR_LISTEN_ADDR"]="0.0.0.0:"+str(port)
+            service.setdefault("ports",[]).append("127.0.0.1:"+str(port)+":"+str(port))
+            environment["HONEYPOT_WORLD_ID"] = read_yaml("deception_engine/schemas/hr.yaml")["world_id"]
+            environment["PG_PERSONA_VERSION"] = read_yaml("deception_engine/schemas/hr.yaml")["server_personas"]["postgres"]
         if name in {"pgproxy", "mysqlproxy", "deception-engine"} and not flags["deception.deceptive_principals"]:
             environment["DECEPTIVE_PRINCIPAL_HMAC_SECRET"] = ""
         if name == "deception-engine":
+            environment.update(TRACE_OUTBOX_CAPACITY=str(policy["research"]["outbox_capacity"]),
+                TRACE_OUTBOX_RETENTION_SECONDS=str(policy["research"]["outbox_retention_seconds"]),
+                TRACE_OUTBOX_MAX_ATTEMPTS=str(policy["research"]["outbox_max_attempts"]))
+            personas = read_yaml("deception_engine/schemas/hr.yaml")["server_personas"]
+            environment["DECEPTION_MYSQL_VERSION"] = personas["mysql"]
+            environment["DECEPTION_POSTGRES_SERVER_VERSION"] = personas["postgres"]
             mapping = {"max_query_bytes": "DECIDE_MAX_QUERY_BYTES", "rate_limit_enabled": "DECIDE_RATE_LIMIT_ENABLED",
                        "rate_window_seconds": "DECIDE_RATE_LIMIT_WINDOW_SECONDS", "per_session": "DECIDE_RATE_LIMIT_PER_SESSION",
                        "per_client": "DECIDE_RATE_LIMIT_PER_CLIENT", "global_limit": "DECIDE_RATE_LIMIT_GLOBAL",
@@ -348,6 +419,18 @@ def build_model(flags, policy, obs, compose):
             if key.endswith(("_URL", "_ADDR", "_HOST", "_BROKERS", "_BOOTSTRAP")) and not str(value).strip():
                 raise ConfigError(f"Compose service {name}: {key} must not be empty")
 
+    from deployment_manifest import current_id
+    for name in ("pgproxy","mysqlproxy","deception-engine","evidence-store","session-module"):
+        if name in services:
+            services[name]["environment"]["RESEARCH_MANIFEST_ID"]=current_id()
+    if "evidence-store" in services:
+        services["evidence-store"].setdefault("volumes",[]).append("./.runtime/manifests:/research-manifests:ro")
+    if "redis-mitre" in services:
+        services["redis-mitre"]["command"] = ["redis-server","--appendonly","yes","--appendfsync","everysec",
+            "--maxmemory",str(policy["research"]["evidence_redis_maxmemory_mb"])+"mb","--maxmemory-policy","noeviction"]
+    init_script=services["redpanda-init"]["command"]
+    if isinstance(init_script,list): init_script="\n".join(init_script)
+    services["redpanda-init"]["command"] = [init_script + "\nrpk cluster config set log_retention_ms " + str(policy["research"]["redpanda_retention_seconds"]*1000) + " -X admin.hosts=redpanda:9644\n"]
     if "prometheus" in services:
         services["prometheus"]["volumes"] = [
             "prometheusdata:/prometheus",
@@ -373,7 +456,8 @@ def build_model(flags, policy, obs, compose):
             if source in model.get("volumes", {}):
                 used_volumes.add(source)
     model["volumes"] = {name: value for name, value in model.get("volumes", {}).items() if name in used_volumes}
-    return model
+    from runtime_hardening import apply
+    return apply(model,flags,policy['research'])
 
 
 def monitoring(flags, obs):
@@ -427,7 +511,8 @@ def render(flags, policy, obs, compose):
         read_yaml("observability/promtail.yaml")
         read_yaml("observability/loki/loki-config.yaml")
     model = build_model(flags, policy, obs, compose)
-    artifacts = {"compose.yaml": model}
+    from runtime_hardening import gateway_configuration
+    artifacts = {"compose.yaml": model,"operator-nginx.conf":gateway_configuration(model)}
     if flags["observability.prometheus"]:
         prometheus, alerts = monitoring(flags, obs)
         artifacts.update({"prometheus.yml": prometheus, "alerts.yml": alerts})
@@ -452,6 +537,7 @@ def render(flags, policy, obs, compose):
     for service, names in (
         ("prometheus", ["prometheus.yml", "alerts.yml"]),
         ("grafana", sorted(name for name in artifacts if name.startswith("grafana/"))),
+        ("operator-gateway", ["operator-nginx.conf"]),
     ):
         if service in model["services"]:
             content = json.dumps({name: artifacts[name] for name in names}, sort_keys=True)
@@ -465,7 +551,7 @@ def write_artifacts(artifacts):
     for relative, value in artifacts.items():
         target = RUNTIME / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(value, indent=2) if target.suffix == ".json" else yaml.safe_dump(value, sort_keys=False)
+        text = value if isinstance(value,str) else json.dumps(value, indent=2) if target.suffix == ".json" else yaml.safe_dump(value, sort_keys=False)
         text += "\n"
         if target.is_file() and target.read_text(encoding="utf-8") == text:
             continue

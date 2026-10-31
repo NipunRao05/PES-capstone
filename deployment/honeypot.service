@@ -1,0 +1,21 @@
+[Unit]
+Description=Guarded deterministic honeypot runtime
+Requires=docker.service
+After=docker.service network-online.target
+RequiresMountsFor=/opt/honeypot-data
+ConditionPathIsMountPoint=/opt/honeypot-data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/honeypot
+Environment=HONEYPOT_DEPLOYMENT_MODE=true
+Environment=HONEYPOT_SECRET_FILE=/opt/honeypot-data/secrets.env
+Environment=HONEYPOT_DOCKER_LOG_ROOT=/opt/honeypot-data/docker/containers
+ExecStart=/usr/bin/python3 scripts/honeypot.py compose up -d --no-build
+ExecStop=/usr/bin/python3 scripts/honeypot.py compose stop
+TimeoutStartSec=240
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

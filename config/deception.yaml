@@ -11,3 +11,14 @@ decision:
   per_client: 300
   global_limit: 3000
   fail_open: true
+research:
+  expected_queries_per_minute: 10
+  observation_seconds: 604800
+  retention_seconds: 2592000
+  trace_index_capacity: 131072
+  event_journal_capacity: 524288
+  outbox_capacity: 32768
+  outbox_retention_seconds: 172800
+  outbox_max_attempts: 500
+  evidence_redis_maxmemory_mb: 2048
+  redpanda_retention_seconds: 1209600

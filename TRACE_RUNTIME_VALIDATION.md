@@ -1,5 +1,13 @@
 # Pass 8E — Real Redis and End-to-End Trace Runtime Validation
 
+> Pre-deployment hardening 1 — 2026-10-31: real restricted PG/MySQL runtime grants,
+> seed login, HR catalogs/rows/traps, D6 and administrative rejection PASS. Virtual
+> principal committed state/exposure survives reconnect on both protocols. Six
+> bounded live checks PASS; generic verifier13/13 PASS. No Redis/DB restart, host
+> process/file/plugin payload or public exposure. Details and commands in
+> BACKEND_PRIVILEGE_CONTAINMENT.md; historical pass records remain below.
+
+
 > Pass 8F continuation — 2026-10-31: new distributed query-idempotency Lua was
 > verified against redis-deception. Two Python processes handling ten duplicates
 > produced one producer call/pair and exact replay. Conflicts, owner loss, expiry

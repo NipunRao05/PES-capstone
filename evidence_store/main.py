@@ -17,12 +17,14 @@ from typing import Any
 
 import redis
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from kafka import KafkaConsumer
 from pydantic import BaseModel, Field
 from fastapi.responses import Response
 from prometheus_client import Gauge, generate_latest, CONTENT_TYPE_LATEST
 import telemetry
+from research_metadata import metadata as research_metadata
+from research_journal import Journal, HEALTH
 
 
 logging.basicConfig(
@@ -295,9 +297,15 @@ class EvidenceRepository:
 
     def __init__(self, client: redis.Redis):
         self.client = client
+        self.journal = Journal(client,EVIDENCE_TTL_SECONDS)
         self._touch_lock = threading.Lock()
         configured_salt = os.getenv("EVIDENCE_IP_HASH_SALT", "").encode("utf-8")
         if configured_salt:
+            self.client.setnx(IP_SALT_KEY, configured_salt.decode('utf-8'))
+            retained=self.client.get(IP_SALT_KEY)
+            retained=retained.encode('utf-8') if isinstance(retained,str) else retained
+            if not retained or not hmac.compare_digest(retained,configured_salt):
+                raise RuntimeError('Evidence pseudonymization key continuity mismatch')
             self.ip_hash_salt = configured_salt
         else:
             self.client.setnx(IP_SALT_KEY, secrets.token_hex(32))
@@ -368,6 +376,7 @@ class EvidenceRepository:
             "database_attempted": bounded_text(payload.get("database"), 256),
             "user_attempted": bounded_text(payload.get("username") or payload.get("db_user"), 256),
             **principal_context(payload),
+            **research_metadata(payload),
         }
         mapping.update({name: str(int(value)) if isinstance(value, bool) else value for name, value in optional.items() if value})
 
@@ -387,11 +396,21 @@ class EvidenceRepository:
         payload: dict[str, Any],
         maximum: int,
     ) -> bool:
+        # Durable journal admission precedes the bounded projection/dedup claim.
+        # Retry can recover projection failure without losing immutable evidence.
+        journal_payload = payload
+        if "artifact_type" in payload:
+            # Poll time is not source evidence and changes on exact re-polls.
+            source = payload.get("payload", {})
+            journal_payload = {**payload, "timestamp": source.get("timestamp") or source.get("created_at") or None}
+        self.journal.append(session_id, collection, event_id, journal_payload)
         id_key = self._child_key(session_id, "event_ids")
         if self.client.sadd(id_key, event_id) != 1:
             return False
         list_key = self._child_key(session_id, collection)
         pipe = self.client.pipeline(transaction=False)
+        if self.client.llen(list_key)>=maximum:
+            self.client.hincrby(HEALTH,"projection_window_rollovers",1)
         pipe.rpush(list_key, json.dumps(payload, separators=(",", ":"), default=str))
         pipe.ltrim(list_key, -maximum, -1)
         pipe.expire(list_key, EVIDENCE_TTL_SECONDS)
@@ -452,6 +471,7 @@ class EvidenceRepository:
                 "asset_id": bounded_text(payload.get("asset_id"), 256),
                 "world_id": bounded_text(payload.get("world_id"), 256),
                 **principal_context(payload),
+            **research_metadata(payload),
                 "post_return_exploration_depth": safe_nonnegative_int(payload.get("post_return_exploration_depth")),
                 "source_topic": topic,
                 "source_partition": partition,
@@ -479,6 +499,7 @@ class EvidenceRepository:
                 "database": bounded_text(payload.get("database"), 256),
                 "user_attempted": bounded_text(payload.get("username") or payload.get("db_user"), 256),
             **principal_context(payload),
+            **research_metadata(payload),
                 "auth_success": payload.get("success") if "success" in payload else None,
                 "close_reason": bounded_text(payload.get("close_reason"), 256),
                 "query_count": payload.get("query_count"),
@@ -669,6 +690,7 @@ class EvidenceRepository:
             "schema_version": int(record.get("schema_version", "1")),
             "session_id": record.get("session_id", session_id),
             **principal_context(record),
+            **research_metadata(record),
             "trace_id": record.get("trace_id", ""),
             "source_ip_hash": record.get("source_ip_hash", ""),
             "fingerprint": record.get("fingerprint", latest_query.get("fingerprint", "")),
@@ -763,7 +785,7 @@ class EvidenceConsumer(threading.Thread):
                     bootstrap_servers=KAFKA_BROKERS,
                     group_id=KAFKA_GROUP_ID,
                     auto_offset_reset=KAFKA_OFFSET_RESET,
-                    enable_auto_commit=True,
+                    enable_auto_commit=False,
                     consumer_timeout_ms=1000,
                 )
                 self.connected = True
@@ -782,6 +804,9 @@ class EvidenceConsumer(threading.Thread):
                                 message.partition,
                                 message.offset,
                             )
+                            self.repository.client.hincrby(HEALTH,"malformed_source_events",1)
+                            from kafka.structs import TopicPartition, OffsetAndMetadata
+                            self.consumer.commit({TopicPartition(message.topic,message.partition):OffsetAndMetadata(message.offset+1,"",-1)})
                             continue
                         try:
                             started = time.perf_counter()
@@ -800,6 +825,10 @@ class EvidenceConsumer(threading.Thread):
                                 message.partition,
                                 message.offset,
                             )
+                            raise
+                        else:
+                            from kafka.structs import TopicPartition, OffsetAndMetadata
+                            self.consumer.commit({TopicPartition(message.topic,message.partition):OffsetAndMetadata(message.offset+1,"",-1)})
                         finally:
                             telemetry.LATENCY.observe(time.perf_counter() - started)
             except Exception as exc:
@@ -960,6 +989,8 @@ class Runtime:
         )
         self.redis.ping()
         self.repository = EvidenceRepository(self.redis)
+        from deployment_registry import refresh
+        refresh(self.redis)
         self.stop_event = threading.Event()
         self.consumer = EvidenceConsumer(self.repository, self.stop_event)
         self.poller = ScalingEventPoller(self.repository, self.stop_event) if SCALING_ENABLED else None
@@ -1036,6 +1067,10 @@ def metrics():
         redis_ok = False
     DEPENDENCY_UP.labels("evidence-store", "redis").set(int(redis_ok))
     DEPENDENCY_UP.labels("evidence-store", "redpanda_consumer").set(int(active is not None and active.consumer.connected))
+    if redis_ok:
+        from research_metrics import collect
+        try: collect(active.repository)
+        except Exception: log.warning("research capacity metrics unavailable")
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -1126,6 +1161,8 @@ def evaluate_strategy_outcomes(session_id: str, body: dict) -> dict:
     except TraceConflict:
         raise HTTPException(409, "Historical outcome conflict; review late evidence")
     except IndexCapacityError:
+        try: store.client.hincrby(HEALTH,"trace_capacity_rejections",1)
+        except Exception: pass
         raise HTTPException(503, "Trace index capacity unavailable")
     except IndexIntegrityError:
         raise HTTPException(409, "INDEX_INTEGRITY_ERROR")
@@ -1146,7 +1183,11 @@ def aggregate_strategy_outcomes(body: dict) -> dict:
                 index_epoch=body.get("index_epoch"))
         except IndexIntegrityError as exc:
             raise HTTPException(409, str(exc))
-        except (ValueError, TypeError, KeyError):
+        except ValueError as exc:
+            if str(exc)=="REPORT_LIMIT_EXCEEDED_USE_PAGINATED_EXPORT":
+                raise HTTPException(413,str(exc))
+            raise HTTPException(422,"Invalid indexed population scope")
+        except (TypeError, KeyError):
             raise HTTPException(422, "Invalid indexed population scope")
     from outcome_aggregation import aggregate
     identities = body.get("outcome_ids")
@@ -1226,8 +1267,65 @@ def store_strategy_trace(pair: dict) -> dict:
     except TraceConflict:
         raise HTTPException(409, "Trace integrity conflict")
     except IndexCapacityError:
+        try: store.client.hincrby(HEALTH,"trace_capacity_rejections",1)
+        except Exception: pass
         raise HTTPException(503, "Trace index capacity unavailable")
     except IndexIntegrityError:
         raise HTTPException(409, "INDEX_INTEGRITY_ERROR")
     except (ValueError, TypeError, KeyError):
         raise HTTPException(422, "Invalid strategy trace")
+
+
+@app.get("/evidence/research/status")
+def research_status():
+    from trace_index import index_keys, CAPACITY
+    repository=require_runtime().repository
+    return {"journal":repository.journal.status(),"trace_capacity":CAPACITY,
+        "trace_index_metadata":repository.client.hgetall(index_keys()[0]),
+        "integrity":repository.client.hgetall(HEALTH),
+        "collection_completeness":"NOT_VERIFIED",
+        "scope":"INDEXED_RETAINED_ONLY; capped projections are not the full journal"}
+
+
+@app.post("/evidence/research-journal/list")
+def list_research_journal(body:dict):
+    if set(body)-{"after","maximum","epoch","limit"}:raise HTTPException(422,"Invalid journal page")
+    try:return require_runtime().repository.journal.page(**body)
+    except (ValueError,TypeError):raise HTTPException(409,"Journal snapshot/integrity error")
+
+
+@app.get("/evidence/deployment-manifests")
+def deployment_manifests():
+    from deployment_registry import manifests
+    return {"manifests":manifests(require_runtime().redis)}
+
+
+@app.post("/evidence/research/session-projections/list")
+def list_session_projections(body:dict):
+    # Legacy lists are mutable/capped. This export is explicitly advisory and
+    # separate from the immutable journal admission boundary.
+    if set(body)-{"offset","maximum"}:raise HTTPException(422,"Invalid projection page")
+    offset=body.get("offset",0)
+    repository=require_runtime().repository
+    count=repository.client.zcard(SESSION_INDEX)
+    maximum=body.get("maximum",min(count,131072))
+    if type(offset) is not int or type(maximum) is not int or not 0<=offset<=maximum<=131072:
+        raise HTTPException(422,"Invalid projection bound")
+    ids=repository.client.zrevrange(SESSION_INDEX,offset,min(offset+7,maximum-1)) if offset<maximum else []
+    records=[repository.get_session(identity) for identity in ids]
+    return {"sessions":[r for r in records if r is not None],"missing_sessions":sum(r is None for r in records),
+        "after":min(offset+8,maximum),"maximum":maximum,"done":offset+8>=maximum,
+        "index_entries_at_read":count,"truncated":count>131072,
+        "consistency":"MUTABLE_RANK_PAGES; capped legacy projections, not a complete historical population"}
+
+
+@app.post("/evidence/research/export-ack")
+def acknowledge_research_export(request:Request,body:dict):
+    supplied=request.headers.get("X-Research-Operator-Key","")
+    expected=os.getenv("RESEARCH_OPERATOR_KEY","")
+    if not expected or not hmac.compare_digest(supplied,expected):raise HTTPException(403,"Operator authorization required")
+    if set(body)!={"export_id","manifest_sha256"} or not re.fullmatch(r"[0-9a-f]{64}",str(body.get("manifest_sha256",""))):raise HTTPException(422,"Invalid export receipt")
+    try:uuid.UUID(body["export_id"])
+    except (ValueError,TypeError,AttributeError):raise HTTPException(422,"Invalid export identity")
+    require_runtime().redis.hset(HEALTH,mapping={"export_last_success":str(time.time()),"export_id":body["export_id"],"export_manifest_sha256":body["manifest_sha256"]})
+    return {"acknowledged":True}

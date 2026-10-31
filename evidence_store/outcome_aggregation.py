@@ -62,7 +62,7 @@ def summarize(records):
 
 
 def validate(record):
-    if not isinstance(record,dict) or set(record)!=OUTCOME_FIELDS or type(record["schema_version"]) is not int or record["schema_version"]!=1:
+    if not isinstance(record,dict) or set(record)-{"traffic_origin","deployment_manifest_id"}!=OUTCOME_FIELDS or type(record["schema_version"]) is not int or record["schema_version"]!=1:
         raise ValueError("Invalid outcome schema")
     for field in ("outcome_id","decision_id","application_id"):
         if str(UUID(record[field])) != record[field]:
@@ -93,7 +93,7 @@ def aggregate(records, *, filters=None, generated_at=None):
     if not isinstance(records,list) or len(records)>1000:
         raise ValueError("Outcome manifest exceeds bound")
     filters={} if filters is None else filters
-    if not isinstance(filters,dict) or set(filters)-set(GROUP_FIELDS):
+    if not isinstance(filters,dict) or set(filters)-set(GROUP_FIELDS)-{"traffic_origin","deployment_manifest_id"}:
         raise ValueError("Unknown aggregate filter")
     for key,value in filters.items():
         if key.endswith("_version"):
@@ -109,7 +109,7 @@ def aggregate(records, *, filters=None, generated_at=None):
         if identity in unique and unique[identity]!=record:
             raise ValueError("Conflicting outcome identity")
         unique[identity]=record
-    selected=sorted((r for r in unique.values() if all(r[k]==v for k,v in filters.items())),key=lambda r:r["outcome_id"])
+    selected=sorted((r for r in unique.values() if all(r.get(k,"unknown" if k=="traffic_origin" else None)==v for k,v in filters.items())),key=lambda r:r["outcome_id"])
     groups={}
     for record in selected:
         groups.setdefault(tuple(record[k] for k in GROUP_FIELDS),[]).append(record)

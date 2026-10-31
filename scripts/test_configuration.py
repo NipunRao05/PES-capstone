@@ -65,12 +65,45 @@ class ConfigurationTests(unittest.TestCase):
         self.features['observability']['enabled']=False
         del self.env['DECEPTIVE_PRINCIPAL_HMAC_SECRET']
         del self.env['GRAFANA_ADMIN_PASSWORD']
+        self.env['PG_RUNTIME_PASSWORD']='private-pg-runtime-fixture-secret'
+        self.env['MYSQL_RUNTIME_PASSWORD']='private-mysql-runtime-fixture-secret'
         model=self.model()['compose.yaml']
         self.assertEqual(model['services']['pgproxy']['environment']['DECEPTIVE_PRINCIPAL_HMAC_SECRET'],'')
+
+    def test_runtime_identity_secrets_are_separate_and_stable(self):
+        first=self.load()[3]
+        second=self.load()[3]
+        self.assertEqual(first['PG_RUNTIME_PASSWORD'],second['PG_RUNTIME_PASSWORD'])
+        self.assertNotEqual(first['PG_RUNTIME_PASSWORD'],first['MYSQL_RUNTIME_PASSWORD'])
+        self.assertNotEqual(first['PG_RUNTIME_PASSWORD'],first['PG_DECOY_PASSWORD'])
+        model=self.model()['compose.yaml']
+        for name in ('pgproxy','mysqlproxy'):
+            self.assertEqual(model['services'][name]['depends_on']['backend-containment-init']['condition'],'service_completed_successfully')
 
     def test_short_hmac_is_rejected(self):
         self.env['DECEPTIVE_PRINCIPAL_HMAC_SECRET']=base64.b64encode(b'x'*31).decode()
         with self.assertRaisesRegex(c.ConfigError,'at least 32 bytes'): self.load()
+
+    def test_research_retention_capacity_and_init_command(self):
+        model=self.model()['compose.yaml']['services']
+        self.assertEqual(model['evidence-store']['environment']['TRACE_INDEX_CAPACITY'],'131072')
+        self.assertEqual(model['evidence-store']['environment']['EVENT_JOURNAL_CAPACITY'],'524288')
+        self.assertIn('--appendonly',model['redis-mitre']['command'])
+        self.assertIn('noeviction',model['redis-mitre']['command'])
+        command=model['redpanda-init']['command']
+        self.assertEqual(len(command),1)
+        self.assertIn('log_retention_ms 1209600000',command[0])
+        for name,port in [('pgproxy','15432'),('mysqlproxy','13306')]:
+            self.assertIn('127.0.0.1:'+port+':'+port,model[name]['ports'])
+
+    def test_undersized_research_capacity_rejected(self):
+        original=self.read_yaml
+        def read(name):
+            value=original(name)
+            if name=='config/deception.yaml':value['research']['trace_index_capacity']=1000
+            return value
+        with patch.object(c,'read_environment',return_value=self.env),patch.object(c,'read_yaml',side_effect=read):
+            with self.assertRaisesRegex(c.ConfigError,'headroom'):c.load()
 
     def test_string_boolean_is_rejected(self):
         self.features['analysis']['evidence_store']='false'

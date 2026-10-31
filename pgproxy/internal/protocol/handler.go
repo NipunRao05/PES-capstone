@@ -1,5 +1,5 @@
 // Package protocol implements Layer 2: ProtocolParser
-// Transparent PostgreSQL wire protocol proxy.
+// Contained PostgreSQL wire protocol proxy with independent frontend/backend auth.
 // Startup and auth are handled at raw-bytes level to avoid pgproto3 buffer
 // conflicts. The main proxy loop uses pgproto3 for structured message handling.
 package protocol
@@ -33,6 +33,7 @@ import (
 
 // Handler manages the protocol conversation between one client and one backend.
 type Handler struct {
+	trafficOrigin          string
 	queryCorrelation       interceptor.QueryCorrelation
 	virtual                bool
 	principalAuthToken     []byte
@@ -90,7 +91,7 @@ func (h *Handler) Run(ctx context.Context) error {
 			if h.pub != nil {
 				snap := h.sess.Snapshot()
 				h.pub.EmitSessionEnd(publisher.SessionEndEvent{
-					Context:     h.sess.Context,
+					Context:     h.evidenceContext(),
 					EventType:   "session_end",
 					SessionID:   snap.ID,
 					Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
@@ -107,16 +108,19 @@ func (h *Handler) Run(ctx context.Context) error {
 		}
 	}()
 
+	_ = h.clientConn.SetDeadline(time.Now().Add(15 * time.Second))
 	if err := h.handleStartup(); err != nil {
 		closeReason = "error"
 		return fmt.Errorf("startup: %w", err)
 	}
 
+	_ = h.clientConn.SetDeadline(time.Time{})
+	h.sess.Context = h.evidenceContext()
 	// Emit session_start after successful auth
 	if h.pub != nil && h.sess != nil {
 		snap := h.sess.Snapshot()
 		h.pub.EmitSessionStart(publisher.SessionStartEvent{
-			Context:    h.sess.Context,
+			Context:    h.evidenceContext(),
 			EventType:  "session_start",
 			SessionID:  snap.ID,
 			Timestamp:  snap.StartedAt.UTC().Format(time.RFC3339Nano),
@@ -146,17 +150,9 @@ func (h *Handler) Run(ctx context.Context) error {
 
 // ─── Startup ─────────────────────────────────────────────────────────────────
 //
-// The PostgreSQL startup sequence at the raw bytes level:
-//
-//  Client → Proxy:   [optional SSLRequest] then StartupMessage
-//  Proxy  → Client:  [optional 'N' for no-SSL] (we never upgrade client SSL)
-//  Proxy  → Backend: SSLRequest (we try SSL to backend; accept N or S)
-//  Proxy  → Backend: StartupMessage (forwarded verbatim)
-//  Backend→ Proxy:   auth messages (forwarded raw until ReadyForQuery)
-//  Proxy  → Client:  all auth messages forwarded raw
-//
-// Everything is handled at raw []byte level here so there is no state mismatch
-// between what we read manually and what pgproto3's ChunkReader buffered.
+// The frontend startup is parsed locally. Reserved virtual principals use the
+// registry; the seeded decoy uses independent SCRAM with a fixed backend identity.
+// Client startup options and authentication messages never reach the backend.
 
 const (
 	sslRequestCode    = 80877103 // 0x04D2162F — SSLRequest magic
@@ -222,158 +218,8 @@ func (h *Handler) handleStartup() error {
 		return h.authenticatePrincipal()
 	}
 
-	// ── Step 2: negotiate SSL with backend, then send startup verbatim ───────
-	if err := h.connectToBackend(startupRaw); err != nil {
-		return fmt.Errorf("backend connect: %w", err)
-	}
-
-	// ── Step 3: relay auth exchange raw until ReadyForQuery ──────────────────
-	if err := h.relayAuthRaw(); err != nil {
-		return fmt.Errorf("auth relay: %w", err)
-	}
-
-	// ── Step 4: init pgproto3 wrappers for the main proxy loop ───────────────
-	// Both connections are now in "normal query" mode. pgproto3 wrappers take
-	// over from here. No bytes have been left in any buffer by the raw exchange.
-	h.clientBackend = pgproto3.NewBackend(pgproto3.NewChunkReader(h.clientConn), h.clientConn)
-	h.backendFrontend = pgproto3.NewFrontend(pgproto3.NewChunkReader(h.backendConn), h.backendConn)
-
-	h.logger.Debug("session established")
-	return nil
+	return h.authenticateContained()
 }
-
-// connectToBackend forwards the client's original StartupMessage verbatim.
-// MVP intentionally uses plain backend TCP. Do not send SSLRequest unless this
-// function is extended to wrap h.backendConn with tls.Client after an 'S' reply.
-func (h *Handler) connectToBackend(startupRaw []byte) error {
-	if _, err := h.backendConn.Write(startupRaw); err != nil {
-		return fmt.Errorf("forward startup to backend: %w", err)
-	}
-	return nil
-}
-
-// relayAuthRaw forwards raw PostgreSQL messages backend→client and client→backend
-// until the backend sends ReadyForQuery ('Z' message type).
-//
-// PostgreSQL AuthenticationRequest messages all have type byte 'R' but differ
-// by a 4-byte sub-type in the payload:
-//
-//	 0  = AuthenticationOk          — no client response needed
-//	 2  = AuthenticationKerberos    — no client response needed
-//	 3  = AuthenticationCleartextPassword — client sends PasswordMessage
-//	 5  = AuthenticationMD5Password       — client sends PasswordMessage
-//	 7  = AuthenticationGSS               — client sends GSSResponse
-//	 8  = AuthenticationGSSContinue       — client sends GSSResponse
-//	 9  = AuthenticationSSPI              — client sends GSSResponse
-//	10  = AuthenticationSASL             — client sends SASLInitialResponse
-//	11  = AuthenticationSASLContinue     — client sends SASLResponse
-//	12  = AuthenticationSASLFinal        — NO client response (server final msg)
-//
-// We must only read a client response for sub-types that require one.
-func (h *Handler) relayAuthRaw() error {
-	for {
-		// Read one message from backend
-		msg, err := h.readRawPGMsg(h.backendConn)
-		if err != nil {
-			return fmt.Errorf("read backend auth msg: %w", err)
-		}
-
-		// Forward to client
-		if _, err := h.clientConn.Write(msg); err != nil {
-			return fmt.Errorf("forward auth msg to client: %w", err)
-		}
-
-		if len(msg) == 0 {
-			continue
-		}
-
-		msgType := msg[0]
-		h.logger.Debug("auth relay", "type", string([]byte{msgType}))
-
-		switch msgType {
-		case 'Z': // ReadyForQuery — auth succeeded
-			// Emit successful auth event
-			if h.pub != nil && h.sess != nil {
-				h.pub.EmitAuth(publisher.AuthEvent{
-					Context:    h.sess.Context,
-					EventType:  "auth",
-					SessionID:  h.sess.ID,
-					Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
-					ClientIP:   h.sess.ClientIP,
-					Username:   h.sess.Username,
-					Database:   h.sess.Database,
-					AuthMethod: h.authMethod,
-					Success:    true,
-				})
-			}
-			return nil
-
-		case 'E': // ErrorResponse — auth failed
-			// Emit failed auth event before returning error
-			if h.pub != nil && h.sess != nil {
-				h.pub.EmitAuth(publisher.AuthEvent{
-					Context:    h.sess.Context,
-					EventType:  "auth",
-					SessionID:  h.sess.ID,
-					Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
-					ClientIP:   h.sess.ClientIP,
-					Username:   h.sess.Username,
-					Database:   h.sess.Database,
-					AuthMethod: h.authMethod,
-					Success:    false,
-					FailReason: "backend rejected credentials",
-				})
-			}
-			return fmt.Errorf("backend rejected auth")
-
-		case 'R': // AuthenticationRequest — check sub-type
-			// msg layout: type(1) + length(4) + subtype(4) + optional payload
-			if len(msg) < 9 {
-				return fmt.Errorf("auth message too short: %d bytes", len(msg))
-			}
-			subtype := binary.BigEndian.Uint32(msg[5:9])
-			h.logger.Debug("auth subtype", "subtype", subtype)
-
-			// Capture auth method from first real auth challenge
-			if h.authMethod == "" || h.authMethod == "unknown" {
-				switch subtype {
-				case 3:
-					h.authMethod = "cleartext"
-				case 5:
-					h.authMethod = "md5"
-				case 10:
-					h.authMethod = "scram-sha-256"
-				case 7, 8, 9:
-					h.authMethod = "gss"
-				default:
-					h.authMethod = "unknown"
-				}
-			}
-
-			switch subtype {
-			case 0: // AuthenticationOk — no client response, keep looping for RFQ
-				continue
-			case 12: // AuthenticationSASLFinal — server sends final SCRAM msg, no client response
-				continue
-			case 2, 6: // Kerberos/SCM — rare, no client response
-				continue
-			default:
-				// All other sub-types require the client to send a response.
-				clientResp, err := h.readRawPGMsg(h.clientConn)
-				if err != nil {
-					return fmt.Errorf("read client auth response: %w", err)
-				}
-				if _, err := h.backendConn.Write(clientResp); err != nil {
-					return fmt.Errorf("forward client auth to backend: %w", err)
-				}
-			}
-
-			// 'S' = ParameterStatus, 'K' = BackendKeyData — forwarded above, keep looping
-		}
-	}
-}
-
-// ─── Raw message I/O ──────────────────────────────────────────────────────────
 
 // readRawMsg reads a complete PostgreSQL startup-format message (length-prefixed,
 // no type byte). Used only during startup before the type-byte protocol begins.
@@ -384,7 +230,7 @@ func (h *Handler) readRawMsg(conn net.Conn) ([]byte, error) {
 		return nil, err
 	}
 	length := int(binary.BigEndian.Uint32(lenBuf))
-	if length < 4 || length > 10*1024*1024 {
+	if length < 4 || length > maxClientPacketBytes {
 		return nil, fmt.Errorf("invalid startup message length: %d", length)
 	}
 	payload := make([]byte, length-4)
@@ -467,7 +313,7 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 		default:
 		}
 
-		clientMsg, err := h.clientBackend.Receive()
+		clientMsg, err := h.receiveClientMessage()
 		if err != nil {
 			if isEOF(err) {
 				return nil
@@ -519,6 +365,14 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 				}
 				continue
 			}
+		}
+		switch clientMsg.(type) {
+		case *pgproto3.Query, *pgproto3.Terminate, *pgproto3.Sync, *pgproto3.Flush:
+		default:
+			if err := h.rejectPrincipalExtended(); err != nil {
+				return err
+			}
+			continue
 		}
 		if q, ok := clientMsg.(*pgproto3.Query); ok && principal.AccountSQL(q.String) {
 			if err := h.servePrincipalQuery(ctx, q.String); err != nil {
@@ -634,6 +488,13 @@ func (h *Handler) proxyLoop(ctx context.Context) error {
 
 		if _, ok := clientMsg.(*pgproto3.Query); ok {
 			h.lastQueryOutcome = interceptor.QueryOutcome{Verified: true, Success: true, Authority: "backend", TransactionState: h.postgresTransactionState()}
+		}
+		if q, ok := clientMsg.(*pgproto3.Query); ok && !nativeSQLAllowed(q.String) {
+			if err := h.sendPostgresDeceptionError("42501", "permission denied for statement"); err != nil {
+				return err
+			}
+			h.emitSimpleOutcome(q.String, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.postgresTransactionState(), ErrorCode: "42501"})
+			continue
 		}
 		backendMsg := clientMsg
 		if q, ok := clientMsg.(*pgproto3.Query); ok && h.syntheticTxFailed && deceptionTransactionAction(q.String) == "commit" {
@@ -771,6 +632,9 @@ func (h *Handler) drainBackendResponses(ctx context.Context, trigger pgproto3.Fr
 			}
 		}
 
+		if failure, ok := msg.(*pgproto3.ErrorResponse); ok {
+			msg = &pgproto3.ErrorResponse{Severity: "ERROR", Code: failure.Code, Message: "statement could not be completed"}
+		}
 		if err := h.sendToClient(msg); err != nil {
 			return fmt.Errorf("send to client: %w", err)
 		}
@@ -838,7 +702,7 @@ func (h *Handler) handleCopyIn(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
-		msg, err := h.clientBackend.Receive()
+		msg, err := h.receiveClientMessage()
 		if err != nil {
 			return fmt.Errorf("copy-in receive: %w", err)
 		}
@@ -889,7 +753,7 @@ func (h *Handler) handleCopyBoth(ctx context.Context) error {
 				return
 			default:
 			}
-			msg, err := h.clientBackend.Receive()
+			msg, err := h.receiveClientMessage()
 			if err != nil {
 				errs <- fmt.Errorf("copy-both client recv: %w", err)
 				return
@@ -918,6 +782,8 @@ func (h *Handler) handleCopyBoth(ctx context.Context) error {
 // ─── Deception-engine integration ────────────────────────────────────────────
 
 type deceptionDecisionRequest struct {
+	TrafficOrigin        string `json:"traffic_origin"`
+	DeploymentManifestID string `json:"deployment_manifest_id,omitempty"`
 	interceptor.QueryCorrelation
 	SessionID        string  `json:"session_id"`
 	QueryNormalized  string  `json:"query_normalized"`
@@ -1094,6 +960,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	normalized := normalizeDeceptionSQL(sql)
 	req := deceptionDecisionRequest{
+		TrafficOrigin: h.evidenceContext().TrafficOrigin, DeploymentManifestID: h.evidenceContext().DeploymentManifestID,
 		QueryCorrelation: h.queryCorrelation,
 		SessionID:        safeSessionID(h),
 		QueryNormalized:  normalized,
@@ -1386,6 +1253,9 @@ func shouldConsultDeceptionEngine(sql string) bool {
 		return false
 	}
 
+	if q == "select current_user" || q == "select session_user" || q == "select current_schema()" {
+		return true
+	}
 	if strings.HasPrefix(q, "show ") {
 		return true
 	}
@@ -1734,6 +1604,8 @@ func (h *Handler) currentTxStatus() byte {
 // ─── Message send helpers ─────────────────────────────────────────────────────
 
 func (h *Handler) sendToClient(msg pgproto3.BackendMessage) error {
+	_ = h.clientConn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	defer h.clientConn.SetWriteDeadline(time.Time{})
 	buf, err := msg.Encode(nil)
 	if err != nil {
 		return fmt.Errorf("encode backend message: %w", err)

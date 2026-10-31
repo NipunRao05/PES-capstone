@@ -75,6 +75,21 @@ class MemoryRedis:
         self.sets = {}
         self.sorted_sets = {}
 
+    def hlen(self, key):
+        return len(self.hashes.get(key, {}))
+
+    def llen(self, key):
+        return len(self.lists.get(key, []))
+
+    def hincrby(self, key, field, increment):
+        value = int(self.hget(key, field) or 0) + increment
+        self.hset(key, field, value)
+        return value
+
+    def eval(self, script, count, *arguments):
+        from journal_model import evaluate
+        return evaluate(self, script, list(arguments[:count]), list(arguments[count:]))
+
     def pipeline(self, transaction=False):
         return self
 

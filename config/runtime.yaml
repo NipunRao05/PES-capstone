@@ -1,0 +1,39 @@
+# Canonical bounded runtime policy. No secrets or cloud resources.
+version: 1
+networks:
+  edge: 172.28.10.0/24
+  application: 172.28.20.0/24
+  state: 172.28.30.0/24
+  control: 172.28.35.0/24
+  observability: 172.28.40.0/24
+  sandbox: 172.28.50.0/24
+proxy_max_connections: 128
+redis_deception_maxmemory_mb: 512
+docker_log_max_size_mb: 10
+docker_log_max_files: 3
+deployment_data_root: /opt/honeypot-data
+deployment_min_free_gib: 20
+resources:
+  pgproxy: {memory_mb: 256, cpus: 1.0, pids: 128}
+  mysqlproxy: {memory_mb: 256, cpus: 1.0, pids: 128}
+  deception-engine: {memory_mb: 384, cpus: 1.0, pids: 100}
+  session-module: {memory_mb: 512, cpus: 1.0, pids: 128}
+  evidence-store: {memory_mb: 768, cpus: 1.0, pids: 128}
+  scaling-agent: {memory_mb: 128, cpus: 0.5, pids: 128}
+  metrics-bridge: {memory_mb: 128, cpus: 0.25, pids: 64}
+  redis-deception: {memory_mb: 1536, cpus: 1.0, pids: 64}
+  redis-mitre: {memory_mb: 4608, cpus: 1.0, pids: 64}
+  postgres: {memory_mb: 768, cpus: 1.0, pids: 128}
+  mysql: {memory_mb: 1024, cpus: 1.0, pids: 256}
+  redpanda: {memory_mb: 1536, cpus: 1.5, pids: 128}
+  redpanda-init: {memory_mb: 256, cpus: 0.5, pids: 64}
+  backend-containment-init: {memory_mb: 256, cpus: 0.5, pids: 64}
+  sandbox-replay-engine: {memory_mb: 384, cpus: 0.5, pids: 100}
+  sandbox-postgres: {memory_mb: 512, cpus: 0.5, pids: 100}
+  sandbox-mysql: {memory_mb: 1024, cpus: 0.75, pids: 256}
+  operator-gateway: {memory_mb: 64, cpus: 0.5, pids: 64}
+  prometheus: {memory_mb: 512, cpus: 1.0, pids: 128}
+  grafana: {memory_mb: 384, cpus: 0.5, pids: 128}
+  loki: {memory_mb: 512, cpus: 1.0, pids: 128}
+  promtail: {memory_mb: 256, cpus: 0.5, pids: 128}
+  json-exporter: {memory_mb: 64, cpus: 0.25, pids: 64}

@@ -8,9 +8,17 @@ import (
 )
 
 var operationalSecretPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|authorization)\b["']?\s*[:=]\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)`)
-var operationalSecrets = []string{
-	os.Getenv("DECEPTIVE_PRINCIPAL_HMAC_SECRET"), os.Getenv("POSTGRES_PASSWORD"),
-	os.Getenv("MYSQL_PASSWORD"), os.Getenv("MYSQL_ROOT_PASSWORD"),
+var operationalSecrets = loadOperationalSecrets()
+
+func loadOperationalSecrets() []string {
+	result := []string{}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && len(value) >= 4 && (strings.Contains(key, "PASSWORD") || strings.Contains(key, "SECRET") || strings.Contains(key, "KEY") || strings.Contains(key, "SALT")) {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func safeLogAttr(_ []string, a slog.Attr) slog.Attr {

@@ -1,75 +1,72 @@
+# Temporary pinned collector exception; static files require no Docker API/socket.
 server:
   http_listen_port: 9080
   grpc_listen_port: 0
-
 positions:
-  filename: /tmp/positions.yaml
-
+  filename: /positions/positions.yaml
 clients:
   - url: http://loki:3100/loki/api/v1/push
-
 scrape_configs:
-  - job_name: docker-containers
-    docker_sd_configs:
-      - host: unix:///var/run/docker.sock
-        refresh_interval: 5s
-        filters:
-          - name: status
-            values: ["running"]
-          - name: label
-            values: ["com.docker.compose.project=capstone-main"]
-
-    relabel_configs:
-      # Fallback service label for containers without Compose metadata
-      - source_labels: [__meta_docker_container_name]
-        regex: /(.*)
-        target_label: service
-
-      # Prefer a stable service label across Compose container replacements.
-      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
-        regex: (.+)
-        target_label: service
-
-      # Retain compose_service for existing dashboard selectors
-      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
-        target_label: compose_service
-
-      # Use compose project name
-      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
-        target_label: compose_project
-
-      # Container IDs stay in discovery metadata; never index them as Loki labels.
-
-      # Read Docker JSON log file for each discovered container.
-      - source_labels: [__meta_docker_container_id]
-        target_label: __path__
-        replacement: /var/lib/docker/containers/$1/$1-json.log
-
-    # Parse JSON logs from Go services (pgproxy, mysqlproxy, scaling-agent)
+  - job_name: docker-json-files
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: docker
+          __path__: /var/lib/docker/containers/*/*-json.log
     pipeline_stages:
-      - docker: {}
-
-      # Try to parse JSON log lines (Go services emit JSON via slog)
       - json:
           expressions:
-            level: level
-            msg: msg
-            session_id: session_id
-            technique_id: technique_id
-            risk_score: risk_score
-            replica_target: replica_target
-            reason: reason
-            client_ip: client_ip
-            username: username
-            database: database
-          source: output
-
-      # Normalize Go uppercase and Python lowercase levels without unbounded labels.
+            output: log
+            docker_time: time
+            service: 'attrs."com.docker.compose.service"'
+            compose_project: 'attrs."com.docker.compose.project"'
+            environment: 'attrs."honeypot.environment"'
+      - labels:
+          service:
+          compose_project:
+          environment:
+      - match:
+          selector: '{compose_project!="capstone-main"}'
+          action: drop
+      - match:
+          selector: '{service=~"pgproxy|mysqlproxy|scaling-agent|deception-engine|session-module|evidence-store|sandbox-replay-engine"}'
+          stages:
+            - json:
+                source: output
+                expressions:
+                  level: level
+      - match:
+          selector: '{service=~"postgres|sandbox-postgres"}'
+          stages:
+            - regex:
+                source: output
+                expression: '^\d{4}-\d{2}-\d{2} [0-9:.]+ [A-Z]+ \[\d+\] (?P<level>LOG|ERROR|WARNING|FATAL|PANIC|INFO|NOTICE|DEBUG):'
+      - match:
+          selector: '{service=~"mysql|sandbox-mysql"}'
+          stages:
+            - regex:
+                source: output
+                expression: '^\d{4}-\d{2}-\d{2}T[0-9:.]+Z \d+ \[(?P<level>System|Note|Warning|ERROR)\] \[MY-\d+\]'
+      - match:
+          selector: '{service="redpanda"}'
+          stages:
+            - regex:
+                source: output
+                expression: '^(?P<level>TRACE|DEBUG|INFO|WARN|ERROR)\s+\d{4}-\d{2}-\d{2}'
+      - match:
+          selector: '{service=~"redis-deception|redis-mitre"}'
+          stages:
+            - regex:
+                source: output
+                expression: '^\d+:[A-Z] \d{2} [A-Za-z]{3} \d{4} [0-9:.]+ (?P<level>[*#.\-]) '
       - template:
           source: level
-          template: '{{ $v := ToLower .Value }}{{ if or (eq $v "debug") (eq $v "info") (eq $v "warning") (eq $v "warn") (eq $v "error") (eq $v "critical") }}{{ $v }}{{ else }}unknown{{ end }}'
-
-      # Promote level to a Loki label for fast filtering
+          template: '{{ $v := ToLower .Value }}{{ if or (eq $v "info") (eq $v "log") (eq $v "notice") (eq $v "system") (eq $v "note") (eq $v "*") }}info{{ else if or (eq $v "warn") (eq $v "warning") (eq $v "#") }}warning{{ else if eq $v "error" }}error{{ else if or (eq $v "critical") (eq $v "fatal") (eq $v "panic") }}critical{{ else if or (eq $v "debug") (eq $v "trace") (eq $v ".") (eq $v "-") }}debug{{ else }}unknown{{ end }}'
       - labels:
           level:
-      # Log verbosity is controlled by config/observability.yaml at the producer.
+      - timestamp:
+          source: docker_time
+          format: RFC3339Nano
+      - output:
+          source: output
+      - labeldrop: [filename]

@@ -271,3 +271,31 @@ groups:
           component: deception-engine
         annotations:
           summary: "Deception decision requests are failing"
+
+  - name: research-evidence-preservation
+    rules:
+      - alert: ResearchTraceCapacityWarning
+        expr: honeypot_trace_index_utilization > 0.8
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: "Research trace index above 80 percent capacity; export and review workload"}
+      - alert: ResearchJournalCapacityWarning
+        expr: honeypot_research_journal_entries / honeypot_research_journal_capacity > 0.8
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: "Research journal above 80 percent capacity"}
+      - alert: ResearchRedisPersistenceUnhealthy
+        expr: honeypot_evidence_redis_persistence_ok != 1
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "Research Redis AOF persistence unhealthy"}
+      - alert: ResearchDailyExportOverdue
+        expr: honeypot_evidence_export_age_seconds > 86400 or honeypot_evidence_export_age_seconds < 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "No validated research export in the last day"}
+      - alert: ResearchTraceDeliveryBacklog
+        expr: honeypot_trace_outbox_oldest_pending_age_seconds > 300 or honeypot_trace_outbox_terminal > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: "Research trace delivery delayed or terminally failed"}

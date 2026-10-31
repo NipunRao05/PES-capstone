@@ -21,15 +21,16 @@ func TestQueryOutcomeMetadata(t *testing.T) {
 		name, sql, mode, authority, code, state, strategy, profile string
 		success, trap, unavailable, policy, rowError               bool
 	}{
-		{name: "backend_success", sql: "SELECT * FROM ordinary", mode: "passthrough", authority: "backend", success: true},
-		{name: "backend_error", sql: "SELECT * FROM ordinary", mode: "passthrough", authority: "backend", code: "mysql_1146", state: "42S02"},
-		{name: "backend_row_error", sql: "SELECT * FROM ordinary", mode: "passthrough", authority: "backend", code: "mysql_1146", state: "42S02", rowError: true},
+		{name: "backend_success", sql: "SELECT 1", mode: "passthrough", authority: "backend", success: true},
+		{name: "backend_error", sql: "SELECT 1", mode: "passthrough", authority: "backend", code: "mysql_1146", state: "42S02"},
+		{name: "backend_row_error", sql: "SELECT 1", mode: "passthrough", authority: "backend", code: "mysql_1146", state: "42S02", rowError: true},
 		{name: "unsupported_passthrough", sql: "SELECT 1", authority: "backend", success: true},
 		{name: "deception_fake", sql: "SELECT * FROM employees", mode: "fake", authority: "deception", success: true, strategy: "D1", profile: "fake_table_data"},
 		{name: "deception_block", sql: "SELECT * FROM employees", mode: "block", authority: "deception", code: "mysql_1146", state: "42S02", strategy: "D1", profile: "fake_schema"},
 		{name: "deception_default_error", sql: "SELECT * FROM employees", mode: "block", authority: "deception", code: "mysql_1064", state: "42000"},
 		{name: "trap", sql: "SELECT * FROM api_keys_backup", mode: "fake", authority: "deception", success: true, strategy: "D3", profile: "high_value_target", trap: true},
-		{name: "unavailable_fallback", sql: "SELECT * FROM ordinary", authority: "backend", success: true, unavailable: true},
+		{name: "unavailable_fallback", sql: "SELECT 1", authority: "backend", success: true, unavailable: true},
+		{name: "unsafe_engine_failure", sql: "SELECT LOAD_FILE('never-read') FROM ordinary", authority: "policy", code: "mysql_1142", state: "42000", unavailable: true},
 		{name: "policy_block", sql: "SELECT 1", authority: "policy", code: "mysql_1045", state: "28000", policy: true},
 	}
 	for _, tc := range cases {

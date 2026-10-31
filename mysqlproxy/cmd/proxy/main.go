@@ -20,6 +20,8 @@ func main() {
 	slog.SetDefault(logger)
 
 	cfg := connection.Config{
+		IdleTimeout:         getDuration("CLIENT_IDLE_TIMEOUT", 5*time.Minute),
+		OperatorListenAddr:  os.Getenv("OPERATOR_LISTEN_ADDR"),
 		ListenAddr:          getEnv("PROXY_LISTEN_ADDR", "0.0.0.0:3307"),
 		BackendAddr:         getEnv("MYSQL_BACKEND_ADDR", "localhost:3306"),
 		HTTPAddr:            getEnv("HTTP_ADDR", "0.0.0.0:9091"),

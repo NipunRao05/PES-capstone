@@ -35,8 +35,9 @@ import (
 
 // Config holds all proxy configuration.
 type Config struct {
-	ListenAddr  string
-	BackendAddr string
+	OperatorListenAddr string
+	ListenAddr         string
+	BackendAddr        string
 
 	MaxConnections int
 	DialTimeout    time.Duration
@@ -145,6 +146,29 @@ func (m *Manager) ListenAndServe(ctx context.Context) error {
 		return fmt.Errorf("listen %s: %w", m.cfg.ListenAddr, err)
 	}
 	m.listener = ln
+	if m.cfg.OperatorListenAddr != "" {
+		operator, err := net.Listen("tcp", m.cfg.OperatorListenAddr)
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		go func() { <-ctx.Done(); operator.Close() }()
+		go func() {
+			for {
+				c, err := operator.Accept()
+				if err != nil {
+					return
+				}
+				if !m.admitConnection() {
+					c.Close()
+					continue
+				}
+				m.wg.Add(1)
+				go m.handleOriginConnection(ctx, c, "operator_validation")
+			}
+		}()
+	}
+
 	m.logger.Info("mysql proxy listening", "addr", ln.Addr())
 
 	// Fix 9: HTTP health + metrics server
@@ -175,8 +199,7 @@ func (m *Manager) ListenAndServe(ctx context.Context) error {
 			}
 		}
 
-		if m.metrics.ActiveConnections.Load() >= int64(m.cfg.MaxConnections) {
-			m.metrics.RejectedConns.Add(1)
+		if !m.admitConnection() {
 			m.logger.Warn("max connections reached, rejecting", "max", m.cfg.MaxConnections)
 			// For MySQL, send an ERR packet before closing so the client gets
 			// a proper message instead of a silent connection reset.
@@ -185,11 +208,20 @@ func (m *Manager) ListenAndServe(ctx context.Context) error {
 			continue
 		}
 
-		m.metrics.ActiveConnections.Add(1)
-		m.metrics.TotalConnections.Add(1)
 		m.wg.Add(1)
 		go m.handleConnection(ctx, clientConn)
 	}
+}
+
+// admitConnection atomically shares one bound across ordinary/operator listeners.
+func (m *Manager) admitConnection() bool {
+	if m.metrics.ActiveConnections.Add(1) > int64(m.cfg.MaxConnections) {
+		m.metrics.ActiveConnections.Add(-1)
+		m.metrics.RejectedConns.Add(1)
+		return false
+	}
+	m.metrics.TotalConnections.Add(1)
+	return true
 }
 
 // gracefulShutdown waits up to ShutdownTimeout for in-flight connections. Fix 6.
@@ -224,6 +256,9 @@ func (m *Manager) gracefulShutdown() error {
 
 // handleConnection manages one client connection.
 func (m *Manager) handleConnection(ctx context.Context, clientConn net.Conn) {
+	m.handleOriginConnection(ctx, clientConn, "research_external")
+}
+func (m *Manager) handleOriginConnection(ctx context.Context, clientConn net.Conn, origin string) {
 	defer func() {
 		clientConn.Close()
 		m.metrics.ActiveConnections.Add(-1)
@@ -257,6 +292,7 @@ func (m *Manager) handleConnection(ctx context.Context, clientConn net.Conn) {
 
 	handler := protocol.NewHandler(clientConn, backendConn, logger, m.cfg.BackendAddr, m.cfg.IdleTimeout, m.intercept, m.pub)
 
+	handler.SetTrafficOrigin(origin)
 	if err := handler.Run(ctx); err != nil {
 		if !isNormalDisconnect(err) {
 			// Fix 10: enriched error log with all available session context

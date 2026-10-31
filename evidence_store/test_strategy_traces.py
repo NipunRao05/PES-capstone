@@ -17,6 +17,9 @@ class RedisDouble:
         self.now = 1000000
         self.lock = threading.Lock()
 
+    def hgetall(self, key):
+        return dict(self.hashes.get(key, {}))
+
     def get(self, key):
         if key in self.expires and self.expires[key] <= self.now:
             self.values.pop(key, None)

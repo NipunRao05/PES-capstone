@@ -16,6 +16,8 @@ import (
 func TestOrdinarySessionLifecycle(t *testing.T) {
 	for _, name := range []string{"quit", "abrupt_disconnect", "idle_timeout", "wrong_password", "unknown_user", "disconnect_during_auth"} {
 		t.Run(name, func(t *testing.T) {
+			t.Setenv("MYSQL_DECOY_PASSWORD", "fixture-decoy-password")
+			t.Setenv("MYSQL_RUNTIME_PASSWORD", "fixture-runtime-password")
 			events := make(chan string, 8)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				events <- r.URL.Path
@@ -66,12 +68,18 @@ func TestOrdinarySessionLifecycle(t *testing.T) {
 			} else {
 				handshake := make([]byte, 32)
 				handshake[0], handshake[1], handshake[2] = 0x08, 0x82, 0x08
-				username := "seeded"
+				username := "proxyuser"
 				if name == "unknown_user" {
 					username = "unknown"
 				}
 				handshake = append(handshake, []byte(username)...)
-				handshake = append(handshake, 0, 0)
+				handshake = append(handshake, 0)
+				proof := scrambleSHA1("fixture-decoy-password", []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
+				if name == "wrong_password" {
+					proof[0] ^= 1
+				}
+				handshake = append(handshake, byte(len(proof)))
+				handshake = append(handshake, proof...)
 				handshake = append(handshake, []byte("testdb\x00")...)
 				if err := peer.sendPacket(client, handshake, 1); err != nil {
 					t.Fatal(err)

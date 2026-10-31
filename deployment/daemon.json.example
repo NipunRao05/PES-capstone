@@ -1,0 +1,6 @@
+{
+  "data-root": "/opt/honeypot-data/docker",
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "10m", "max-file": "3"},
+  "live-restore": false
+}

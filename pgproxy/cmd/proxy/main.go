@@ -23,9 +23,10 @@ func main() {
 	slog.SetDefault(logger)
 
 	cfg := connection.Config{
-		ListenAddr:  getEnv("PROXY_LISTEN_ADDR", "0.0.0.0:5432"),
-		BackendAddr: getEnv("PG_BACKEND_ADDR", "localhost:5432"),
-		HTTPAddr:    getEnv("HTTP_ADDR", "0.0.0.0:9090"), // Fix 9: health+metrics
+		OperatorListenAddr: os.Getenv("OPERATOR_LISTEN_ADDR"),
+		ListenAddr:         getEnv("PROXY_LISTEN_ADDR", "0.0.0.0:5432"),
+		BackendAddr:        getEnv("PG_BACKEND_ADDR", "localhost:5432"),
+		HTTPAddr:           getEnv("HTTP_ADDR", "0.0.0.0:9090"), // Fix 9: health+metrics
 
 		// Fix 6: graceful shutdown timeout
 		ShutdownTimeout: getDuration("SHUTDOWN_TIMEOUT", 30*time.Second),

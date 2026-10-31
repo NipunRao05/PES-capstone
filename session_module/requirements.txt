@@ -1,7 +1,7 @@
+-c requirements.lock
 kafka-python==2.0.2
 python-snappy==0.7.3
-numpy
-scikit-learn
-prometheus-client
-pytest
+numpy==2.4.6
+scikit-learn==1.9.1
+prometheus-client==0.26.0
 redis==5.0.1

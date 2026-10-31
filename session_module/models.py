@@ -19,6 +19,8 @@ class Event:
     session_id: str = ""   # proxy session_id when available; fallback uses source_ip/db_user
     protocol: str = ""     # "mysql" | "postgres" when available
     database: str = ""
+    traffic_origin: str = "unknown"
+    deployment_manifest_id: str = ""
 
 
 # ===============================
@@ -79,6 +81,8 @@ class SessionOutput:
     query_count: int
     protocol: str = ""
     database: str = ""
+    traffic_origin: str = "unknown"
+    deployment_manifest_id: str = ""
 
     cluster_id: Optional[int] = None
     persona: Optional[str] = None

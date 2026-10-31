@@ -6,6 +6,28 @@ name: ${HONEYPOT_CONFIGURED:?Use python scripts/honeypot.py compose up -d --buil
 
 services:
 
+  backend-containment-init:
+    build:
+      context: ./sandbox_replay
+    entrypoint: ["python", "/backend_containment.py"]
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}"
+      PG_RUNTIME_PASSWORD: "${PG_RUNTIME_PASSWORD:?canonical launcher required}"
+      MYSQL_RUNTIME_PASSWORD: "${MYSQL_RUNTIME_PASSWORD:?canonical launcher required}"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./scripts/backend_containment.py:/backend_containment.py:ro
+    depends_on:
+      postgres:
+        condition: service_started
+      mysql:
+        condition: service_started
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
   evidence-store:
     build:
       context: ./evidence_store
@@ -381,7 +403,11 @@ services:
       KAFKA_SESSION_TOPIC: "pg-session-events"
       DECEPTION_ENGINE_URL: "http://deception-engine:8001/decide"
       DECEPTIVE_PRINCIPAL_HMAC_SECRET: ${DECEPTIVE_PRINCIPAL_HMAC_SECRET:-}
+      PG_RUNTIME_PASSWORD: "${PG_RUNTIME_PASSWORD:?canonical launcher required}"
+      PG_DECOY_PASSWORD: "${PG_DECOY_PASSWORD:?canonical launcher required}"
     depends_on:
+      backend-containment-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_started
       redpanda-init:
@@ -409,7 +435,12 @@ services:
       KAFKA_SESSION_TOPIC: "mysql-session-events"
       DECEPTION_ENGINE_URL: "http://deception-engine:8001/decide"
       DECEPTIVE_PRINCIPAL_HMAC_SECRET: ${DECEPTIVE_PRINCIPAL_HMAC_SECRET:-}
+      MYSQL_RUNTIME_PASSWORD: "${MYSQL_RUNTIME_PASSWORD:?canonical launcher required}"
+      MYSQL_DECOY_PASSWORD: "${MYSQL_DECOY_PASSWORD:?canonical launcher required}"
+      MYSQL_DECOY_ROOT_PASSWORD: "${MYSQL_DECOY_ROOT_PASSWORD:?canonical launcher required}"
     depends_on:
+      backend-containment-init:
+        condition: service_completed_successfully
       mysql:
         condition: service_started
       redpanda-init:
@@ -481,8 +512,8 @@ services:
       DECEPTION_HOSTNAME: "db-prod-02"
       DECEPTION_DATADIR: "/var/lib/mysql"
       DECEPTION_MYSQL_VERSION_COMMENT: "MySQL Community Server - GPL"
-      DECEPTION_MYSQL_VERSION: "8.0.45"
-      DECEPTION_POSTGRES_SERVER_VERSION: "16.13"
+      DECEPTION_MYSQL_VERSION: "8.0.46"
+      DECEPTION_POSTGRES_SERVER_VERSION: "16.15"
       DECEPTION_DATABASE: "testdb"
       DECEPTION_SCHEMA: "public"
       DECEPTION_PORT: "3306"

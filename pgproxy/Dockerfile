@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS builder
 WORKDIR /app
 
 # ── Dependency layer ──────────────────────────────────────────────────────────
@@ -13,8 +13,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
       ./cmd/proxy
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
-FROM alpine:3.19
-RUN apk add --no-cache ca-certificates tzdata wget
+FROM alpine:3.23@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63
+RUN apk add --no-cache iptables=1.8.11-r1 iproute2=6.17.0-r0 util-linux=2.41.6-r1 ca-certificates=20261020-r0 tzdata=2026e-r0 wget=1.25.0-r2
 WORKDIR /app
 COPY --from=builder /app/pgproxy .
 EXPOSE 5432 9090

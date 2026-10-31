@@ -18,7 +18,7 @@ class RedisModel:
     def zrangebyscore(self, key, low, high, start, num):
         return sorted([i for i, score in self.due.items() if score <= high], key=self.due.get)[start:start+num]
     def eval(self, script, count, *args):
-        a = args[3:]
+        a = args[count:]
         if script in {PRUNE, ENQUEUE}:
             expired = [i for i, when in self.expiry.items() if when <= a[0]]
             for i in expired:

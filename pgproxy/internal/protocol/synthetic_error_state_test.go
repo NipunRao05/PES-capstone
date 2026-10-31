@@ -106,13 +106,13 @@ func newErrorStateFixture(t *testing.T) *errorStateFixture {
 					tag, f.nativeCommitted = "COMMIT", f.nativePending
 				}
 				status, f.nativePending = 'I', false
-			case "select native_error":
+			case "select 999":
 				status, code = 'E', "42P01"
 			default:
 				if status == 'E' {
 					code = "25P02"
-				} else if strings.HasPrefix(sql, "update ordinary") {
-					f.nativePending, tag = true, "UPDATE 1"
+				} else if sql == "select 2" {
+					f.nativePending, tag = true, "SELECT 1"
 				}
 			}
 			f.mu.Unlock()
@@ -185,7 +185,7 @@ func TestSyntheticErrorStateOutsideTransaction(t *testing.T) {
 func TestSyntheticSuccessCommitsHealthyMixedTransaction(t *testing.T) {
 	f := newErrorStateFixture(t)
 	f.query(t, "begin", 'T', "", "BEGIN")
-	f.query(t, "update ordinary set id=1", 'T', "", "UPDATE 1")
+	f.query(t, "select 2", 'T', "", "SELECT 1")
 	f.query(t, "update employees set salary=999 where id=1", 'T', "", "UPDATE 1")
 	f.query(t, "commit", 'I', "", "COMMIT")
 	f.mu.Lock()
@@ -206,7 +206,7 @@ func TestPolicyExtendedErrorDiscardsThroughSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if failure, ok := msg.(*pgproto3.ErrorResponse); !ok || failure.Code != "42501" {
+	if failure, ok := msg.(*pgproto3.ErrorResponse); !ok || failure.Code != "0A000" {
 		t.Fatalf("unexpected %T", msg)
 	}
 	sent := make(chan error, 1)
@@ -236,7 +236,7 @@ func TestSyntheticErrorAbortSequenceMatrix(t *testing.T) {
 		t.Run(ending, func(t *testing.T) {
 			f := newErrorStateFixture(t)
 			f.query(t, "begin", 'T', "", "BEGIN")
-			f.query(t, "update ordinary set id=1", 'T', "", "UPDATE 1")
+			f.query(t, "select 2", 'T', "", "SELECT 1")
 			f.query(t, "update employees set salary=999 where id=1", 'T', "", "UPDATE 1")
 			f.query(t, "select invalid from employees", 'E', "42601", "")
 			f.query(t, "select id from employees", 'E', "25P02", "")
@@ -263,7 +263,7 @@ func TestBackendErrorBlocksSyntheticThenRollsBackOverlay(t *testing.T) {
 	f := newErrorStateFixture(t)
 	f.query(t, "begin", 'T', "", "BEGIN")
 	f.query(t, "update employees set salary=999 where id=1", 'T', "", "UPDATE 1")
-	f.query(t, "select native_error", 'E', "42P01", "")
+	f.query(t, "select 999", 'E', "42P01", "")
 	f.query(t, "select id from employees", 'E', "25P02", "")
 	f.query(t, "commit", 'I', "", "ROLLBACK")
 	f.mu.Lock()

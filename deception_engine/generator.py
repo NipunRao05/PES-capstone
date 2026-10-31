@@ -36,6 +36,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from faker import Faker
+from base_world import HR_TABLE_COUNTS, REFERENCE_DATE
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ FAKE_DATA_SEED = os.environ.get("DECEPTION_FAKE_DATA_SEED", "").strip()
 # Fixed anchor keeps generated date/time values deterministic across days.
 # Using datetime.now() would make the same session/table drift over time and
 # break consistency probes that revisit fake rows after a restart.
-FAKE_TIME_ANCHOR_DEFAULT = "2024-01-01T12:00:00"
+FAKE_TIME_ANCHOR_DEFAULT = REFERENCE_DATE
 FAKE_TIME_ANCHOR_RAW = os.environ.get("DECEPTION_FAKE_TIME_ANCHOR", FAKE_TIME_ANCHOR_DEFAULT)
 
 
@@ -562,6 +563,9 @@ class DataGenerator:
         seed = session_seed(session_id, table_name)
         rng = random.Random(seed)
 
+        if table_name in {"sessions", "payroll", "api_keys"} and pk_pool is None:
+            pk_pool = {"employees.id": list(range(1, HR_TABLE_COUNTS["employees"] + 1))}
+
         # Pre-compute PK sequence for this table so row[offset] is stable
         pk_col = self._pk_column(columns)
         pk_start = 1
@@ -589,6 +593,8 @@ class DataGenerator:
                 else:
                     row[name] = self._generate_value(col, row_rng, row_fake)
 
+            if table_name == "payroll":
+                row["employee_id"] = row_idx + 1
             self._enforce_temporal_integrity(table_name, row, row_rng)
 
             rows.append(row)
@@ -633,6 +639,9 @@ class DataGenerator:
 
         if row_count == 0:
             return 0
+
+        if table_name in HR_TABLE_COUNTS:
+            return row_count  # HR v1 freezes nominal population sizes.
 
         seed = session_seed(session_id, table_name)
         rng = random.Random(seed)
@@ -687,7 +696,7 @@ class DataGenerator:
         elif col_type == "user_agent":
             return fake.user_agent()
         elif col_type == "bank":
-            return fake.company() + " Bank"
+            return "Company Internal Payroll Clearing" if col.get("synthetic_convention")=="hr_v1" else fake.company() + " Bank"
         elif col_type == "uuid":
             return str(fake.uuid4())
 
@@ -740,9 +749,9 @@ class DataGenerator:
             return f"$2b$12${encoded}"
         elif col_type == "password":
             words = [fake.word(), fake.word()]
-            return "DECOY_" + "".join(words).capitalize() + str(rng.randint(10, 99)) + "!"
+            return ("" if col.get("synthetic_convention")=="hr_v1" else "DECOY_") + "".join(words).capitalize() + str(rng.randint(10, 99)) + "!"
         elif col_type == "api_key":
-            prefix = rng.choice(["HONEYPOT_SK_LIVE_FAKE_", "HONEYPOT_PK_LIVE_FAKE_", "DECOY_API_KEY_", "DECOY_TOKEN_"])
+            prefix = "hrv1_" if col.get("synthetic_convention")=="hr_v1" else rng.choice(["HONEYPOT_SK_LIVE_FAKE_", "HONEYPOT_PK_LIVE_FAKE_", "DECOY_API_KEY_", "DECOY_TOKEN_"])
             body = "".join(rng.choices(string.ascii_letters + string.digits, k=32))
             return prefix + body
         elif col_type == "aws_access_key":
@@ -750,11 +759,11 @@ class DataGenerator:
             return "HONEYPOT_AKIA_FAKE_" + body
         elif col_type == "iban":
             body = "".join(rng.choices(string.ascii_uppercase + string.digits, k=18))
-            return "DECOY_IBAN_" + body
+            return ("ZZ00" if col.get("synthetic_convention")=="hr_v1" else "DECOY_IBAN_") + body
         elif col_type == "routing":
-            return "DECOY_ROUTING_" + str(rng.randint(100000000, 999999999))
+            return "000" + str(rng.randint(100000, 999999)) if col.get("synthetic_convention")=="hr_v1" else "DECOY_ROUTING_" + str(rng.randint(100000000,999999999))
         elif col_type == "ssn":
-            return "DECOY_SSN_000-00-" + str(rng.randint(1000, 9999))
+            return ("000-00-" if col.get("synthetic_convention")=="hr_v1" else "DECOY_SSN_000-00-") + str(rng.randint(1000, 9999))
         elif col_type == "credit_card_number":
             return "DECOY_CC_411111111111" + str(rng.randint(1000, 9999))
         elif col_type == "credit_card_expire":

@@ -7,7 +7,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-SECRET_KEY = re.compile(r"password|passwd|pwd|secret|token|api[_-]?key|credential|verifier|scram", re.I)
+SECRET_KEY = re.compile(r"password|passwd|pwd|secret|token|api[_-]?key|credential|verifier|scram|(?:^|_)key|salt", re.I)
 ASSIGNMENT = re.compile(r"""(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|authorization)\b["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)""")
 SQL = re.compile(r"(?is)\b(select|insert\s+into|update\s+\S+\s+set|delete\s+from|create\s+(?:user|role)|alter\s+(?:user|role)|identified\s+by)\b")
 VERIFIER = re.compile(r"(?i)SCRAM-SHA-256\$\S+")

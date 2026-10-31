@@ -1,4 +1,213 @@
+# Pre-Deployment Hardening Pass 2 — 2026-10-31
+
+COMPLETE for the bounded local research-evidence contract. Not an Azure deployment,
+seven-day soak, worst-case sizing, disk-loss/failover or scientific effectiveness claim.
+Full sizing/identity contract: RESEARCH_DATASET_CONTRACT.md. Migration/export/runtime
+commands, evidence and limits: EVIDENCE_DURABILITY_AND_EXPORT.md.
+
+- Branch feature/config-observability, HEAD 0fd44e6ca10525b75b5ef5fb4331f2efe6aa4a6d
+  unchanged. Starting 27 modified/17 untracked Pass 1 files preserved. All work remains
+  unstaged/uncommitted. No branch/stage/commit/push, actual .env edit, volume deletion,
+  credential reset, Azure/Terraform/public exposure or adaptive feature enablement.
+- Canonical research policy: expected10 queries/min for7days;30-day evidence TTL;
+  trace131072/kind; immutable event journal524288; outbox32768/48h/500attempts;
+  Evidence Redis2048MiB noeviction; Redpanda14days. Config rejects insufficient planned
+  trace headroom/journal count or retry schedule beyond retention. Higher60/600 rates
+  are explicitly overload scenarios, not supported baseline workload claims.
+- Actual stored fixture medians/max bytes: current decision1079/1079(n132), app520/520
+  (n132), outcome1397/1397(n1); mixed query858/2018(n547), full sanitized session
+  projection8849/44635(n128), principal/link event562/705(n102). Hash-only session
+  estimates were not used as complete session evidence.
+- Private1000-query/100-session/1000-outcome/100-principal/1400-journal fixture measured
+  Redis growth10483464bytes (10483.464/query),8.075206s. Repeat10035576bytes,8.510572s;
+  repeat additionally admitted1001 records of EACH trace kind, proving removal of the
+  old1000 admission limit. Only exact private keys cleaned (repeat3418). Extrapolated
+  target~1.06GB before headroom;2GiB allocator cap excludes RSS/COW/AOF/other services.
+  Docker observed~16.7GB memory; local filesystem free983837576KiB, not cloud quotas.
+- New immutable sanitized journal precedes existing capped projections/dedup. Capacity
+  rejects/backpressures, no live evidence eviction. Consumer auto-commit disabled;
+  per-message partition commit follows successful ingestion. Installed kafka-python
+  2.3.0 required third leader_epoch=-1 argument; reproduced and repaired. Projection
+  rollovers/malformed messages/capacity failures persist bounded diagnostics. Retained
+  coverage ratios remain scoped; collection_completeness stays NOT_VERIFIED. Atomic
+  online report stays1000/kind and fails413 above limit; paginated export scales further.
+- Safely enabled CONFIG SET appendfsync everysec/appendonly yes on POPULATED running
+  redis-mitre BEFORE recreation. Initial rewrite completed/healthy; existing dump.rdb
+  and new AOF files verified on existing capstone-main_redismitre volume. Canonical
+  command now persists matching AOF/everysec/noeviction/2GiB. No flush/down-v/newvolume.
+- Real restart harness wrote265 private traces +132 journal events; restarted ONLY
+  redis-mitre. All records/index epoch/sequence/counter survived; pages128+4, replay
+  unchanged, new write passed; SHA256 of328 pre-existing immutable trace strings
+  unchanged. Admission0.282362s; restart+aftercheck2.014923s. Exact280 private keys
+  removed. No principal/world keys touched. Approx1s crash-write window remains;
+  disk loss/failover/full-capacity performance NOT VERIFIED.
+- New export CLI: new-directory-only, checksummed JSONL/events/traces/full legacy
+  projections/journal-session summaries/nonsecret manifests. Separate immutable
+  trace/journal admission high-waters; expiry/loss diagnostics, never atomic across
+  pipeline. Legacy projection pages explicitly mutable/capped/advisory; no backfill.
+  Re-read checks hashes/counts/IDs/linkage/manifest/image digests; no live-store import.
+  Nulls/missing outcomes retained. Daily export workflow documented; authenticated
+  receipt updates last-success metric. No scheduler/cloud upload/automatic deletion.
+- Generated ignored deployment/run identity plus per-up launch manifest records UTC,
+  experiment/Git/source hash map/config digest/world/registry/scoring and observed
+  service image IDs. Secret fields use constant placeholders; secret rotation alone
+  excluded from config digest. Image inventory is separately digested supplement.
+  RO manifest bind, bounded256 Redis registry. Old records remain unknown/immutable.
+- Trusted origin: normal proxy listener research_external; private PG15432/MySQL13306
+  operator_validation; unmarked/history unknown. Private host publications loopback.
+  Listener overwrites inherited context; SQL/application_name/login/IP cannot choose
+  operator origin. Internal Docker/HTTP/Kafka producers remain trusted; public access
+  isolation still deployment work. All controlled new live requests used private
+  listeners; old fixtures were not relabeled as external.
+- Origin/manifest propagate event->decision->application->outcome->export; store rejects
+  cross-origin linkage. Both live PG/MySQL checks passed, daemon outbox ACK, no private
+  SQL metadata. Two closed fixture outcomes persisted with null features and matching
+  metadata. Final repeat IDs saved .runtime/research-final-{pg,mysql}.json.
+- All-origin export00679f72-e211-4c5a-b825-2f859cd0dd21 re-read valid:163decisions,
+  163apps,4outcomes,45events,7journal summaries,129projections; no unresolved refs.
+  437rows retained unknown-manifest legacy classification (not unique-event totals).
+  Default external export empty, correctly excluding all fixtures. Final operator
+  export3afd5a61-b605-4a2f-8ed0-8d6dec1675f3 valid:13decisions/13apps/2outcomes/
+  49events/9summaries/9sessions. Corrupted COPY rejected; original/live store unchanged.
+  Tampered directory is a marked test-only invalid export, exclude from archives.
+- Secret review:52 credential config fields redacted,4 long derived secrets absent.
+  Naive short-placeholder substring match was only public mysql_native_password flag,
+  not an exported credential. No secrets, verifiers, source-IP salt or raw Redis/Kafka
+  credential records exported. Sanitized SQL/linkage datasets remain sensitive.
+- Final manifest60e8732a6d8c9dc825019d7f5923e4c51e6fccd29a0c6ec7a9e27560d4754886;
+  config f197a6c8531b62549bb3e8275e461d6ecbb76fe9d686808b0d190fd1b0fa5378.
+  23 image inventory entries;16 running engine/Evidence/session Python file hashes
+  matched current workspace AND manifest. Generated runtime files/exports are ignored.
+- Fixed initializer shell-script argument splitting; now one script argument to sh-c,
+  supported rpk -X admin.hosts. Effective retention.ms1209600000 on all5 Evidence
+  source topics; group Stable/one member/lag0. Existing topics/partitions preserved.
+  retention.bytes remains-1: disk/traffic bounds still require deployment review.
+  Loki72h explicitly not seven-day archive; Prometheus runtime flag1w operational only.
+- Fixed delivery-status route registration before blocking script entry point. Bounded
+  research gauges present on both live /metrics; final outbox0pending/0terminal/0loss
+  counters/cap32768. Capacity/persistence/export-age/delivery alerts added. No payload,
+  session, principal or query metric labels. Legacy pending-age index can be unknown.
+- Final focused Evidence/config/export96PASS,4.24s (fresh workspace pytest basetemp
+  avoids Windows Temp permission issue); engine trace/idempotency/provenance/world/
+  HR/principal145PASS,31.90s; existing container session suite210PASS,7.79s. PG4packages
+  PASS;MySQL3packages PASS(connection has no tests). New tests cover journal replay/
+  expiry/capacity/projection retention, commit ordering, metadata mismatch/filtering,
+  413report bound, config sizing/secret digest, checksum tamper/nulls/origin exclusion,
+  listener-owned anti-spoofing and session mapping. No assertion weakening.
+- Final empty-external export0ded3a58-7410-443d-a53e-a5c578744017 includes its
+  generated export-context manifest even with zero selected records; exporter source
+  SHA256 recorded separately. Focused96tests PASS with this refinement. No runtime
+  service behavior changed. All six optional_future flags remain disabled.
+- Read-only/no-group-commit Kafka sizing sampled<=64values/topic: PGquerymedian861.5/
+  max1218,MySQLquery814.5/883,PGsession298/569,MySQLsession296/566,profile803/1731
+  (n51).14day baseline raw+dedup/session/profile payload model~0.56GB before broker
+  overhead. Actual broker754360KiB/18partitions;128MiB working-segment allowance
+  adds~2.25GiB; fresh48partitions would add6GiB. Disk/inode free, Redis persistence,
+  broker/Loki/Prometheus disk use and separate restricted incident-log preservation
+  documented; broad host collectors deferred. No Kafka offsets changed by measurement.
+- Final canonical config-check and compose config --quiet PASS. Final verify_runtime.py
+  exit0,all13checks PASS,nine targets,53dashboard expressions. Missing-traffic notes
+  are not failures. Full stack left running. Final git diff --check PASS. No full-repo
+  or seven-day campaign. Prior Pass1 backend containment/HR freeze preserved.
+- Remaining deployment work: egress/isolation, host/container resource and restart
+  controls, logging/secrets/reproducible release, independent backup access/destination.
+  Pre-index/journal gaps, bounded losses/retention/capacity, unsupported trace protocols,
+  arbitrary disk/corruption/failover and calibration limits remain explicit.
+- Exactly one next recommendation: Deployment Runtime Hardening: egress isolation,
+  resource limits, restart/recovery, logging, secrets and release reproducibility.
+  PLANNED ONLY; not started. Public deployment remains outside this pass.
+
+---
+
 # AGENTS.md
+
+## Pre-Deployment Hardening Pass 1 — Backend Containment and HR v1 — 2026-10-31
+
+COMPLETE for the bounded local baseline. Internet deployment NOT PERFORMED. Full
+contracts: BACKEND_PRIVILEGE_CONTAINMENT.md and BASE_WORLD_HR_V1.md. No Azure,
+Terraform, public binding, actual .env edit, feature activation, Git history change
+or volume deletion. Branch feature/config-observability, starting HEAD 0fd44e6,
+clean; ending source/tests/docs remain unstaged/uncommitted.
+
+- Previous native auth relay allowed attacker-selected postgres/root identities.
+  PG now authenticates visible postgres via local SCRAM then independently uses
+  honeypot_pg_runtime. MySQL validates root/proxyuser native proof locally and
+  constructs a fixed honeypot_mysql_runtime handshake with bounded capabilities.
+  No attacker startup options/proof/native identity is forwarded. fake_ registry
+  authentication remains separate; no physical fake_ users are created.
+- New operator-only backend-containment-init uses existing replay image/drivers,
+  no published port, read-only script. Idempotent startup creates/restricts runtime
+  accounts on retained volumes; proxies wait for successful completion. Existing
+  DB/Redis containers were not restarted. Initial MySQL percent-format failure
+  blocked proxy startup; fixed parameter formatting, rerun/idempotence PASS.
+- Actual PG runtime attributes superuser/createdb/createrole/replication/bypassrls
+  all FALSE; no memberships/ownership; CONNECT testdb, USAGE public, no writes;
+  PUBLIC CREATE/TEMP DB and schema CREATE revoked, default read-only, 2s timeout.
+  Actual MySQL grants exactly USAGE globally + SELECT testdb.*; no admin/dynamic
+  privileges. Native postgres/root remain initialization/operator identities.
+- Runtime secrets derive separately from existing stable HMAC key or explicit
+  private env values. Decoy passwords default to existing local seed passwords;
+  future public deployment must explicitly separate them from admin secrets.
+  No actual .env change or secret value output. .env.example contains names only.
+- Final native positive grammar permits constant SELECT and basic transaction
+  control only; MySQL exact SET NAMES client initialization also allowed. Engine
+  timeout/5xx/bad response/unsupported SQL cannot bypass it. Managed D6 and account
+  simulation stay synthetic. PG extended/function/portal commands reject through
+  Sync; MySQL prepared/change-user/kill/admin/unknown commands reject locally.
+  Unauthenticated PG cancellation no longer dials the backend. Backend errors
+  preserve number/SQLSTATE with generic text. No host file/process/plugin payload
+  was executed; those families were tested through classifier/mock boundaries.
+- Real PG SCRAM initially failed because startup parameter messages exceeded the
+  initial budget; reproduced two-sided wire test and bounded 64-message fix PASS.
+  Malformed GS2 input is checked before SCRAM library parsing. MySQL fixed flags
+  disable local files/compression/multistatements; private backend names do not
+  appear in SQL identity results. PG synthetic identity routing corrected.
+- HR sole approved world: hr_base_v1/version1, testdb/public; Company Internal
+  Research Cooperative, company.internal, db-prod-02. Existing HR YAML is the sole
+  table/identity/reference-date/persona manifest; Finance/CRM retained offline,
+  client DB names cannot select them. Catalog advertises only reachable testdb;
+  MySQL rejects other switches without changing identity. W1/W2/W3 not implemented.
+- Explicit immutable historical snapshot 2024-01-01T12:00:00 preserves date
+  determinism. Personas align with observed PG16.15/MySQL8.0.46; floating image tags
+  still require release verification. Counts frozen 847/8/2341/847/23/15/12/8.
+  Payroll IDs cover employees one-to-one; session/key FK values valid; executive
+  lure identities refer to senior Executive employees. Existing department/title,
+  manager/budget/headcount and temporal coherence tests retained and passing.
+- HR tokens use non-vendor hrv1_ namespace; invalid ZZ00 bank/000 routing/000-00 SSN
+  conventions; no external API authentication or live credential enrollment. Password
+  lures are generated, not issued credentials; no claim to know every real password.
+  Finance/CRM files remain. Registry definitions/lock, approvals and scoring unchanged:
+  D0/D1/D2/D3/D4/D6 approved, D5 review-only, D7 unmapped.
+- New decision/application/query evidence world fields are optional for legacy data
+  and validated/link-checked for new data. Old traces not retrofitted. Existing
+  principal committed overlays are not rewritten; historical base versions unknown.
+  Existing relation-commitment guarantees preserved, not a complete archived row world.
+- Engine requested selection 192 PASS/51.54s. Final manifest/realism/trace selection
+  33 PASS/22.51s. Evidence new-world/index/trace/endpoint/correlation/outcome selection
+  44 PASS/1.41s. Canonical configuration tests 13 PASS. Both proxies' connection,
+  protocol, principal, interceptor, publisher selections PASS (MySQL connection has
+  no tests); new real cancellation/SCRAM/identity and negative fallback tests added.
+  Older arbitrary-native DML/query fixtures changed to safe native constants while
+  retaining transaction/error assertions. No full-repository test campaign.
+- Final live harness six checks PASS: actual grants, ordinary login/SELECT1/HR
+  catalogs/rows/traps/D6/admin rejection, virtual principal commit/reconnect/exposure,
+  both protocols. Latest report .runtime/hardening-pass1-runtime.json; final fixtures
+  fake_hp1_pg_82cdba5b and fake_hp1_mysql_6703df3b disabled after test. Earlier
+  fake_hp1_* fixtures likewise disabled; retain tombstones/evidence, exclude all
+  current local engineering traffic from future research. Physical fake_hp1_ count0
+  in both backends. Native ordinary sessions retain normal evidence TTL.
+- Real Evidence sample: PG and MySQL query events contain world_id/version and
+  execution/app linkage as applicable; first retained sample had106 world-v1 pairs
+  among121 decisions/applications (mixed engineering fixtures, no coverage claim).
+- Generic verify_runtime.py exit0,13/13 PASS, nine scrape targets,53 PromQL queries.
+  Traffic-dependent missing-series notes do not imply failures. Local service stack
+  left running; ports loopback-only. Source/docs/diff reviewed; diff --check PASS.
+- Remaining deployment work: evidence durability/capacity/export, deployment provenance
+  and traffic-origin classification; egress/resource/reboot controls, image review,
+  backup/restore, strong separated deployment secrets and eventual cloud network
+  verification. No Redis crash/disk recovery, public sizing or scientific-data claim.
+- Exactly one next recommendation: Research Evidence Durability, Capacity, Provenance
+  and Operator-Traffic Classification. PLANNED ONLY; not implemented in this pass.
 
 ## Pass 8F — Distributed and Restart-Safe Query Request Idempotency — 2026-10-31
 

@@ -1,0 +1,11 @@
+# Immutable observed third-party runtime images. Review before changing.
+grafana/grafana:10.2.0: sha256:1ee0c54286b8ca09a3dd1419ff8653e7780a148a006ac088544203bb0affe550
+grafana/loki:2.9.0: sha256:b025a0220f390baaab01578aea2fe0ba677584d9f248c3fe5af15f84dd1de60d
+grafana/promtail:3.2.1: sha256:bf617e9d67e80247a59f717f9c1ad388d7d32dc0a1d29abd5799516d15e0a9b5
+mysql:8.0: sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+nginx:1.27-alpine: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+postgres:16: sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+prom/prometheus:v2.48.0: sha256:b440bc0e8aa5bab44a782952c09516b6a50f9d7b2325c1ffafac7bc833298e2e
+quay.io/prometheuscommunity/json-exporter:v0.7.0: sha256:3a777171d39ad435cb39519e84e0a8b5c63c7e716cc06011f8140cfaabfc1baf
+redis:7-alpine: sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+redpandadata/redpanda:v24.1.9: sha256:85a30e0084f3d479098c327575e3eb27b729ec31f7d72cd1b2ef1098dc1e3b85

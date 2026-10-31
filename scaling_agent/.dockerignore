@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+.runtime
+__pycache__
+*.pyc
+.pytest_cache
+test_*.py
+*_test.go
+tests
+journal_model.py
+*.md
+*.log
+*.jsonl
+*.rdb
+*.aof
+*.tmp

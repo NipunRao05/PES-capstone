@@ -115,6 +115,8 @@ def map_proxy_event_to_event(raw: dict, source_label: str = "") -> Event | None:
             session_id=session_id,
             protocol=protocol,
             database=database,
+            traffic_origin=raw.get("traffic_origin","unknown"),
+            deployment_manifest_id=raw.get("deployment_manifest_id",""),
         )
 
     query = (raw.get("query_normalized") or raw.get("fingerprint") or "").lower().strip()
@@ -136,6 +138,8 @@ def map_proxy_event_to_event(raw: dict, source_label: str = "") -> Event | None:
             session_id=session_id,
             protocol=protocol,
             database=database,
+            traffic_origin=raw.get("traffic_origin","unknown"),
+            deployment_manifest_id=raw.get("deployment_manifest_id",""),
         )
 
     phase = classify_phase(fingerprint) or ""
@@ -149,6 +153,8 @@ def map_proxy_event_to_event(raw: dict, source_label: str = "") -> Event | None:
         session_id=session_id,
         protocol=protocol,
         database=database,
+            traffic_origin=raw.get("traffic_origin","unknown"),
+            deployment_manifest_id=raw.get("deployment_manifest_id",""),
     )
 
 

@@ -8,7 +8,7 @@ REQUIRED_SCOPE = {"experiment_id", "experiment_version", "scoring_profile_id", "
 
 
 def validate_context(context):
-    if set(context) != set(GROUP_CONTEXT):
+    if set(context)-{"traffic_origin","deployment_manifest_id"} != set(GROUP_CONTEXT):
         raise IndexIntegrityError("INDEX_INTEGRITY_ERROR")
     for field in ("strategy_version", "experiment_version"):
         if type(context[field]) is not int or not 1 <= context[field] <= 2147483647:
@@ -27,7 +27,7 @@ def indexed_aggregate(store, *, filters, snapshot_max_sequence=None, index_epoch
     snapshot = store.indexed_snapshot(snapshot_max_sequence=snapshot_max_sequence, index_epoch=index_epoch)
     if any(not group["done"] for group in snapshot["kinds"].values()):
         raise IndexIntegrityError("INDEX_INTEGRITY_ERROR")
-    selected_context = {k: v for k, v in filters.items() if k in GROUP_CONTEXT}
+    selected_context = {k: v for k, v in filters.items() if k in (*GROUP_CONTEXT,"traffic_origin","deployment_manifest_id")}
     applications = {}
     all_applications = {e["record_id"]: e for e in snapshot["kinds"]["application"]["entries"]}
     decisions = {e["record_id"]: e for e in snapshot["kinds"]["decision"]["entries"]}
@@ -38,7 +38,7 @@ def indexed_aggregate(store, *, filters, snapshot_max_sequence=None, index_epoch
         decision = decisions.get(a["decision_id"])
         if decision and any(context[k] != decision["record"][k] for k in GROUP_CONTEXT):
             raise IndexIntegrityError("INDEX_INTEGRITY_ERROR")
-        if not all(context[k] == v for k, v in selected_context.items()):
+        if not all(context.get(k,"unknown" if k=="traffic_origin" else None) == v for k, v in selected_context.items()):
             continue
         if a.get("application_status") not in {"APPLIED", "BLOCKED", "ERROR", "NOT_VERIFIED"} or a.get("provenance_status") not in {"MATCH", "MISMATCH", "NOT_VERIFIED", "INVALID_ACTION"}:
             raise IndexIntegrityError("INDEX_INTEGRITY_ERROR")
@@ -56,7 +56,7 @@ def indexed_aggregate(store, *, filters, snapshot_max_sequence=None, index_epoch
         validate(r)
         if any(entry["context"].get(k) != r[k] for k in GROUP_CONTEXT):
             raise IndexIntegrityError("INDEX_INTEGRITY_ERROR")
-        if not all(r[k] == v for k, v in filters.items()):
+        if not all(r.get(k,"unknown" if k=="traffic_origin" else None) == v for k, v in filters.items()):
             continue
         selected_outcomes.append(r)
         app = applications.get(r["application_id"])
@@ -130,4 +130,7 @@ def indexed_aggregate(store, *, filters, snapshot_max_sequence=None, index_epoch
     if any(value for name, value in diagnostics.items() if name in {
             "outcome_application_linkage_conflict", "multiple_outcomes_for_application_profile"}):
         report["coverage_denominator_status"] = "INDEX_INTEGRITY_WARNING"
+    from research_journal import HEALTH
+    report["collection_completeness"]="NOT_VERIFIED"
+    report["collection_integrity_diagnostics"]=store.client.hgetall(HEALTH)
     return report

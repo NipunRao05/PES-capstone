@@ -28,6 +28,20 @@ def main():
                 raise ConfigError("Compose source/profile overrides and volume deletion are not supported")
         flags, policy, obs, env, compose = load()
         artifacts = render(flags, policy, obs, compose)
+        if args.command=='compose' and args.compose_args[0] in {'up','restart'} and env.get('HONEYPOT_DEPLOYMENT_MODE','false')=='true':
+            from deployment_guard import preflight
+            preflight(env)
+        if args.command == "prepare" or (args.command == "compose" and args.compose_args[0] == "up"):
+            from deployment_manifest import create
+            create(flags, policy, obs, env, artifacts)
+            # Validate generated identity before any Docker startup operation.
+            import json,hashlib
+            from deployment_manifest import canonical,RUNTIME
+            manifest=json.loads((RUNTIME/'deployment-manifest.json').read_text(encoding='utf-8'))
+            identity=manifest.pop('manifest_id')
+            if hashlib.sha256(canonical(manifest).encode()).hexdigest()!=identity:
+                raise ConfigError('Generated deployment manifest integrity failure')
+            artifacts = render(flags, policy, obs, compose)
         if args.command == "config-status":
             print("mode: deterministic_rule_based")
             print("source: config/features.yaml (resolved configuration, not runtime health)")
@@ -46,7 +60,11 @@ def main():
             # Secrets go to the child environment, never into generated YAML or argv.
             command = ["docker", "compose", "--project-directory", str(ROOT), "--env-file", str(ROOT / "config/empty.env"),
                        "-p", PROJECT, "-f", str(ROOT / ".runtime/compose.yaml"), *args.compose_args]
-            return subprocess.call(command, cwd=ROOT, env=child_env)
+            result=subprocess.call(command, cwd=ROOT, env=child_env)
+            if result==0 and args.compose_args[0]=="up":
+                from deployment_manifest import capture_images
+                capture_images()
+            return result
         return 0
     except ConfigError as exc:
         print(f"CONFIGURATION INVALID\n{exc}", file=sys.stderr)

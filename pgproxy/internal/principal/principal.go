@@ -16,6 +16,8 @@ import (
 )
 
 type Context struct {
+	TrafficOrigin        string `json:"traffic_origin,omitempty"`
+	DeploymentManifestID string `json:"deployment_manifest_id,omitempty"`
 	DeceptivePrincipalID string `json:"deceptive_principal_id,omitempty"`
 	PrincipalOrigin      string `json:"principal_origin,omitempty"`
 	CreatorSessionID     string `json:"creator_session_id,omitempty"`

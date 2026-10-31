@@ -1,3 +1,4 @@
+from research_metadata import metadata as research_metadata
 """Completed-evidence temporal linkage, not causal effectiveness or reward."""
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid5, NAMESPACE_URL
@@ -137,7 +138,7 @@ def evaluate(session_id, pairs, events, *, closed_at=None, as_of, query_coverage
             "error_component": min(errors / ERROR_CAP, 1) if observed else None,
             "trap_interaction": min(traps / TRAP_CAP, 1) if observed else None,
             "disconnect_signal": float(reason == "SESSION_CLOSED") if close is not None else None}
-        result = {"schema_version": 1, "outcome_id": outcome_id(a["application_id"]),
+        result = {**research_metadata(d), "schema_version": 1, "outcome_id": outcome_id(a["application_id"]),
             **{k: d.get(k) for k in ("decision_id", "session_id", "principal_id", "strategy_id", "strategy_version",
                 "strategy_definition_digest", "experiment_id", "experiment_version")},
             "application_id": a["application_id"], "window_start": start.isoformat(), "window_end": end.isoformat(),

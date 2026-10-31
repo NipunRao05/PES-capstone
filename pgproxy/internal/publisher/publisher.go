@@ -41,6 +41,8 @@ type RawEvent struct {
 	Username         string `json:"username"`
 	Database         string `json:"database"`
 	QueryRaw         string `json:"query_raw"`
+	WorldID          string `json:"world_id"`
+	WorldVersion     int    `json:"world_version,omitempty"`
 	QueryNormalized  string `json:"query_normalized"`
 	Fingerprint      string `json:"fingerprint"`
 	ProtocolMode     string `json:"protocol_mode"`
@@ -58,7 +60,6 @@ type RawEvent struct {
 	// No authoritative ID producer exists on this branch; these remain empty.
 	TrapID  string `json:"trap_id"`
 	AssetID string `json:"asset_id"`
-	WorldID string `json:"world_id"`
 }
 
 // AuthEvent is published on every authentication attempt (success or failure).
@@ -312,20 +313,21 @@ func (p *Publisher) ingestLoop(ctx context.Context, events <-chan interceptor.Qu
 				Username:                   qe.Username,
 				Database:                   qe.Database,
 				QueryRaw:                   qe.QueryRaw,
-				QueryNormalized:            qe.QueryNormalized,
-				Fingerprint:                qe.Fingerprint,
-				ProtocolMode:               qe.ProtocolMode,
-				QueryLength:                qe.QueryLength,
-				BytesIn:                    qe.BytesIn,
-				BytesOut:                   qe.BytesOut,
-				OutcomeVerified:            qe.OutcomeVerified,
-				Success:                    qe.Success,
-				Authority:                  qe.Authority,
-				TransactionState:           qe.TransactionState,
-				ErrorCode:                  qe.ErrorCode,
-				StrategyID:                 qe.StrategyID,
-				DeceptionProfile:           qe.DeceptionProfile,
-				IsTrap:                     qe.IsTrap,
+				WorldID:                    qe.WorldID, WorldVersion: qe.WorldVersion,
+				QueryNormalized:  qe.QueryNormalized,
+				Fingerprint:      qe.Fingerprint,
+				ProtocolMode:     qe.ProtocolMode,
+				QueryLength:      qe.QueryLength,
+				BytesIn:          qe.BytesIn,
+				BytesOut:         qe.BytesOut,
+				OutcomeVerified:  qe.OutcomeVerified,
+				Success:          qe.Success,
+				Authority:        qe.Authority,
+				TransactionState: qe.TransactionState,
+				ErrorCode:        qe.ErrorCode,
+				StrategyID:       qe.StrategyID,
+				DeceptionProfile: qe.DeceptionProfile,
+				IsTrap:           qe.IsTrap,
 			}
 			if raw.Authority == "" {
 				raw.Authority = "unknown"

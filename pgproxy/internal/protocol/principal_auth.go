@@ -38,7 +38,7 @@ func (h *Handler) authenticatePrincipal() (err error) {
 			_ = h.sendToClient(&pgproto3.ErrorResponse{Severity: "FATAL", Code: "28P01", Message: "password authentication failed"})
 		}
 		if h.pub != nil {
-			h.pub.EmitAuth(publisher.AuthEvent{Context: h.sess.Context, EventType: "auth", SessionID: h.sess.ID,
+			h.pub.EmitAuth(publisher.AuthEvent{Context: h.evidenceContext(), EventType: "auth", SessionID: h.sess.ID,
 				Timestamp: time.Now().UTC().Format(time.RFC3339Nano), ClientIP: h.sess.ClientIP, Username: h.sess.Username,
 				Database: h.sess.Database, AuthMethod: h.authMethod, Success: err == nil})
 		}
@@ -96,7 +96,7 @@ func (h *Handler) authenticatePrincipal() (err error) {
 			return err
 		}
 	}
-	h.clientBackend = pgproto3.NewBackend(pgproto3.NewChunkReader(h.clientConn), h.clientConn)
+	h.clientBackend = pgproto3.NewBackend(pgproto3.NewChunkReader(newBoundedFrontendReader(h.clientConn)), h.clientConn)
 	h.publishPrincipalEvents(reply.Events)
 	return nil
 }
@@ -139,7 +139,7 @@ func (h *Handler) rejectPrincipalExtended() error {
 
 func (h *Handler) principalLoop(ctx context.Context) error {
 	for {
-		msg, err := h.clientBackend.Receive()
+		msg, err := h.receiveClientMessage()
 		if err != nil {
 			if isEOF(err) {
 				return nil

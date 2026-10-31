@@ -108,6 +108,7 @@ var deceptionBreaker = struct {
 
 // Handler manages the full lifecycle of one MySQL client↔backend pair.
 type Handler struct {
+	trafficOrigin          string
 	queryCorrelation       interceptor.QueryCorrelation
 	virtual                bool
 	principalAuthToken     []byte
@@ -157,6 +158,7 @@ func NewHandler(client, backend net.Conn, logger *slog.Logger, backendAddr strin
 
 // Run drives the full connection lifecycle.
 func (h *Handler) Run(ctx context.Context) error {
+	_ = h.clientConn.SetDeadline(time.Now().Add(15 * time.Second))
 	startTime := time.Now()
 	closeReason := "clean"
 
@@ -170,7 +172,7 @@ func (h *Handler) Run(ctx context.Context) error {
 			if h.pub != nil {
 				snap := h.sess.Snapshot()
 				h.pub.EmitSessionEnd(publisher.SessionEndEvent{
-					Context:     h.sess.Context,
+					Context:     h.evidenceContext(),
 					EventType:   "session_end",
 					SessionID:   snap.ID,
 					Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
@@ -222,7 +224,7 @@ func (h *Handler) Run(ctx context.Context) error {
 		// Emit failed auth event
 		if h.pub != nil {
 			h.pub.EmitAuth(publisher.AuthEvent{
-				Context:    h.sess.Context,
+				Context:    h.evidenceContext(),
 				EventType:  "auth",
 				SessionID:  h.sess.ID,
 				Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
@@ -237,10 +239,12 @@ func (h *Handler) Run(ctx context.Context) error {
 		return fmt.Errorf("auth result: %w", err)
 	}
 
+	_ = h.clientConn.SetDeadline(time.Time{})
+	h.sess.Context = h.evidenceContext()
 	// Auth succeeded — emit auth + session_start
 	if h.pub != nil {
 		h.pub.EmitAuth(publisher.AuthEvent{
-			Context:    h.sess.Context,
+			Context:    h.evidenceContext(),
 			EventType:  "auth",
 			SessionID:  h.sess.ID,
 			Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
@@ -251,7 +255,7 @@ func (h *Handler) Run(ctx context.Context) error {
 			Success:    true,
 		})
 		h.pub.EmitSessionStart(publisher.SessionStartEvent{
-			Context:    h.sess.Context,
+			Context:    h.evidenceContext(),
 			EventType:  "session_start",
 			SessionID:  h.sess.ID,
 			Timestamp:  h.sess.StartedAt.UTC().Format(time.RFC3339Nano),
@@ -501,10 +505,16 @@ func (h *Handler) relayClientHandshake(serverCaps uint32, authPlugin string, aut
 		h.principalAuthSalt = append([]byte(nil), authData...)
 		return username, database, clientCaps, nil
 	}
-	// Forward the handshake response to the backend unchanged
-	if err := h.sendPacket(h.backendConn, raw, 1); err != nil {
-		return "", "", 0, fmt.Errorf("forward client handshake: %w", err)
+	if database == "" {
+		database = "testdb"
 	}
+	h.sess = session.New(h.clientConn.RemoteAddr().String())
+	h.sess.SetAuth(username, database, clientCaps, serverCaps)
+	if err := h.containHandshake(raw, username, database, clientCaps, authData, authToken); err != nil {
+		_ = h.sendMySQLDeceptionError(1045, "28000", "Access denied")
+		return "", "", 0, err
+	}
+
 	return username, database, clientCaps, nil
 }
 
@@ -527,57 +537,12 @@ const capClientConnectWithDB uint32 = 1 << 3
 // Fix: seq starts at 2 (first server response after client handshake at seq 1)
 // and increments with each packet exchanged, so clients receive correct headers.
 func (h *Handler) relayAuthResult() error {
-	seq := byte(2) // first auth result packet from server is always seq 2
-	for {
-		pkt, err := h.readPacket(h.backendConn)
-		if err != nil {
-			return fmt.Errorf("read auth result: %w", err)
-		}
-		if err := h.sendPacket(h.clientConn, pkt, seq); err != nil {
-			return fmt.Errorf("forward auth result: %w", err)
-		}
-		seq++
-
-		if len(pkt) == 0 {
-			return fmt.Errorf("empty auth result packet")
-		}
-		switch pkt[0] {
-		case packetOK:
-			return nil
-		case packetERR:
-			return fmt.Errorf("auth rejected: %s", extractErrMessage(pkt))
-		case 0xFE: // AuthSwitchRequest — relay client's response back to backend
-			switchResp, err := h.readPacket(h.clientConn)
-			if err != nil {
-				return fmt.Errorf("read auth switch response: %w", err)
-			}
-			if err := h.sendPacket(h.backendConn, switchResp, seq); err != nil {
-				return fmt.Errorf("forward auth switch response: %w", err)
-			}
-			seq++
-			// Loop: read next server packet (OK/ERR/AuthMoreData)
-		case 0x01: // AuthMoreData (caching_sha2_password)
-			// Subtype byte (pkt[1]) tells us what the server is saying:
-			//   0x03 = fast auth success  → next packet is OK, no client response needed
-			//   0x04 = full auth required → client must send plaintext password
-			if len(pkt) >= 2 && pkt[1] == 0x03 {
-				// Fast-auth succeeded — loop to read the final OK packet
-				break
-			}
-			// Full-auth or other: relay client's next response back to backend
-			moreResp, err := h.readPacket(h.clientConn)
-			if err != nil {
-				return fmt.Errorf("read auth more data response: %w", err)
-			}
-			if err := h.sendPacket(h.backendConn, moreResp, seq); err != nil {
-				return fmt.Errorf("forward auth more data response: %w", err)
-			}
-			seq++
-			// Loop: read next server packet
-		default:
-			return fmt.Errorf("unexpected auth packet type: 0x%02x", pkt[0])
-		}
+	pkt, err := h.readPacket(h.backendConn)
+	if err != nil || len(pkt) == 0 || pkt[0] != packetOK {
+		_ = h.sendMySQLDeceptionError(1045, "28000", "Access denied")
+		return fmt.Errorf("authentication failed")
 	}
+	return h.sendPacket(h.clientConn, pkt, 2)
 }
 
 // ─── Step 4: Command Loop ─────────────────────────────────────────────────────
@@ -637,6 +602,12 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 
 		// ─────────────────────────────────────────────────────────────────────
 
+		if cmd != comQuit && cmd != comPing && cmd != comQuery && cmd != comInitDB {
+			if err := h.sendMySQLDeceptionError(1235, "42000", "Command is not supported"); err != nil {
+				return err
+			}
+			continue
+		}
 		switch cmd {
 		case comQuit:
 			// Forward COM_QUIT, then close — no response expected
@@ -652,6 +623,16 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 		case comQuery:
 			h.beginQuery()
 			sql := cleanMySQLQueryPayload(payload)
+			normalized := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql), ";")))
+			if normalized == "use testdb" || normalized == "use `testdb`" {
+				status := h.deceptionStatus()
+				if err := h.sendPacket(h.clientConn, []byte{0, 0, 0, byte(status), byte(status >> 8), 0, 0}, 1); err != nil {
+					return err
+				}
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: true, Authority: "policy", TransactionState: h.mysqlTransactionState()})
+				continue
+			}
+
 			if principal.AccountSQL(sql) {
 				if err := h.servePrincipalQuery(ctx, sql); err != nil {
 					return err
@@ -723,18 +704,29 @@ func (h *Handler) commandLoop(ctx context.Context) error {
 				continue
 			}
 
+			if !nativeSQLAllowed(sql) {
+				if err := h.sendMySQLDeceptionError(1142, "42000", "Command denied"); err != nil {
+					return err
+				}
+				h.emitTextQueryOutcome(sql, interceptor.QueryOutcome{Verified: true, Success: false, Authority: "policy", TransactionState: h.mysqlTransactionState(), ErrorCode: "mysql_1142", SQLState: "42000"})
+				continue
+			}
 			if err := h.forwardAndDrain(ctx, cmdPkt, shapeCtx, true); err != nil {
 				return err
 			}
 			h.emitTextQueryOutcome(sql, h.lastQueryOutcome)
 
 		case comInitDB:
-			db := string(payload)
+			if string(payload) != "testdb" {
+				if err := h.sendMySQLDeceptionError(1049, "42000", "Unknown database"); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := h.forwardAndDrain(ctx, cmdPkt, shapeCtx, false); err != nil {
 				return err
 			}
-			h.sess.SetDatabase(db)
-			h.logger.Debug("database changed", "db", db)
+			h.sess.SetDatabase("testdb")
 
 		case comChangeUser:
 			if end := indexByte(payload, 0); end >= 0 && principal.Reserved(string(payload[:end])) {
@@ -951,6 +943,9 @@ func (h *Handler) drainResponse(ctx context.Context, sc *shaper.ShapeContext, is
 			return fmt.Errorf("read backend response: %w", err)
 		}
 
+		if len(pkt) >= 9 && pkt[0] == packetERR {
+			pkt = append(append([]byte(nil), pkt[:9]...), []byte("Statement could not be completed")...)
+		}
 		h.sess.IncrBytesOut(int64(len(pkt)))
 		h.logger.Debug("backend→proxy", "pkt_type", fmt.Sprintf("0x%02x", firstByte(pkt)), "len", len(pkt))
 
@@ -1433,6 +1428,9 @@ func (h *Handler) readPacket(conn net.Conn) ([]byte, error) {
 		return nil, err
 	}
 	length := int(h.hdrBuf[0]) | int(h.hdrBuf[1])<<8 | int(h.hdrBuf[2])<<16
+	if conn == h.clientConn && length > maxDeceptionDecisionSQLBytes+4096 {
+		return nil, fmt.Errorf("client packet exceeds runtime size bound")
+	}
 
 	if length == 0 {
 		return []byte{}, nil
@@ -1469,6 +1467,10 @@ func (h *Handler) readPacket(conn net.Conn) ([]byte, error) {
 // Perf: builds the framed packet in a single Write call using a stack-allocated
 // header to avoid the extra heap alloc from the previous []byte{...} literal.
 func (h *Handler) sendPacket(conn net.Conn, payload []byte, seq byte) error {
+	if conn == h.clientConn {
+		_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+		defer conn.SetWriteDeadline(time.Time{})
+	}
 	for {
 		chunk := payload
 		if len(chunk) > maxMySQLPayload {
@@ -1821,6 +1823,8 @@ func indexByte(b []byte, c byte) int {
 // ─── Deception-engine integration ────────────────────────────────────────────
 
 type deceptionDecisionRequest struct {
+	TrafficOrigin        string `json:"traffic_origin"`
+	DeploymentManifestID string `json:"deployment_manifest_id,omitempty"`
 	interceptor.QueryCorrelation
 	TransactionState string  `json:"transaction_state"`
 	SessionID        string  `json:"session_id"`
@@ -1924,6 +1928,7 @@ func (h *Handler) decideWithDeceptionEngine(ctx context.Context, sql, protocol s
 
 	normalized := normalizeDeceptionSQL(sql)
 	req := deceptionDecisionRequest{
+		TrafficOrigin: h.evidenceContext().TrafficOrigin, DeploymentManifestID: h.evidenceContext().DeploymentManifestID,
 		QueryCorrelation: h.queryCorrelation,
 		TransactionState: h.deceptionTransactionState(),
 		SessionID:        safeSessionID(h),

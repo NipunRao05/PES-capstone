@@ -3,6 +3,7 @@
 Call begin only at an explicit pre-production decision boundary. Runtime wiring
 is intentionally pending; never reconstruct state-before from a finished result.
 """
+from base_world import WORLD_ID, WORLD_VERSION
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -48,7 +49,7 @@ def begin(registry, strategy_id, *, session_id, protocol, transaction_state,
         raise ValueError("Invalid principal reference")
     if not eligible:
         raise ValueError("Trace requires eligible final selection")
-    return {"schema_version": 1, "decision_id": str(uuid4()), "timestamp": timestamp(), **experiment(),
+    return {"world_id": WORLD_ID, "world_version": WORLD_VERSION, "schema_version": 1, "decision_id": str(uuid4()), "timestamp": timestamp(), **experiment(),
         "session_id": session_id, "principal_id": principal_id, "protocol": protocol,
         "strategy_id": strategy.strategy_id, "strategy_version": strategy.strategy_version,
         "strategy_definition_digest": strategy.definition_digest(),
@@ -78,7 +79,8 @@ def applied(decision, provenance, *, result_mode):
         status = "ERROR"
     elif actual is not None and verification in {"MATCH", "MISMATCH"}:
         status = "APPLIED" if result_mode == "fake" else "NOT_VERIFIED"
-    return {"schema_version": 1, "application_id": str(uuid4()), "decision_id": decision["decision_id"],
+    from research_metadata import metadata
+    return {**metadata(decision), "world_id": WORLD_ID, "world_version": WORLD_VERSION, "schema_version": 1, "application_id": str(uuid4()), "decision_id": decision["decision_id"],
         "timestamp": timestamp(), "expected_action_binding": decision["expected_action_binding"],
         "actual_action_binding": actual, "provenance_status": verification,
         "application_status": status, "result_class": result_mode}

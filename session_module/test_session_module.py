@@ -1800,5 +1800,14 @@ class TestSyntheticFallbackSessionID(unittest.TestCase):
             engine.shutdown()
 
 
+def test_research_origin_survives_query_auth_and_recon_mapping():
+    for payload in [{'query_normalized':'select 1'}, {'event_type':'auth_fail'}, {'query_normalized':'show tables'}]:
+        event=map_proxy_event_to_event({'session_id':'fixture','protocol':'postgres','timestamp':'2026-10-31T00:00:00Z',
+            'traffic_origin':'operator_validation','deployment_manifest_id':'a'*64,**payload})
+        assert event.traffic_origin=='operator_validation' and event.deployment_manifest_id=='a'*64
+    legacy=map_proxy_event_to_event({'query_normalized':'select 1'})
+    assert legacy.traffic_origin=='unknown' and legacy.deployment_manifest_id==''
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

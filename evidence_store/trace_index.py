@@ -1,10 +1,12 @@
 """Versioned retained-population index on the existing TraceStore Redis authority."""
 import json
+import os
 from datetime import datetime, timezone
 from uuid import uuid4, UUID
 
 VERSION = 1
-CAPACITY = 1000  # Per kind. Full reports read at most 3,000 records atomically.
+CAPACITY = int(os.getenv("TRACE_INDEX_CAPACITY", "131072"))
+REPORT_LIMIT = 1000  # Never scale atomic full reports with deployment retention.
 PAGE_LIMIT = 128
 KINDS = ("decision", "application", "outcome")
 PREFIX = "evidence:strategy_trace:index:v1"
@@ -215,7 +217,7 @@ class TraceIndex:
              snapshot_max_sequence=None, index_epoch=None):
         if kind not in (*KINDS, "all") or type(after_sequence) is not int or after_sequence < 0:
             raise ValueError("Invalid index cursor")
-        max_limit = CAPACITY if kind == "all" else PAGE_LIMIT
+        max_limit = REPORT_LIMIT if kind == "all" else PAGE_LIMIT
         if type(limit) is not int or not 1 <= limit <= max_limit:
             raise ValueError("Invalid index page size")
         if snapshot_max_sequence is not None and (type(snapshot_max_sequence) is not int or not after_sequence <= snapshot_max_sequence < 2**53):

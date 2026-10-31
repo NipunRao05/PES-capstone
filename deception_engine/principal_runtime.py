@@ -281,6 +281,8 @@ async def query(reg, api, request, body):
                         "query_normalized": sql, "query_raw": sql, "protocol": record["protocol"],
                         "query_execution_id": body.get("query_execution_id"),
                         "request_started_at": body.get("request_started_at"),
+                        "traffic_origin":body.get("traffic_origin","unknown"),
+                        "deployment_manifest_id":body.get("deployment_manifest_id"),
                         "username": record["username"], "database": "testdb", "deception_level": 1,
                         "transaction_state": "in_transaction" if transaction.active else "idle"})
                     result = json.loads(response.body)

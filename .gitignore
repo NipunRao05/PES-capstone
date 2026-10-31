@@ -34,3 +34,6 @@ phase*_after_*.txt
 
 # Generated local deployment artifacts and tooling; never commit.
 .runtime/
+deployment/secrets.env
+deployment/*.secrets.env
+deployment/releases/

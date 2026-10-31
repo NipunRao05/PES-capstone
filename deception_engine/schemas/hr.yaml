@@ -1,9 +1,21 @@
 schema: hr
+world_id: hr_base_v1
+world_version: 1
+server_personas:
+  postgres: "16.15"
+  mysql: "8.0.46"
+organization:
+  name: Company Internal Research Cooperative
+  email_domain: company.internal
+  hostname: db-prod-02
+  environment: production-replica
+  reference_date: "2024-01-01T12:00:00"
+  temporal_semantics: immutable_historical_snapshot
 description: "Human Resources database — enterprise production replica"
 
 # Global settings for this schema
 settings:
-  database_name: "hr_production"
+  database_name: "testdb"
   charset: "utf8mb4"
 
 tables:
@@ -57,9 +69,9 @@ tables:
     description: "Payroll banking details — sensitive"
     columns:
       - {name: employee_id,    type: fk,            ref: employees.id}
-      - {name: bank_name,      type: bank}
-      - {name: account_number, type: iban}
-      - {name: routing_number, type: routing}
+      - {name: bank_name,      type: bank, synthetic_convention: hr_v1}
+      - {name: account_number, type: iban, synthetic_convention: hr_v1}
+      - {name: routing_number, type: routing, synthetic_convention: hr_v1}
       - {name: last_pay_date,  type: past_date,     years_back: 1}
       - {name: annual_bonus,   type: int_range,     min: 0, max: 50000}
 
@@ -70,7 +82,7 @@ tables:
     columns:
       - {name: id,             type: pk_int}
       - {name: service,        type: choice,        choices: [slack, github, aws, datadog, stripe, pagerduty, jira]}
-      - {name: token,          type: api_key}        # honeytoken
+      - {name: token,          type: api_key, synthetic_convention: hr_v1}        # honeytoken
       - {name: created_by,     type: fk,            ref: employees.id}
       - {name: created_at,     type: past_datetime, days_back: 365}
       - {name: last_used,      type: past_datetime, days_back: 30}
@@ -86,7 +98,7 @@ tables:
     columns:
       - {name: id,             type: pk_int}
       - {name: service,        type: choice,        choices: [aws, stripe, github, slack]}
-      - {name: token,          type: api_key}        # fake honeytoken
+      - {name: token,          type: api_key, synthetic_convention: hr_v1}        # fake honeytoken
       - {name: notes,          type: choice,        choices: ["old prod key", "backup", "do not delete", "legacy"]}
       - {name: created_at,     type: past_datetime, days_back: 730}
 
@@ -101,7 +113,7 @@ tables:
       - {name: title,          type: choice,        choices: [CEO, CTO, CFO, COO, CISO, VP Engineering, VP Sales]}
       - {name: base_salary,    type: int_range,     min: 250000, max: 2000000}
       - {name: equity_shares,  type: int_range,     min: 10000, max: 500000}
-      - {name: ssn,            type: ssn}
+      - {name: ssn,            type: ssn, synthetic_convention: hr_v1}
       - {name: home_address,   type: address}
 
   prod_credentials:
@@ -111,8 +123,8 @@ tables:
     description: "TRAP — Production system credentials"
     columns:
       - {name: id,             type: pk_int}
-      - {name: system,         type: choice,        choices: [prod-db-01, k8s-cluster, vpn-gateway, bastion-host]}
+      - {name: system,         type: choice,        choices: [hr-db-01, hr-app-prod, payroll-sync, hr-backup]}
       - {name: username,       type: choice,        choices: [admin, root, deploy, svc-account]}
-      - {name: password,       type: password}      # fake password honeytoken
+      - {name: password,       type: password, synthetic_convention: hr_v1}      # fake password honeytoken
       - {name: last_rotated,   type: past_date,     years_back: 2}
       - {name: notes,          type: choice,        choices: ["rotate quarterly", "shared with ops team", "legacy - do not delete"]}
