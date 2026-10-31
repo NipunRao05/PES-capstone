@@ -1,5 +1,6 @@
 """One Redis replay authority for ordinary and principal query lifecycles."""
 import asyncio
+from datetime import datetime
 from contextvars import ContextVar
 from functools import wraps
 import inspect
@@ -27,6 +28,7 @@ def replay(scope, body_name, guard=None):
                 raise HTTPException(400,"Invalid query correlation")
             if not correlation:return await fn(*args,**kwargs)
             identity=correlation["query_execution_id"]
+            started=datetime.fromisoformat(correlation["request_started_at"].replace("Z","+00:00")).timestamp()
             # The principal OWNER encompasses restore, producer, promotion and save.
             if scope=="decide" and owned.get()==("principal-query",identity):
                 return await fn(*args,**kwargs)
@@ -37,7 +39,7 @@ def replay(scope, body_name, guard=None):
             store=get_store()
             deadline=time.monotonic()+WAIT_SECONDS
             while True:
-                try:status,result=await asyncio.to_thread(store.claim,identity,digest,token)
+                try:status,result=await asyncio.to_thread(store.claim,identity,digest,token,started)
                 except Exception:
                     log.warning("query idempotency store unavailable or invalid")
                     raise HTTPException(503,"Query request unavailable") from None
@@ -62,7 +64,9 @@ def replay(scope, body_name, guard=None):
                 raise
             finally:
                 owned.reset(context)
-            try:await asyncio.to_thread(store.finish,identity,digest,token,result)
+            try:
+                completion=await asyncio.to_thread(store.finish,identity,digest,token,result)
+                if completion!="COMPLETE":log.warning("query idempotency completion status=%s",completion)
             except Exception:
                 # Preserve the produced SQL result; retained claim suppresses retry
                 # even if completion acknowledgement or storage was lost.

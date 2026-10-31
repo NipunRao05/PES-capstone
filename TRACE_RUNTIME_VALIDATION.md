@@ -1,5 +1,13 @@
 # Pass 8E — Real Redis and End-to-End Trace Runtime Validation
 
+> Pass 8F continuation — 2026-10-31: new distributed query-idempotency Lua was
+> verified against redis-deception. Two Python processes handling ten duplicates
+> produced one producer call/pair and exact replay. Conflicts, owner loss, expiry
+> fencing (including clock skew), corruption and capacity passed. Four completed
+> engine requests across both protocols replayed exact responses/IDs after an
+> engine-only restart with no new state/trace effects. Live PG/MySQL proxy linkage
+> passed. See DISTRIBUTED_QUERY_IDEMPOTENCY.md; Pass 8E history below is unchanged.
+
 2026-10-30. COMPLETE for the bounded local validation below. This is engineering
 verification using synthetic fixtures, not attacker research data or production sizing.
 

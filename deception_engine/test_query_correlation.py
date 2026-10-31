@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 from uuid import uuid4
 from unittest.mock import MagicMock, patch
 import pytest
@@ -32,7 +33,7 @@ runpy.run_path("api.py", run_name="__main__")
 def body(sql="select id from employees"):
     return dict(session_id="s1",query_raw=sql,query_normalized=sql,protocol="postgres",
         database="testdb",username="fake_compro1",deception_level=1,
-        query_execution_id=str(uuid4()),request_started_at="2026-10-30T00:00:00Z")
+        query_execution_id=str(uuid4()),request_started_at=datetime.now(timezone.utc).isoformat())
 
 
 def test_query_replay_and_private_response(state):
@@ -95,7 +96,7 @@ def test_concurrent_replay_invokes_once():
 def test_principal_replay_keeps_binding_and_disable_checks(state):
     import principal_runtime
     from principal_registry import PrincipalError
-    b=dict(session_id="s1",sql="select id from employees",query_execution_id=str(uuid4()),request_started_at="2026-10-30T00:00:00Z")
+    b=dict(session_id="s1",sql="select id from employees",query_execution_id=str(uuid4()),request_started_at=datetime.now(timezone.utc).isoformat())
     first=asyncio.run(principal_runtime.query(state.f.reg,api,MagicMock(),b))
     second=asyncio.run(principal_runtime.query(state.f.reg,api,MagicMock(),dict(b)))
     assert first==second and first["_correlation"]["query_execution_id"]==b["query_execution_id"]

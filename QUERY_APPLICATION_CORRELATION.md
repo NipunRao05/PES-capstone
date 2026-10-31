@@ -1,5 +1,12 @@
 # Pass 8B — Authoritative Query/Application Correlation and Request Timing
 
+> Pass 8F — 2026-10-31: Redis now owns correlated query replay across processes
+> and engine restart. COMPLETE reuses the original body/IDs without producer or
+> outbox work. Claims older than five seconds can become AMBIGUOUS; no takeover.
+> The original request is rejected after its 600-second start-time horizon, even
+> after record cleanup. No independent local cache remains. See
+> DISTRIBUTED_QUERY_IDEMPOTENCY.md for capacity, clock-skew and failure semantics.
+
 > Pass 8E — 2026-10-30: one real PostgreSQL simple SELECT version() now verifies
 > proxy execution/start -> engine decision/application -> daemon outbox -> indexed
 > Evidence Store, with matching query-event IDs and no private metadata in SQL
@@ -74,6 +81,20 @@ the query record, accepting old events without it. Malformed metadata is marked
 INVALID rather than fabricating fields. No high-cardinality metric labels added.
 
 ## Replay protection and its limits
+
+Current Pass 8F behavior: the existing redis-deception authority coordinates one
+global execution UUID across ordinary /decide and the full principal-query lifecycle.
+Atomic claim/CAS completion, exact bounded replay, 250-ms duplicate wait, conflict,
+ambiguity and fail-closed Redis behavior replace the process-local authority.
+Principal binding/enabled/deadline checks still apply. A matching completed replay
+does not advance exposure/mutations or enqueue traces. Capacity remains 1,024 and
+the response horizon is 600 seconds from proxy request start; original expired
+requests are rejected, never admitted as new. Oversized replies are explicitly
+COMPLETE_UNREPLAYABLE. No exactly-once guarantee across side-effect crashes or Redis
+data loss. Real two-process, engine-restart and both wire paths were verified.
+Full contract and test limits: DISTRIBUTED_QUERY_IDEMPOTENCY.md.
+
+### Historical Pass 8B process-local limitation (superseded by Pass 8F)
 
 Existing proxy POST helpers have no application-level retry loop. Their normal
 request lifecycle makes one strategy RPC per covered execution. Engine query_replay

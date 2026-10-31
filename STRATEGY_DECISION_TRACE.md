@@ -1,5 +1,10 @@
 # Pass 6 — Strategy Decision/Application Trace and Experiment Registry
 
+> Pass 8F — 2026-10-31: Redis-coordinated completed request replay reuses the
+> original decision/application pair and private response IDs, without selecting,
+> executing, constructing traces or submitting to the outbox again. Incomplete
+> owner outcomes remain ambiguous; see DISTRIBUTED_QUERY_IDEMPOTENCY.md.
+
 > Pass 8D — 2026-10-30: TraceStore now uses one Lua operation per record for
 > canonical content plus versioned membership/expiry/context/sequence storage,
 > replacing SET NX EX alone. Same-ID replay retains original position and TTL;

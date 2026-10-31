@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import time
 import unittest
 from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
@@ -205,6 +206,9 @@ class PersistentStateTests(PrincipalTests):
         self.trace_patch.stop()
         for name,value in self.old.items():setattr(api,name,value)
     def q(self,sql,sid='s1'):
+        # Direct calls model distinct proxy RPCs, each with its own existing 2.5s
+        # budget; never inherit the deadline from a prior end/observe HTTP request.
+        self.reg.deadline_ms = time.time() * 1000 + 2500
         return asyncio.run(query(self.reg,api,MagicMock(),dict(session_id=sid,sql=sql)))
     def test_committed_state_survives_reconnect_and_rollback(self):
         original=self.q('select * from employees where id = 1')['rows'][0]

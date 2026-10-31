@@ -3,6 +3,7 @@ import base64
 from functools import lru_cache
 import hashlib
 import json
+import math
 import os
 from uuid import UUID, uuid4
 import redis
@@ -26,7 +27,8 @@ local count=redis.call('HLEN',KEYS[1])
 local bytes=tonumber(redis.call('GET',KEYS[3]) or '0')
 if count~=redis.call('ZCARD',KEYS[2]) or not bytes or bytes<0 or bytes~=math.floor(bytes) then return {'INTEGRITY'} end
 if count>0 and redis.call('EXISTS',KEYS[3])==0 then return {'INTEGRITY'} end
-local now=tonumber(redis.call('TIME')[1])
+local clock=redis.call('TIME')
+local now=tonumber(clock[1])*1000+math.floor(tonumber(clock[2])/1000)
 -- Expiry is the protection horizon, not an execution lease or safe takeover.
 if count>tonumber(ARGV[1]) then return {'INTEGRITY'} end
 local expired=redis.call('ZRANGEBYSCORE',KEYS[2],'-inf',now,'LIMIT',0,tonumber(ARGV[1]))
@@ -35,10 +37,10 @@ for _,id in ipairs(expired) do
  redis.call('HDEL',KEYS[1],id);redis.call('ZREM',KEYS[2],id)
 end
 if bytes<0 then return {'INTEGRITY'} end
-if #expired>0 then redis.call('SET',KEYS[3],bytes) end
+if #expired>0 then redis.call('SET',KEYS[3],bytes,'KEEPTTL') end
 local function replace(id,raw)
  bytes=bytes-redis.call('HSTRLEN',KEYS[1],id)+string.len(raw)
- redis.call('HSET',KEYS[1],id,raw);redis.call('SET',KEYS[3],bytes)
+ redis.call('HSET',KEYS[1],id,raw);redis.call('SET',KEYS[3],bytes,'KEEPTTL')
 end
 local function load(id)
  local raw=redis.call('HGET',KEYS[1],id)
@@ -56,24 +58,28 @@ end
 '''
 
 CLAIM = PRELUDE + r'''
--- capacity, id, digest, owner, retention, stale_after, total_bytes
+-- capacity, id, digest, owner, retention_seconds, stale_seconds, total_bytes, request_start_ms
 local r=load(ARGV[2])
 if r==false then return {'INTEGRITY'} end
 if r then
  if r.request_digest~=ARGV[3] then return {'CONFLICT'} end
- if r.status=='CLAIMED' and now-r.claimed_at>=tonumber(ARGV[6]) then
+ if r.status=='CLAIMED' and now-r.claimed_at>=tonumber(ARGV[6])*1000 then
   r.status='AMBIGUOUS'; replace(ARGV[2],cjson.encode(r))
  end
  return {r.status,redis.call('HGET',KEYS[1],ARGV[2])}
 end
+-- Expired state must never make the original old request executable again.
+local started=tonumber(ARGV[8])
+if not started or started>now+30000 or started+tonumber(ARGV[5])*1000<=now then return {'EXPIRED'} end
 if redis.call('HLEN',KEYS[1])>=tonumber(ARGV[1]) then return {'FULL'} end
 r={idempotency_schema_version=1,query_execution_id=ARGV[2],request_digest=ARGV[3],
- owner_token=ARGV[4],claimed_at=now,expires_at=now+tonumber(ARGV[5]),status='CLAIMED'}
+ owner_token=ARGV[4],claimed_at=now,expires_at=started+tonumber(ARGV[5])*1000,status='CLAIMED'}
 local raw=cjson.encode(r)
 if bytes+#raw>tonumber(ARGV[7]) then return {'FULL'} end
 replace(ARGV[2],raw)
 redis.call('ZADD',KEYS[2],r.expires_at,ARGV[2])
-for _,key in ipairs(KEYS) do redis.call('EXPIRE',key,tonumber(ARGV[5])+1) end
+-- Shared containers must outlive every member, including the allowed 30s skew.
+for _,key in ipairs(KEYS) do redis.call('EXPIRE',key,tonumber(ARGV[5])+31) end
 return {'OWNER',raw}
 '''
 
@@ -131,6 +137,7 @@ def pack_response(result):
 
 def unpack_response(payload, identity):
     try:
+        if not isinstance(payload,str) or len(payload.encode())>MAX_RECORD_BYTES:raise ValueError()
         p=json.loads(payload)
         if set(p)!={"kind","status","headers","body"} or type(p["status"]) is not int or not 100<=p["status"]<=599:raise ValueError()
         body=base64.b64decode(p["body"],validate=True)
@@ -146,6 +153,8 @@ def unpack_response(payload, identity):
         for key,value in p["headers"]:
             if key not in {"content-type","content-length"} or not isinstance(value,str) or len(value)>256:raise ValueError()
             headers.append((key.encode("latin1"),value.encode("latin1")))
+        if p["kind"]=="response" and sum(k==b"content-length" for k,v in headers)!=1:raise ValueError()
+        if any(k==b"content-length" and v!=str(len(body)).encode() for k,v in headers):raise ValueError()
         if p["kind"]=="dict":return data
         if p["kind"]=="exception":return HTTPException(p["status"],data["detail"])
         result=Response(content=body,status_code=p["status"])
@@ -160,8 +169,10 @@ class ReplayStore:
         self.client,self.retention,self.capacity,self.stale_after=client,retention,capacity,stale_after
         self.keys=[prefix+suffix for suffix in (":records",":expiry",":bytes")]
 
-    def claim(self,identity,digest,owner):
-        result=self.client.eval(CLAIM,3,*self.keys,self.capacity,identity,digest,owner,self.retention,self.stale_after,TOTAL_BYTES)
+    def claim(self,identity,digest,owner,started_at):
+        if type(started_at) not in (int,float) or not math.isfinite(started_at):
+            raise ValueError("Invalid request start")
+        result=self.client.eval(CLAIM,3,*self.keys,self.capacity,identity,digest,owner,self.retention,self.stale_after,TOTAL_BYTES,int(started_at*1000))
         result=[x.decode() if isinstance(x,bytes) else x for x in result]
         if result[0]=="INTEGRITY":raise ReplayIntegrityError("IDEMPOTENCY_INTEGRITY_ERROR")
         if result[0]=="COMPLETE":
