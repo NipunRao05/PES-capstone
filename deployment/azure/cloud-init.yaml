@@ -1,0 +1,21 @@
+#cloud-config
+# Application secrets are installed separately by the operator, never in custom_data.
+package_update: true
+packages: [ca-certificates, curl, gnupg, python3, python3-yaml, python3-venv, iptables, e2fsprogs, util-linux]
+write_files:
+  - path: /etc/honeypot-infrastructure.json
+    permissions: '0644'
+    content: ${jsonencode(infrastructure)}
+  - path: /usr/local/sbin/honeypot-bootstrap
+    permissions: '0700'
+    content: ${jsonencode(bootstrap)}
+  - path: /usr/local/sbin/honeypot-prepare-disk
+    permissions: '0700'
+    content: ${jsonencode(disk_prepare)}
+  - path: /usr/local/sbin/honeypot-host-firewall
+    permissions: '0700'
+    content: ${jsonencode(firewall)}
+runcmd:
+  # Detach final bootstrap from VM provisioning: Terraform attaches LUN0 only
+  # after the VM resource returns. Operators must inspect this unit's result.
+  - [systemd-run, --unit=honeypot-bootstrap, --property=Type=oneshot, --property=TimeoutStartSec=2h, /bin/bash, /usr/local/sbin/honeypot-bootstrap]

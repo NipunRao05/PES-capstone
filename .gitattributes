@@ -1,0 +1,5 @@
+# Linux entrypoints must survive Windows teammate checkouts unchanged.
+*.sh text eol=lf
+deployment/azure/*.tf text eol=lf
+deployment/azure/*.hcl text eol=lf
+deployment/azure/tests/*.hcl text eol=lf

@@ -1,3 +1,151 @@
+# Azure Terraform + Private Cloud Validation Preparation — 2026-11-02
+
+COMPLETE for preparation/static/local validation only. No Azure login, subscription
+resource API, real plan/apply, cloud-init, VM/reboot/restore or public exposure.
+Actual Azure behavior remains NOT VERIFIED. Contracts: deployment/azure/README.md,
+AZURE_DEPLOYMENT_RUNBOOK.md and AZURE_SECURITY_GATE.md.
+
+- Branch feature/config-observability, HEAD b0b16baf918298032d742363cd81c4890093e68d
+  unchanged. Starting Pass3 AGENTS/Evidence notes and2 untracked reports preserved.
+  No Git mutation,actual.env edit,key generation/reset,volume deletion,application
+  image rebuild/service restart or public scan. Official public prices/tooling only.
+- Flat Azure Terraform: one Ubuntu24.04VM,OSdisk,persistent128GiB managedSSD/LUN0,
+  Standard staticIPv4,RG/VNet/subnet/NIC/NSG;optional RGbudget. No managedidentity or
+  managedapp/DB/observability/AKS/Bastion/LB/KeyVault. Per-account inputs configurable.
+  Local state/tfvars/plans ignored; signed Linux/Windows providerlock retained.
+  Terraform>=1.14,<1.15,AzureRM=4.64.0 reviewed pins,not latest-version claims.
+- Exact Ubuntu image version required. SKU memory/vCPU inputs are reviewed operator
+  declarations,not automatic availability proof; host checks actual18176MiB minimum.
+ 16GiB rejected;32GiB E4as_v5/4vCPU candidate,Studentquota/SCSI/AMD64 unverified.
+  EastUS retail168h:VM37.97,OS1.10,data2.21,IP0.84,10GB conservativeegress0.87,
+  I/Oallowance2 ->~44.99USD. Not modest versus100USD credit; prefer24–48h private
+  window,approve cost/credit first. B4ms/D4as16GiB reject;B8ms32GiB highercost/burst.
+  Price snapshot retained; budget50USD/50,75,90% optional,alerts are not spendingcap.
+- SSH oneadminCIDR,keyonly;explicit deny overrides defaultVNet inbound. DBNSG rules
+  conditional enable_public_honeypot=false. No publicmanagement/operator ports.
+  NSG switch excluded from immutable VMcustom_data so kill doesnot replace VM/disk.
+  Bootstrap/host/Compose remain private; future publichostbinding is separate review.
+- No appsecret/privatekey/GitHubcredential in cloud-init. Detached bootstrap avoids
+  LUN-attach provisioning cycle. Exact SCSILUN0 only,no /dev/sdX/OS fallback. Format
+  defaultsfalse;permission+wholeunmounted disk+nosignatures+ENTIRE-device zerocheck
+  required. Existingext4 never reformatted. UUIDfstab/no nofail;data prevent_destroy.
+- Docker/containerd masked until source/private0600secrets/keymarker installed.
+  Both stores ondata disk; containerdroot handles Docker29 image-store separation.
+  Official provisioning packages,explicit iptables backend,actualversion review
+  required. Host INPUT/DOCKER-USER preserve adminSSH,DHCP,DNS,NTP/platform/build use,
+  block runtimeIMDS/host/publicegress. Temporary docker0 provision exception must
+  be removed before appstartup. LF entrypoint checkout policy for Windows teammates.
+- deployment_guard adds offline mount/key/permission/space checks before Docker/
+  containerd auto-restart; canonical fullguard follows. Installer uses existing
+  deployment/run/experiment manifest inputs; alternate experiment fails. No second
+  provenance registry. Missing disk/source/secrets refuses startup,not freshOSstate.
+- Private verifier checks real limits/health/image/sourceidentity/roots/readiness/
+  Redis/broker/isolation plus optional HR/grants/origin/export;missing exercise or
+  rebootbaseline NOT_READY. Fixed-port external checks require two real networks.
+  Gate requires current hashed proofs and explicit NSG/budget/reboot/restore
+  attestations; not authentication or permission to publish. No Azureproof fabricated.
+- Stopped-stack Redis backup covers both volumes,identity,keyfingerprintmarker and
+  hashbaseline; paths/duplicates/symlinks/bounds rejected. Integrity !=Redisrestore.
+  Rawbackup is secret material; SSH/encryptedoffVM retention,separate stablekeys,
+  fresh-vs-continuity accountmigration documented. No liveclone/automatic restore.
+- Query harness fixed for independent decoy credentials via driverstdin rather
+  than backendpassword; both localPG/MySQLchecks PASS,origin/index/outboxACK intact,
+  no privateSQLmetadata. No proxy/engine/HR/strategy/score/default semantic changes.
+- Terraformfmt/validate PASS;4 mocked tests PASS,no cloudcalls. Focused Python48PASS
+  3.50s covering config/runtime/export/logging/disk/firewall/offlineguard/gate/backup/
+  tamper/YAML. Bash-n2 scripts PASS without executing bootstrap. Canonicalcheck/status
+  PASS,6futureflagsdisabled. Devarchive202members/375264bytes,two identicalbundles,
+  dirtyrelease refused,no-Git extractionprepare PASS. NON-RELEASE ignored tooling.
+- Remaining beforeprivateapply: separateauthorization,actualStudentquota/SKU/region/
+  image/key/CIDR inputs,approvedspend/credit and cleanrelease/planreview. Beforepublic:
+  actual mount/daemon/egress/NSG/reboot/absentdisk/independentrestore proof,dependency
+  EOL/CVE disposition and reviewed ordinaryproxy publicbinding. Exactly one next
+  recommendation: Private Azure deployment and validation with public DB ingress
+  disabled. Do NOT perform it without separate authorization.
+
+---
+
+# Pre-Deployment Hardening Pass 3 — 2026-11-02
+
+COMPLETE for the bounded local hardening/build/archive contract. Not public/Azure
+deployment approval, a seven-day soak, full-capacity validation or disk-loss proof.
+Contracts/results: DEPLOYMENT_RUNTIME_HARDENING.md and RELEASE_REPRODUCIBILITY.md.
+
+- Original implementation began on feature/config-observability at0fd44e6 with
+  Pass1/2 changes preserved. Continuation found clean user commit
+  b0b16baf918298032d742363cd81c4890093e68d (R2), including interrupted Pass3 code.
+  Preserved it; no agent Git mutation, actual.env edit, volume deletion, credential
+  reset, Azure/Terraform/public binding or adaptive-feature change. Ending adds
+  uncommitted reports/handoff only; runtime retained and running.
+- Canonical runtime.yaml + runtime_hardening.py replace default bridge with edge,
+  application/state/control/observability/sandbox networks. Internal isolated bridges
+  have no host bridge address. Only proxies/gateway on edge; namespace OUTPUT DROP,
+  IMDS/default-gateway rejection, reviewed internal TCP allowlist, no external DNS.
+  Guard drops workload UID65532/all capability sets after firewall setup. IPv6 DROP.
+  No Docker socket/privileged/host network. Internal services lose direct host ports.
+- All current ports loopback only: PG5432/15432,MySQL3306/13306 and gateway operator
+  APIs/health/observability/replay. Only ordinary5432/3306 are future-public candidates.
+  Real44 isolation checks PASS, including required peers, publicIP/IMDS/host blocked,
+  guard cannot be modified and replay cannot reach mainPG. Cloud/Linux host boundary
+  still must be validated privately; no kernel-escape guarantee.
+- Every23 enabled service entry has memory/CPU/PID limits;21 longrunning restart
+  unless-stopped,2init restart=no. Sum16128MiB inclinit; strict deployment requires
+  additional2048MiB host reserve. Local15.56GiB is not a supported deployment size.
+  Redis512/2048MiB allocator limits,1536/4608MiB containers,noeviction,AOFalways/
+  everysec; Pass2 retention/capacities unchanged. Redpanda512M/smp1 inside1536MiB,
+ 14day retention; retention.bytes=-1 explicitly requires disk/traffic monitoring.
+- DB connections/memory/timeouts bounded; proxies128sharedconnections,15s auth/write,
+  5minidle, preallocation PG/MySQL frontend packet bounds. HR v1/registry/strategy/
+  scoring/principal-world semantics unchanged. Six live containment/HR checks PASS.
+- Docker json-file10m*3 everywhere; Promtail tails matching JSON files with stable
+  bounded labels and persistent positions, no socket. Collector EOL/trusted metadata
+  reader exception documented; read-only Docker directory can expose config secrets.
+  All10 required services logs/level labels PASS, repeated on continuation. Go/Python
+  redaction tests include KEY/SALT/operator/runtime values and SQL. Loki72h operational
+  retention, Prom7d/2GB, no claim of seven-day incident-log archive. Disk/inodes
+  gauges added; AOF/broker/DB/export filesystem quotas remain explicit limits.
+- Strict Linux startup requires private0600 secret file, explicit independent strong
+  admin/runtime secrets, separate explicit decoys, stable principal/pseudonym keys.
+  ExportACK key remains domain-separated derivation from runtime credential.
+  Disk guard validates actual mount/volume marker/key fingerprints/free20GiB/runtime
+  location/Dockerroot/Engine>=28/memory/installed daemon mount guard before up/restart.
+  Templates only; no host/cloud disk installed. Real temporary Linux mount negatives
+  PASS; actual Ubuntu Docker/systemd reboot/unmount remains future validation.
+- Full local stop/start preserved hashes14principals(12world),465evidence strings,
+  256journal entries,indexepoch/monotonicsequence and healthyAOF. Rechecked after
+  continuation PASS. Gateway dynamicDNS2s: replay240->5 IP change/recreation returned
+  ready200 without gatewayrestart. No data reset. Sudden crash/diskloss not tested.
+- Pressure4workers/24queries PASS0.886178482s:16managedapps+8nativeconstants,
+  pending/terminal/full/expired0,noOOM,health stable. Not sustained-load sizing.
+  Both live PG/My query-event/trace/origin/manifest/outboxACK checks PASS. All/operator/
+  emptyexternal exports valid/no unresolved refs; collection completeness remains
+  NOT_VERIFIED. Every controlled request remains operator_validation, exclude fixtures.
+- Enabled image/base digests locked,5Python constraint locks,pipcheck PASS;3Go module
+  verifications PASS. All12contexts .dockerignore, runtime excludes tests/pytest.
+  Fresh10customimage build PASS. APK/mirror/platform drift exceptions explicit.
+  Scout scan could not run without login; no report/zero-CVE claim. Manual review
+  records PromtailEOL,Redpanda24.1EOS,MySQL8EOL/oldobservability risks for disposition.
+- Deterministic source archive excludes.env/secrets/runtime/Git/tests/evidence,
+  embeds file hashes and dirty/source identity; external checksum/release manifest
+  links config/world/registry/images. Clean source required by default; explicit
+  development archive NON-RELEASE. No-Git extraction verifies source then prepares.
+  Two byteidentical continuation archives191members/363019bytes SHA256
+  334c2c3832f15aa7ade66e5ba40d2ac2673d1af751b6e282b74ff786849fd593.
+  Local .runtime/pass3-release-continuation only; not a production release.
+- Focused final checkpoints54PASS/64PASS(overlap),engine65PASS,session225PASS,
+  archive12PASS;PG5packages/My5packages/scalingPASS. Continuation config/runtime/
+  logging/export28PASS3.68s;queryidempotency/principal/decision44PASS3.25s. All55
+  productionPython source hashes matched running files. Initial Go cache denial/helper missing mounts fixed;
+  no assertion weakening. Full13 runtime checks/9targets/53expressions PASS after
+  initial Loki startup503 settled, including continuation. Diff check PASS.
+- Remaining deployment gates: actual private Linux/cloud containment/mount/daemon
+  tests, independently retained backup/restore,currentCVE/unsupportedbinary review,
+  fullRSS/COW/disk/trafficcapacity and clean final release. Prehistory/protocol/
+  bounded-loss/calibration limits remain. Exactly one recommendation: Azure Terraform
+  + Private Cloud Validation Preparation. PLANNED ONLY; no implementation started.
+
+---
+
 # Pre-Deployment Hardening Pass 2 — 2026-10-31
 
 COMPLETE for the bounded local research-evidence contract. Not an Azure deployment,

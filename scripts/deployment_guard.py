@@ -71,13 +71,19 @@ def validate_data(root,env,*,runtime_dir=None,min_free_gib=20):
     return data
 
 
-def preflight(env):
+def offline_preflight(env):
     from configuration import ROOT,RUNTIME,ConfigError
     from runtime_hardening import policy
     if sys.platform!='linux':raise ConfigError('Deployment startup is supported only on the reviewed Linux host')
     private_file(env.get('HONEYPOT_SECRET_FILE',''))
     validate_secrets(env);p=policy();root=Path(p['deployment_data_root'])
     validate_data(root,env,runtime_dir=RUNTIME,min_free_gib=p['deployment_min_free_gib'])
+    return p,root
+
+
+def preflight(env):
+    from configuration import ROOT,ConfigError
+    p,root=offline_preflight(env)
     try:
         info=json.loads(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True,timeout=10))
         version=subprocess.check_output(['docker','version','--format','{{.Server.Version}}'],text=True,timeout=10).strip()
@@ -99,11 +105,16 @@ def preflight(env):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--initialize-marker',action='store_true',help='Explicit one-time operation on a mounted NEW data disk')
+    parser.add_argument('--offline',action='store_true',help='Validate disk/secrets before Docker auto-restarts any containers')
     args=parser.parse_args()
     from configuration import load,ROOT,ConfigError
     try:
         _,_,_,env,_=load()
-        if args.initialize_marker:
+        if args.initialize_marker and args.offline:raise ConfigError('Choose one guard mode')
+        if args.offline:
+            offline_preflight(env)
+            print('OFFLINE GUARD PASS: mounted disk, identity, stable keys, permissions and space')
+        elif args.initialize_marker:
             from runtime_hardening import policy
             root=Path(policy()['deployment_data_root'])
             private_file(env.get('HONEYPOT_SECRET_FILE',''));validate_secrets(env)

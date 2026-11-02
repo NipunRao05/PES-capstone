@@ -37,3 +37,14 @@ phase*_after_*.txt
 deployment/secrets.env
 deployment/*.secrets.env
 deployment/releases/
+
+# Terraform local state, credentials, per-account inputs and saved plans.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+crash.log
+crash.*.log
+!*.tfvars.example

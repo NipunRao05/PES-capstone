@@ -58,7 +58,7 @@ def source_identity(root):
     source={}
     for name in sorted(set(names)):
         p=root/name
-        if name and p.is_file() and (p.suffix in {'.py','.go','.mod','.sum','.yaml','.yml','.sh','.lock','.conf','.example','.service','.json','.txt'} or p.name in {'Dockerfile','.dockerignore','requirements.txt'}) and not name.startswith(('.runtime/','.env')):
+        if name and p.is_file() and (p.suffix in {'.py','.go','.mod','.sum','.yaml','.yml','.sh','.lock','.conf','.example','.service','.json','.txt','.tf','.hcl'} or p.name in {'Dockerfile','.dockerignore','requirements.txt'}) and not name.startswith(('.runtime/','.env')):
             source[name]=hashlib.sha256(p.read_bytes()).hexdigest()
     return commit,source
 
@@ -82,6 +82,8 @@ def resolved_nonsecret(value, env):
 
 def create(flags, policy, obs, env, artifacts):
     from configuration import read_yaml
+    if env.get('HONEYPOT_EXPERIMENT_ID','deterministic_baseline')!='deterministic_baseline' or env.get('HONEYPOT_EXPERIMENT_VERSION','1')!='1':
+        raise ValueError('Deployment must reference existing deterministic_baseline v1')
     RUNTIME.mkdir(exist_ok=True)
     identity_path=RUNTIME / "research-identity.json"
     if identity_path.exists():

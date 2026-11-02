@@ -1,0 +1,79 @@
+{
+  "currency": "USD",
+  "region": "eastus",
+  "meters": [
+    {
+      "armSkuName": "Standard_B8ms",
+      "productName": "Virtual Machines BS Series",
+      "meterName": "B8ms",
+      "retailPrice": 0.333,
+      "unitOfMeasure": "1 Hour",
+      "tierMinimumUnits": 0.0,
+      "effectiveStartDate": "2025-10-01T00:00:00Z",
+      "meterId": "0aa51530-caca-4653-ba45-06017f585c6f"
+    },
+    {
+      "armSkuName": "Standard_B4ms",
+      "productName": "Virtual Machines BS Series",
+      "meterName": "B4ms",
+      "retailPrice": 0.166,
+      "unitOfMeasure": "1 Hour",
+      "tierMinimumUnits": 0.0,
+      "effectiveStartDate": "2025-10-01T00:00:00Z",
+      "meterId": "d2d57463-924c-4ee2-853e-99d697a2c960"
+    },
+    {
+      "armSkuName": "Standard_E4as_v5",
+      "productName": "Virtual Machines Easv5 Series",
+      "meterName": "E4as v5",
+      "retailPrice": 0.226,
+      "unitOfMeasure": "1 Hour",
+      "tierMinimumUnits": 0.0,
+      "effectiveStartDate": "2021-12-01T00:00:00Z",
+      "meterId": "d6ace280-a953-5f88-b0fb-cba4e2e69a5b"
+    },
+    {
+      "armSkuName": "Standard_D4as_v5",
+      "productName": "Virtual Machines Dasv5 Series",
+      "meterName": "D4as v5",
+      "retailPrice": 0.172,
+      "unitOfMeasure": "1 Hour",
+      "tierMinimumUnits": 0.0,
+      "effectiveStartDate": "2021-12-01T00:00:00Z",
+      "meterId": "f589276c-0073-5a70-8bdf-fa3704da2eef"
+    },
+    {
+      "armSkuName": "",
+      "productName": "Standard SSD Managed Disks",
+      "meterName": "E10 LRS Disk",
+      "retailPrice": 9.6,
+      "unitOfMeasure": "1/Month",
+      "tierMinimumUnits": 0.0,
+      "effectiveStartDate": "2018-11-01T00:00:00Z",
+      "meterId": "a97f31a2-0fb1-4d64-bb43-a2399dd31f0b"
+    },
+    {
+      "armSkuName": "",
+      "productName": "Standard SSD Managed Disks",
+      "meterName": "E6 LRS Disk",
+      "retailPrice": 4.8,
+      "unitOfMeasure": "1/Month",
+      "tierMinimumUnits": 0.0,
+      "effectiveStartDate": "2019-01-01T00:00:00Z",
+      "meterId": "d10d7086-9771-4cfa-b049-3287c97c5f1d"
+    },
+    {
+      "armSkuName": "",
+      "productName": "IP Addresses",
+      "meterName": "Standard IPv4 Static Public IP",
+      "retailPrice": 0.005,
+      "unitOfMeasure": "1 Hour",
+      "tierMinimumUnits": 0.0,
+      "effectiveStartDate": "2018-06-01T00:00:00Z",
+      "meterId": "9c150bf9-2bad-430e-a53c-c213804f49ef"
+    }
+  ],
+  "scope": "Retail reference only; Student availability, quota, billing and taxes unverified",
+  "source": "https://prices.azure.com/api/retail/prices",
+  "observed_date": "2026-11-02"
+}

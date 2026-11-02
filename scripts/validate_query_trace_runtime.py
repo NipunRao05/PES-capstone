@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""One read-only PG simple query using credentials already inside its DB container.
+"""One read-only private-listener query with explicit visible decoy credentials.
 
-No credentials leave the container or enter argv/output. This creates ordinary
+Credentials go to an isolated driver on stdin, never argv/output. This creates ordinary
 engineering-validation session evidence; it is not attacker research data.
 """
 import json
@@ -37,11 +37,27 @@ def page(kind):
 
 def main(protocol="postgres"):
     boundary=page("application")["snapshot_max_sequence"]
-    command=["docker","exec","capstone-main-postgres-1","sh","-c",
-        'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -h pgproxy -p 15432 -U postgres -d testdb -Atc "select version()"'] if protocol=="postgres" else ["docker","exec","capstone-main-mysql-1","sh","-c",
-        'MYSQL_PWD="$MYSQL_PASSWORD" mysql --protocol=TCP -P 13306 -h mysqlproxy -u proxyuser -D testdb -N -B -e "select version()"']
+    from configuration import load
+    values=load()[3]
+    driver="""import json,sys
+values=json.load(sys.stdin)
+if values['protocol']=='postgres':
+ import psycopg
+ connection=psycopg.connect(host='pgproxy',port=15432,user='postgres',dbname='testdb',password=values['password'],connect_timeout=5,autocommit=True)
+else:
+ import pymysql
+ connection=pymysql.connect(host='mysqlproxy',port=13306,user='proxyuser',database='testdb',password=values['password'],connect_timeout=5,read_timeout=5,autocommit=True)
+with connection.cursor() as cursor:
+ cursor.execute('select version()');print(cursor.fetchone()[0])
+connection.close()
+"""
+    command=['docker','run','--rm','-i','--label','com.docker.compose.project=capstone-validation',
+        '--network','capstone-main_application','--network','capstone-main_state',
+        '--read-only','--cap-drop','ALL','--entrypoint','python',
+        'capstone-main-sandbox-replay-engine:runtime-v1','-B','-c',driver]
+    password=values['PG_DECOY_PASSWORD' if protocol=='postgres' else 'MYSQL_DECOY_PASSWORD']
     result=subprocess.run(command,
-        capture_output=True,text=True,timeout=15)
+        input=json.dumps({'protocol':protocol,'password':password}),capture_output=True,text=True,timeout=15)
     assert result.returncode==0, "Controlled database authentication/query failed"
     assert all(field not in result.stdout for field in ("_correlation","query_execution_id","application_id","decision_id"))
     deadline=time.monotonic()+25

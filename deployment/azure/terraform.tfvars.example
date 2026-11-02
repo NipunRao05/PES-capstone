@@ -1,0 +1,22 @@
+# Copy to a Git-ignored per-account file; these placeholders are not deployable.
+subscription_id       = "REPLACE-SUBSCRIPTION-UUID"
+tenant_id             = "REPLACE-TENANT-UUID"
+resource_group_name   = "REPLACE-STUDENT-RG"
+location              = "eastus" # Pricing example only; check your subscription.
+name_prefix           = "hr-private"
+public_ip_name        = "hr-private-ip"
+vm_size               = "Standard_E4as_v5" # 4vCPU/32GiB; quota NOT verified.
+vm_memory_mb          = 32768
+vm_vcpus              = 4
+admin_username        = "researchadmin"
+admin_source_cidr     = "203.0.113.10/32" # Replace with YOUR public administrator CIDR.
+ssh_public_key        = "REPLACE_WITH_OPENSSH_PUBLIC_KEY_ONLY"
+image_version         = "REPLACE_EXACT_UBUNTU_IMAGE_VERSION"
+deployment_id         = "REPLACE_NEW_DEPLOYMENT_ID"
+run_id                = "REPLACE_NEW_RUN_ID"
+experiment_id         = "deterministic_baseline"
+enable_public_honeypot = false
+format_blank_data_disk = false # Explicitly review/set true only for a NEW blank disk.
+data_disk_size_gb      = 128
+budget_usd            = 50
+budget_contact_emails = [] # Optional; manual review still mandatory.

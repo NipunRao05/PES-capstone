@@ -12,6 +12,7 @@ from datetime import datetime,timezone
 SCRIPT_FILES={'configuration.py','honeypot.py','runtime_hardening.py','deployment_guard.py',
     'deployment_manifest.py','dashboard.py','build_deployment_archive.py','verify_runtime.py',
     'verify_recovery.py','validate_runtime_isolation.py','validate_resource_smoke.py','validate_release_runtime.py',
+    'verify_azure_private_deployment.py','verify_external_ports.py','validate_azure_gate.py','backup_azure_evidence.py',
     'validate_query_trace_runtime.py','validate_backend_containment.py','backend_containment.py',
     'audit_base_world.py','export_research_evidence.py','config-requirements.txt'}
 SUFFIXES={'.py','.go','.mod','.sum','.yaml','.yml','.json','.sh','.conf','.service','.example','.lock','.txt'}
@@ -33,6 +34,7 @@ def collect(root,model):
             if path.is_symlink():raise ValueError('Release source symlinks require explicit review')
             if not path.is_file():continue
             if path.name.startswith('test_') or path.name.endswith('_test.go') or path.name=='journal_model.py':continue
+            if '.tfstate' in path.name or path.name.endswith(('.tfvars','.tfvars.json','.tfplan')):continue
             if '.env' in path.name and path.name not in {'secrets.env.example','empty.env'}:continue
             if path.name in {'.dockerignore','Dockerfile','empty.env'} or path.suffix in SUFFIXES:selected.add(relative.as_posix())
     for name in SCRIPT_FILES:

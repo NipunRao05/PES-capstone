@@ -364,3 +364,23 @@ historical index. Verify the deployment using the controlled private-listener qu
 harness before its first daily research export. No Redis CLI or historical relabeling
 is needed. Daily exports and incident-log preservation are separate restricted
 artifacts; neither frees live retained capacity.
+
+# Pass 3 continuation — 2026-11-02
+
+Runtime containment/resource/restart contracts are now documented in
+DEPLOYMENT_RUNTIME_HARDENING.md and release identity in RELEASE_REPRODUCIBILITY.md.
+Local full-stack stop/start and continuation recheck preserved hashes of465 retained
+evidence strings/256 journal entries,14 principals including12 world records,
+index epoch and monotonic sequence; both AOF states healthy. This does not prove
+sudden-power-loss/disk-loss durability. Pass2 retention/capacities/collection limits
+are unchanged. Source manifests now redact SALT as well as KEY/PASSWORD and attest
+guard/lock/service inputs; extracted source archives work without Git history.
+
+Final controlled all-origin export db73d28b-ed4c-4d1b-b54c-6d1df736deca validated
+249 decisions/249 applications/4 outcomes/315 events/31 journal summaries/153
+session projections. Operator export bc729852-13ac-4e47-be37-8cc5ceeac527 validated
+96/96/2/286/31/31 respectively. External export069ff506-3045-4c18-a86c-4ae19b9154e1
+was empty. All checksums/counts/relationships validated, collection_completeness
+still NOT_VERIFIED. These are engineering fixtures; do not treat them as external
+research or ship local exports with deployment source. Private backup destination,
+restore and cloud disk/daemon validation remain deployment gates.
